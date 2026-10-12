@@ -33,8 +33,13 @@ or never (the MRP entries, after the security entries in each crate's list).
 which could leave a session refusing every report the device sent.
 Commissioning now closes its own CASE session with a Secure Channel
 CloseSession, and both it and the controller honour one from the device.
-`matter-transport` and `matter-commissioning` add public API, only
-additively, so each affected crate needs only a patch release:
+The Interaction Model parsers now reject a truncated message and bytes after
+one, as chip does, so a cut-off chunk can no longer end a chunked read early
+with partial data. `matter-codec` gains the strict-close check they share,
+`matter-ota`'s Provider decoders use it too, and `matter-commissioning`'s
+response decoders stop misreading an unknown container field.
+`matter-codec`, `matter-transport` and `matter-commissioning` add public API,
+only additively, so each affected crate needs only a patch release:
 
 | Crate | Current | Patch |
 |---|---|---|
@@ -42,13 +47,24 @@ additively, so each affected crate needs only a patch release:
 | `matter-transport` | 0.7.3 | **0.7.4** |
 | `matter-commissioning` | 0.10.0 | **0.10.1** |
 | `matter-interaction` | 0.4.2 | **0.4.3** |
+| `matter-ota` | 0.5.1 | **0.5.2** |
+| `matter-codec` | 0.3.1 | **0.3.2** |
 | `matter-crypto` | 0.5.0 | **0.5.1** (optional: latent hardening only, nothing observable changes) |
+
+`matter-codec` and `matter-ota` joined this batch with the strict-close fix.
+`matter-codec` 0.3.2 adds `TlvReader::finish` and `Error::TrailingData`
+(additive; `Error` is `#[non_exhaustive]`), which the parsers in
+`matter-interaction`, `matter-ota` and `matter-commissioning` now call, so all
+three need it. `matter-ota` 0.5.2 changes only how its Provider decoders treat
+malformed input.
 
 None of these crates' public APIs uses a `matter-clusters` 0.6.0-only type, so
 they can ship ahead of the 0.6.0 release below. `matter-transport`,
 `matter-interaction` and `matter-crypto` do not depend on `matter-clusters` at
-all. `matter-controller` uses only `matter_clusters::gen` paths that exist in
-0.5.0. `matter-commissioning` uses `matter-clusters` only as a dev-dependency.
+all, and neither does `matter-codec`. `matter-controller` uses only
+`matter_clusters::gen` paths that exist in 0.5.0. `matter-ota` 0.5.2 uses
+`matter-clusters` exactly as 0.5.1 did, through the same `0.5.0` requirement.
+`matter-commissioning` uses `matter-clusters` only as a dev-dependency.
 
 Dependency floors to raise at release (no `Cargo.toml` changes yet):
 
@@ -67,6 +83,14 @@ Dependency floors to raise at release (no `Cargo.toml` changes yet):
   `secure_channel::encode_close_session` (and, with the `tracing` feature,
   reads `secure_channel::CLOSE_SESSION_PAYLOAD` and
   `protocol_header::opcode::secure_channel::STATUS_REPORT`).
+- `matter-interaction` 0.4.3, `matter-ota` 0.5.2 and `matter-commissioning`
+  0.10.1 each require `matter-codec` 0.3.2, for `TlvReader::finish` and
+  `Error::TrailingData`. Their `0.3.0` requirement would otherwise let a
+  lockfile keep 0.3.1, which lacks both, and the build would fail.
+- `matter-controller` 0.18.2 also requires `matter-ota` 0.5.2 (an optional
+  dependency, behind `ota`), so `serve_ota` gets the strict Provider decoders.
+  The strict IM parsers reach it through the `matter-interaction` 0.4.3 floor
+  above.
 
 Otherwise an application that upgrades only the controller, or only
 commissioning, keeps the leaking `Session`, `Action` and payload `Debug`
@@ -213,6 +237,25 @@ published release, `0.1.0` through `0.18.1`.
   10 s, as before.
 - Affected: every published release through `0.18.1`. Requires
   `matter-transport` 0.7.4 and `matter-commissioning` 0.10.1.
+
+### matter-controller: Fixed — a truncated or garbage-tailed IM message from a device is rejected
+
+- Through `matter-interaction` 0.4.3 (see there). A `ReportData` chunk cut
+  off before its end-of-container, or followed by extra bytes, now fails a
+  `read` with `Error::InteractionModel`. Before, a chunk that lost its
+  trailing `MoreChunkedMessages = true` ended the read early, and `read`
+  returned the attributes received so far as if they were all. A malformed
+  subscription report is answered with `InvalidAction` and dropped, as an
+  unparseable one already was, and a malformed priming report fails the
+  subscribe attempt. Write, invoke and subscribe responses are checked the
+  same way. With `ota`, `serve_ota` rejects a malformed `QueryImage`,
+  `ApplyUpdateRequest` or `NotifyUpdateApplied` (`matter-ota` 0.5.2).
+- Only the session's peer can send these messages, since the payload is
+  AES-CCM-authenticated, and real devices send complete messages. A run
+  against chip's all-clusters-app at master (`just integration`) parsed
+  every message.
+- Affected: every published release through `0.18.1`. Requires
+  `matter-interaction` 0.4.3 and, with `ota`, `matter-ota` 0.5.2.
 
 ### matter-transport: Fixed (security) — session keys stay out of `Debug` output
 
@@ -433,6 +476,63 @@ published release, `0.1.0` through `0.18.1`.
 - Affected: every published release through `0.10.0` left the session
   open. Requires `matter-transport` 0.7.4.
 
+### matter-commissioning: Fixed — response decoders skip unknown container fields and reject trailing bytes
+
+- The decoders for AttestationResponse, CertificateChainResponse,
+  CSRResponse, NOCResponse, ArmFailSafeResponse,
+  SetRegulatoryConfigResponse, CommissioningCompleteResponse,
+  BasicCommissioningInfo, NetworkConfigResponse and ConnectNetworkResponse
+  ignored an unknown container field's start without skipping its body.
+  Its members were then read as top-level fields, and its end-of-container
+  ended the struct, so the real fields after it were never read. A device
+  whose response carried a container-typed field from a newer revision
+  either failed commissioning or had its fields misread. For example, with a
+  context-9 struct ahead of the real fields, `decode_noc_response` returned
+  the StatusCode inside that struct. Unknown containers are now skipped
+  whole, as chip's `TLVReader::Next` skips them.
+- The same decoders now also reject bytes after the struct's
+  end-of-container. End of input inside the struct was already an error.
+  During commissioning their input comes from `parse_invoke_response`, which
+  re-encodes it from a closed container, so this only hardens the public
+  `decode_*` functions against direct calls.
+- The commissioner's check that a commissioning-info payload is
+  well-formed stopped at the first end-of-container, nested or not, so a
+  payload cut off after a closed nested container passed. It now requires
+  the payload's own end-of-container, with nothing after it.
+- Truncated and garbage-tailed IM messages are rejected through the
+  `matter-interaction` 0.4.3 floor (see there).
+- Affected: every published release, `0.1.0` through `0.10.0`. Requires
+  `matter-codec` 0.3.2.
+
+### matter-interaction: Fixed — parsers reject a truncated message and trailing bytes
+
+- `parse_report_data`, `parse_subscribe_response`, `parse_invoke_request`,
+  `parse_invoke_response`, `parse_invoke_response_batch`,
+  `parse_write_response` and `parse_status_response` treated end of input
+  as the close of the message struct and ignored anything after it. chip
+  rejects both on every Interaction Model message
+  (`MessageParser::ExitContainer`, `src/app/MessageDef/MessageParser.cpp`, at
+  v1.4.2.0 and master). The worst case was a `ReportData` chunk cut off
+  before its trailing `MoreChunkedMessages = true`. It decoded as the final
+  chunk, so a chunked read ended early and returned partial data without an
+  error. The one byte `0x15` parsed as an empty report.
+- Each parser now fails with `ImError::Codec(UnclosedContainer)` when input
+  ends inside the message, and with `ImError::Codec(TrailingData)` when bytes
+  follow it. `parse_invoke_response` and `parse_invoke_response_batch` used to
+  return before the message's end. They now skip the rest (later IBs,
+  `MoreChunkedMessages`, the IM revision) and still check it.
+  `parse_invoke_request`'s inner `InvokeRequests` and `CommandDataIB` walks
+  no longer treat end of input as their close.
+- Well-formed messages decode exactly as before. Every matter.js vector
+  still parses, and a run against chip's all-clusters-app at master parsed
+  every message. matter.js 0.17.1 rejects truncation (its `DataReader`
+  throws at end of buffer) but, unlike chip, ignores trailing bytes. We
+  follow chip.
+- Only the session's peer can send these messages (the payload is
+  AES-CCM-authenticated), and nothing here could panic before.
+- Affected: every published release, `0.1.0` through `0.4.2`. Requires
+  `matter-codec` 0.3.2.
+
 ### matter-interaction: Fixed (security) — command and attribute payloads stay out of `Debug` output
 
 - `InvokeResponse::Command`'s `fields_tlv` (the device's response fields),
@@ -465,6 +565,32 @@ published release, `0.1.0` through `0.18.1`.
   alone (for example `AwaitingSigma1`).
 - Latent hardening of private types: no public item changes, and nothing
   observable does either, so this release is optional.
+
+### matter-ota: Fixed — Provider request decoders require a complete struct
+
+- `handle_query_image`, `handle_apply_update_request` and
+  `parse_notify_update_applied` treated end of input as the close of the
+  command-fields struct (and, for QueryImage, of its `ProtocolsSupported`
+  array), and ignored bytes after it. They now fail with
+  `OtaError::Tlv(UnclosedContainer)` or `OtaError::Tlv(TrailingData)`. On the
+  Interaction Model path the blob comes from `parse_invoke_request`, which
+  re-encodes it from a closed container, so this hardens direct calls.
+- Affected: every published release, `0.1.0` through `0.5.1`. Requires
+  `matter-codec` 0.3.2.
+
+### matter-codec: Added — `TlvReader::finish`, a strict top-level close
+
+- `TlvReader::finish` skips any members still unread, nested containers
+  included, through the end-of-container of every open container, then
+  requires the input to be exhausted. It fails with the existing
+  `Error::UnclosedContainer` if input ends before a close, and with the new
+  `Error::TrailingData` if bytes follow the top-level element. It is the
+  check chip's `MessageParser::ExitContainer` makes, and the parsers in
+  `matter-interaction`, `matter-ota` and `matter-commissioning` now end with
+  it.
+- Additive only. `Error` is `#[non_exhaustive]`, so the new variant breaks no
+  match, and no existing method changes behaviour. A proptest and the
+  `fuzz_decode` target cover it.
 
 ## Unreleased — matter-clusters 0.6.0 (in progress, M9-A3)
 
