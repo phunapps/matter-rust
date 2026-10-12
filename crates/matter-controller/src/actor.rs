@@ -6238,8 +6238,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 } else {
                     // A message no handler wants. chip, with no delegate for
                     // an exchange, flushes its ACK at once
-                    // (`ExchangeContext.cpp:556-562`); so do we, rather than
-                    // leave it to the 200 ms timer.
+                    // (`ExchangeContext.cpp:556-562` at master 5cd2917a,
+                    // `:549-554` at v1.4.2.0); so do we, rather than leave it
+                    // to the 200 ms timer.
                     self.finish_exchange(session_id, exchange_id, from).await;
                 }
             }
@@ -7180,8 +7181,12 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     ///
     /// `peer` is the pending's `peer` (where the request went, and where every
     /// follow-up on the exchange goes) in the terminal branches, and the
-    /// inbound's source in the catch-all; the two are equal in every flow the
-    /// controller supports. chip ACKs to the session's latest peer address.
+    /// inbound's source in the catch-all. The two are equal unless the
+    /// device's address changes mid-exchange, in which case the ACK follows
+    /// the exchange's other follow-ups to the pending's `peer`. chip ACKs to
+    /// the session's latest peer address, which it updates from every inbound
+    /// message on the session, before decrypting it (`SessionManager.cpp`
+    /// `:902-905` at master 5cd2917a, `:911-914` at v1.4.2.0).
     async fn finish_exchange(&mut self, sid: SessionId, exchange: u16, peer: SocketAddr) {
         for event in self.sessions.finish_exchange(sid, exchange) {
             self.send_ack_event(event, Some(peer)).await;
@@ -11600,10 +11605,6 @@ mod tests {
         (sessions, sid)
     }
 
-    /// Device acting as a subscription source: completes CASE, answers a
-    /// `SubscribeRequest` with a `SubscribeResponse`, then sends `num_reports`
-    /// steady-state `ReportData` frames (OnOff.OnOff(ep1)=true) on the
-    /// subscription exchange.
     /// Device-side prelude shared by the subscription fakes: accept the
     /// controller's CASE handshake, then answer its `SubscribeRequest` with a
     /// `SubscribeResponse` (subscription id `0x1234_5678`, max interval 30 s).
@@ -11648,6 +11649,10 @@ mod tests {
         (sessions, sid, exchange_id)
     }
 
+    /// Device acting as a subscription source: completes CASE, answers a
+    /// `SubscribeRequest` with a `SubscribeResponse`, then sends `num_reports`
+    /// steady-state `ReportData` frames (OnOff.OnOff(ep1)=true) on the
+    /// subscription exchange.
     async fn run_subscription_device(
         io: InMemoryDatagram,
         ctrl_addr: std::net::SocketAddr,
@@ -22629,34 +22634,110 @@ mod tests {
                 other => panic!("unexpected frame from the actor: {other:?}"),
             }
         }
+
+        /// Register a pending op on `exchange` as the request paths do:
+        /// addressed to the device, never past its response deadline, and
+        /// `retried` so no reconnect dance can start.
+        fn seed(&mut self, exchange: u16, request_opcode: u8, reply: PendingReply) {
+            let peer = self.dev.local_addr();
+            self.actor.pending.insert(
+                (self.sid, exchange),
+                Pending {
+                    response_deadline: far_future(),
+                    node_id: 0x42,
+                    peer,
+                    request: PendingRequest {
+                        opcode: request_opcode,
+                        protocol_id: ProtocolId::INTERACTION_MODEL,
+                        payload: vec![],
+                    },
+                    retried: true,
+                    reply,
+                },
+            );
+        }
+
+        /// Like [`Self::deliver_counted`] on `exchange`, but hands the decoded
+        /// message straight to `resolve_pending`, skipping `handle_inbound`'s
+        /// catch-all flush. Any ACK the device then sees came from the
+        /// resolving branch's own flush, the one that runs before the caller
+        /// is answered.
+        async fn resolve_counted(
+            &mut self,
+            exchange: u16,
+            opcode: u8,
+            payload: &[u8],
+        ) -> (u16, matter_transport::MessageCounter) {
+            let out = self
+                .device
+                .encode_outbound(
+                    self.dev_sid,
+                    Some(exchange),
+                    opcode,
+                    ProtocolId::INTERACTION_MODEL,
+                    payload,
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            let DecodeInboundOutput::AppMessage {
+                session_id,
+                exchange_id,
+                protocol_id,
+                opcode,
+                payload,
+                ..
+            } = self
+                .actor
+                .sessions
+                .decode_inbound(&out.wire_bytes, Instant::now())
+                .unwrap()
+            else {
+                panic!("expected an application message");
+            };
+            self.actor
+                .resolve_pending(session_id, exchange_id, protocol_id, opcode, payload)
+                .await;
+            (out.exchange_id, out.message_counter)
+        }
+
+        /// The next frame the actor sent must be the standalone ACK for the
+        /// device's message `counter` on `exchange`.
+        async fn expect_ack(&mut self, exchange: u16, counter: matter_transport::MessageCounter) {
+            assert_eq!(
+                self.next_frame(SENT_WITHIN).await,
+                Some(Sent::Ack { exchange, counter }),
+                "the resolving branch must flush the ACK itself"
+            );
+        }
     }
+
+    /// `Wired` never pumps the MRP timer, so everything the actor sends is
+    /// queued before the call that sent it returns: a short window only has
+    /// to drain the queue to prove nothing more was sent.
+    const NOTHING_QUEUED_WITHIN: Duration = Duration::from_millis(50);
 
     /// A terminal response is acked before the caller is answered: chip closes
     /// the exchange in `MessageHandled` (ExchangeContext.cpp:633 at master,
     /// :626 at v1.4.2.0) and the close flushes (:239 / :237). Before, the ACK
     /// waited for the 200 ms timer, and a caller that dropped the controller
-    /// at once lost it.
+    /// at once lost it. Resolved directly, so the ACK must come from the
+    /// `RoundTrip` branch, which also ends a timed action and every plain
+    /// `round_trip`.
     #[tokio::test]
     async fn a_round_trip_response_is_acked_before_the_caller_is_answered() {
         let mut w = wired_actor();
-        let mut reply_rx = seed_expired_pending(&mut w.actor, w.sid, 0x60, 0x42);
-        let (exchange, counter) = w
-            .deliver_counted(
-                Some(0x60),
-                ProtocolId::INTERACTION_MODEL,
-                OP_REPORT_DATA,
-                b"pong",
-            )
-            .await;
-        assert_eq!(
-            w.next_frame(SENT_WITHIN).await,
-            Some(Sent::Ack { exchange, counter })
-        );
+        let (reply, mut reply_rx) = oneshot::channel();
+        w.seed(0x60, 0x02, PendingReply::RoundTrip(reply));
+        let (exchange, counter) = w.resolve_counted(0x60, OP_REPORT_DATA, b"pong").await;
+        w.expect_ack(exchange, counter).await;
         assert_eq!(reply_rx.try_recv().unwrap().unwrap(), b"pong");
-        // Double ACK: the per-branch flush and the catch-all send one ACK
-        // between them, and the timer has nothing left.
+        // Double ACK: the catch-all that `handle_inbound` runs next finds
+        // nothing left to send, and neither does the timer.
+        let from = w.dev.local_addr();
+        w.actor.finish_exchange(w.sid, exchange, from).await;
         assert_eq!(
-            w.next_frame(Duration::from_millis(50)).await,
+            w.next_frame(NOTHING_QUEUED_WITHIN).await,
             None,
             "a second ACK"
         );
@@ -22673,24 +22754,237 @@ mod tests {
         );
     }
 
+    /// A read pending, as `start_read` registers one, that has seen no chunk.
+    fn read_reply(
+        reply: oneshot::Sender<Result<Vec<matter_interaction::ReportData>, Error>>,
+    ) -> PendingReply {
+        PendingReply::Read {
+            reply,
+            chunks: Vec::new(),
+            total_bytes: 0,
+        }
+    }
+
     #[tokio::test]
     async fn a_final_read_chunk_is_acked_before_the_caller_is_answered() {
         let mut w = wired_actor();
-        let mut reply_rx = seed_expired_read(&mut w.actor, w.sid, 0x61, 0x42, true);
+        let (reply, mut reply_rx) = oneshot::channel();
+        w.seed(0x61, 0x02, read_reply(reply));
         let report = build_report_data(1, 0x06, 0x0000, &matter_codec::Value::Bool(true));
-        let (exchange, counter) = w
-            .deliver_counted(
-                Some(0x61),
-                ProtocolId::INTERACTION_MODEL,
-                OP_REPORT_DATA,
-                &report,
-            )
-            .await;
+        let (exchange, counter) = w.resolve_counted(0x61, OP_REPORT_DATA, &report).await;
+        w.expect_ack(exchange, counter).await;
+        assert_eq!(reply_rx.try_recv().unwrap().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_malformed_read_chunk_is_acked_before_the_caller_is_answered() {
+        let mut w = wired_actor();
+        let (reply, mut reply_rx) = oneshot::channel();
+        w.seed(0x65, 0x02, read_reply(reply));
+        let (exchange, counter) = w.resolve_counted(0x65, OP_REPORT_DATA, &[]).await;
+        w.expect_ack(exchange, counter).await;
+        assert!(matches!(
+            reply_rx.try_recv().unwrap(),
+            Err(Error::InteractionModel(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_oversized_read_is_acked_before_the_caller_is_answered() {
+        let mut w = wired_actor();
+        let (reply, mut reply_rx) = oneshot::channel();
+        w.seed(
+            0x66,
+            0x02,
+            PendingReply::Read {
+                reply,
+                chunks: Vec::new(),
+                // Already at the cap: the next chunk takes the read over it.
+                total_bytes: MAX_READ_BYTES,
+            },
+        );
+        let report = build_report_data(1, 0x06, 0x0000, &matter_codec::Value::Bool(true));
+        let (exchange, counter) = w.resolve_counted(0x66, OP_REPORT_DATA, &report).await;
+        w.expect_ack(exchange, counter).await;
+        assert!(matches!(
+            reply_rx.try_recv().unwrap(),
+            Err(Error::Operational(m)) if m == "read too large"
+        ));
+    }
+
+    /// A timed invoke end to end through the resolvers: the `StatusResponse`
+    /// sends the action (mid-exchange, no flush), and the action's response
+    /// then ends the exchange through the `RoundTrip` branch, which flushes.
+    #[tokio::test]
+    async fn a_timed_invokes_final_response_is_acked_before_the_caller_is_answered() {
+        let mut w = wired_actor();
+        let (reply, mut reply_rx) = oneshot::channel();
+        w.seed(
+            0x67,
+            0x0a,
+            PendingReply::TimedAction {
+                action_opcode: 0x08,
+                action_payload: vec![0x15, 0x18],
+                reply,
+            },
+        );
+        w.resolve_counted(
+            0x67,
+            OP_STATUS_RESPONSE,
+            &matter_interaction::build_status_response(0),
+        )
+        .await;
         assert_eq!(
             w.next_frame(SENT_WITHIN).await,
-            Some(Sent::Ack { exchange, counter })
+            Some(Sent::App {
+                exchange: 0x67,
+                opcode: 0x08,
+                actor_initiated: true
+            })
         );
+        let (exchange, counter) = w.resolve_counted(0x67, 0x09, b"invoked").await;
+        w.expect_ack(exchange, counter).await;
+        assert_eq!(reply_rx.try_recv().unwrap().unwrap(), b"invoked");
+    }
+
+    #[tokio::test]
+    async fn a_rejected_timed_request_is_acked_before_the_caller_is_answered() {
+        let mut w = wired_actor();
+        let (reply, mut reply_rx) = oneshot::channel();
+        w.seed(
+            0x68,
+            0x0a,
+            PendingReply::TimedAction {
+                action_opcode: 0x08,
+                action_payload: vec![0x15, 0x18],
+                reply,
+            },
+        );
+        let rejection = matter_interaction::build_status_response(0x01); // FAILURE
+        let (exchange, counter) = w
+            .resolve_counted(0x68, OP_STATUS_RESPONSE, &rejection)
+            .await;
+        w.expect_ack(exchange, counter).await;
+        assert_eq!(reply_rx.try_recv().unwrap().unwrap(), rejection);
+    }
+
+    /// What a chunked write resolves its caller with: every chunk's per-path
+    /// statuses.
+    type WriteStatuses = Vec<(
+        matter_interaction::AttributePath,
+        matter_interaction::ImStatus,
+    )>;
+
+    /// A chunked write whose last chunk is in flight (`remaining` empty).
+    fn last_write_chunk(reply: oneshot::Sender<Result<WriteStatuses, Error>>) -> PendingReply {
+        PendingReply::ChunkedWrite {
+            reply,
+            remaining: VecDeque::new(),
+            statuses: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_chunked_writes_final_response_is_acked_before_the_caller_is_answered() {
+        let mut w = wired_actor();
+        let (reply, mut reply_rx) = oneshot::channel();
+        w.seed(0x69, OP_WRITE_REQUEST, last_write_chunk(reply));
+        let (exchange, counter) = w
+            .resolve_counted(0x69, OP_WRITE_RESPONSE, &write_response_success())
+            .await;
+        w.expect_ack(exchange, counter).await;
         assert_eq!(reply_rx.try_recv().unwrap().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_chunked_write_rejection_is_acked_before_the_caller_is_answered() {
+        let mut w = wired_actor();
+        let (reply, mut reply_rx) = oneshot::channel();
+        w.seed(0x6a, OP_WRITE_REQUEST, last_write_chunk(reply));
+        let busy = matter_interaction::build_status_response(0x9c); // BUSY
+        let (exchange, counter) = w.resolve_counted(0x6a, OP_STATUS_RESPONSE, &busy).await;
+        w.expect_ack(exchange, counter).await;
+        assert!(reply_rx.try_recv().unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn a_malformed_chunked_write_response_is_acked_before_the_caller_is_answered() {
+        let mut w = wired_actor();
+        let (reply, mut reply_rx) = oneshot::channel();
+        w.seed(0x6b, OP_WRITE_REQUEST, last_write_chunk(reply));
+        let (exchange, counter) = w.resolve_counted(0x6b, OP_WRITE_RESPONSE, &[]).await;
+        w.expect_ack(exchange, counter).await;
+        assert!(matches!(
+            reply_rx.try_recv().unwrap(),
+            Err(Error::InteractionModel(_))
+        ));
+    }
+
+    /// A plain (not yet timed) write, as `start_action` registers one.
+    fn plain_write(reply: oneshot::Sender<Result<Vec<u8>, Error>>) -> PendingReply {
+        PendingReply::Action {
+            opcode: OP_WRITE_REQUEST,
+            timed_payload: Box::new(|| vec![0x15, 0x18]),
+            keys: vec![],
+            timeout_ms: 1000,
+            node_id: 0x42,
+            reply,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_plain_actions_response_is_acked_before_the_caller_is_answered() {
+        let mut w = wired_actor();
+        let (reply, mut reply_rx) = oneshot::channel();
+        w.seed(0x6c, OP_WRITE_REQUEST, plain_write(reply));
+        let response = write_response_success();
+        let (exchange, counter) = w.resolve_counted(0x6c, OP_WRITE_RESPONSE, &response).await;
+        w.expect_ack(exchange, counter).await;
+        assert_eq!(reply_rx.try_recv().unwrap().unwrap(), response);
+    }
+
+    /// `NEEDS_TIMED_INTERACTION` on a plain attempt: its exchange is over, so
+    /// its ACK goes out before the timed retry's `TimedRequest`, which opens
+    /// a new exchange with our I flag.
+    #[tokio::test]
+    async fn a_needs_timed_rejection_is_acked_before_the_timed_retry() {
+        let mut w = wired_actor();
+        let (reply, _reply_rx) = oneshot::channel();
+        w.seed(0x6d, OP_WRITE_REQUEST, plain_write(reply));
+        let (exchange, counter) = w
+            .resolve_counted(
+                0x6d,
+                OP_STATUS_RESPONSE,
+                &matter_interaction::build_status_response(NEEDS_TIMED_INTERACTION),
+            )
+            .await;
+        w.expect_ack(exchange, counter).await;
+        let Some(Sent::App {
+            exchange: retry,
+            opcode: 0x0a,
+            actor_initiated: true,
+        }) = w.next_frame(SENT_WITHIN).await
+        else {
+            panic!("expected the timed retry's TimedRequest");
+        };
+        assert_ne!(retry, exchange, "the retry opens a new exchange");
+        assert!(w.actor.pending.contains_key(&(w.sid, retry)));
+    }
+
+    #[tokio::test]
+    async fn a_subscribe_response_is_acked_before_the_caller_is_answered() {
+        let mut w = wired_actor();
+        let mut reply_rx =
+            seed_initial_subscribe(&mut w.actor, (w.sid, 0x6e), 1, 0x42, far_future());
+        let (exchange, counter) = w
+            .resolve_counted(
+                0x6e,
+                OP_SUBSCRIBE_RESPONSE,
+                &build_subscribe_response(0x1234_5678, 30),
+            )
+            .await;
+        w.expect_ack(exchange, counter).await;
+        assert!(reply_rx.try_recv().unwrap().is_ok());
     }
 
     /// A message no handler wants is acked at once, as chip does when an
@@ -22769,7 +23063,7 @@ mod tests {
             )),
             "the action's piggyback ACKed the StatusResponse: {device_timers:?}"
         );
-        assert_eq!(w.next_frame(Duration::from_millis(300)).await, None);
+        assert_eq!(w.next_frame(NOTHING_QUEUED_WITHIN).await, None);
         assert!(w.actor.pending.contains_key(&(w.sid, 0x62)));
     }
 
@@ -22813,7 +23107,7 @@ mod tests {
                 actor_initiated: true
             })
         );
-        assert_eq!(w.next_frame(Duration::from_millis(300)).await, None);
+        assert_eq!(w.next_frame(NOTHING_QUEUED_WITHIN).await, None);
         assert!(w.actor.pending.contains_key(&(w.sid, 0x63)));
     }
 
@@ -22840,7 +23134,7 @@ mod tests {
                 actor_initiated: true
             })
         );
-        assert_eq!(w.next_frame(Duration::from_millis(300)).await, None);
+        assert_eq!(w.next_frame(NOTHING_QUEUED_WITHIN).await, None);
         assert!(w.actor.pending.contains_key(&(w.sid, 0x64)));
     }
 
