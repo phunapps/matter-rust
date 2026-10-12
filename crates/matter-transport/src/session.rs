@@ -915,7 +915,8 @@ impl SessionManager {
     /// if it rejects the counter the manager checks the per-session
     /// recent-reliable cache and, on a hit, builds a fresh standalone-ack
     /// packet to re-send (the
-    /// [`DecodeInboundOutput::DuplicateReliableAckResent`] variant).
+    /// [`DecodeInboundOutput::DuplicateReliableAckResent`] variant). Any ACK
+    /// still buffered for that counter is dropped, so it is sent once.
     ///
     /// # Errors
     ///
@@ -1020,6 +1021,11 @@ impl SessionManager {
                         MessageCounter(counter),
                         view.is_local_initiator,
                     )?;
+                    // The duplicate gets its ACK now; drop any copy still
+                    // buffered for the same counter so a later finish or timer
+                    // does not send a second (chip clears its pending flag
+                    // here too, `ReliableMessageContext.cpp:120-153`).
+                    session.mrp.forget_ack_for(MessageCounter(counter));
                     Ok(DecodeInboundOutput::DuplicateReliableAckResent {
                         session_id: local_id,
                         exchange_id: view.exchange_id,
@@ -1060,89 +1066,151 @@ impl SessionManager {
         let mut out = Vec::new();
         let session_ids: Vec<SessionId> = self.sessions.keys().copied().collect();
         for sid in session_ids {
-            let timer_events = match self.sessions.get_mut(&sid) {
-                Some(s) => s.mrp.handle_timeout(now),
-                None => continue,
+            let Some(session) = self.sessions.get_mut(&sid) else {
+                continue;
             };
+            let timer_events = session.mrp.handle_timeout(now);
             for event in timer_events {
-                match event {
-                    MrpTimerEvent::Retransmit {
-                        exchange_id,
-                        counter,
-                        packet,
-                    } => {
-                        out.push(MrpEvent::Retransmit {
-                            session_id: sid,
-                            exchange_id,
-                            counter,
-                            packet,
-                        });
-                    }
-                    MrpTimerEvent::Expired {
-                        exchange_id,
-                        counter,
-                    } => {
-                        out.push(MrpEvent::Expired {
-                            session_id: sid,
-                            exchange_id,
-                            counter,
-                        });
-                    }
-                    MrpTimerEvent::StandaloneAckDeadlineFired {
-                        exchange_id,
-                        ack_counter,
-                        is_local_initiator,
-                    } => {
-                        // Build the standalone-ack packet (consumes one
-                        // outbound counter slot). Lookup is fallible to
-                        // keep the borrow checker happy and to tolerate
-                        // mid-iteration session removal, even though we
-                        // just listed the IDs from the same HashMap.
-                        if let Some(session) = self.sessions.get_mut(&sid) {
-                            match Self::build_standalone_ack_packet(
-                                session,
-                                exchange_id,
-                                ack_counter,
-                                is_local_initiator,
-                            ) {
-                                Ok(packet) => out.push(MrpEvent::SendStandaloneAck {
-                                    session_id: sid,
-                                    exchange_id,
-                                    packet,
-                                }),
-                                Err(Error::CounterOverflow) => {
-                                    // The outbound counter is exhausted, so the
-                                    // ack cannot be sent without an illegal
-                                    // counter wrap (Matter Core Spec §4.4.3).
-                                    // Surface it rather than silently dropping
-                                    // the ack: the caller must re-key the
-                                    // session, and emitting the event lets it
-                                    // tear the session down promptly instead of
-                                    // leaving the peer un-acked with no signal.
-                                    out.push(MrpEvent::SessionCounterExhausted {
-                                        session_id: sid,
-                                        exchange_id,
-                                        ack_counter,
-                                    });
-                                }
-                                Err(_) => {
-                                    // Any other build failure (e.g.
-                                    // PayloadTooLarge) cannot occur for a
-                                    // standalone-ack header in practice; drop
-                                    // the event defensively.
-                                }
-                            }
-                        }
-                    }
-                }
+                out.extend(Self::fold_timer_event(sid, session, event));
             }
         }
         out
     }
 
-    /// Build a standalone-ack secured-message packet. Used by both
-    /// [`Self::decode_inbound`]'s duplicate-reliable-resend path and
-    /// [`Self::handle_timeout`]'s standalone-ack-deadline-fired path.
+    /// Fold one per-session timer event into the manager-level [`MrpEvent`],
+    /// building the encrypted packet for a
+    /// [`MrpTimerEvent::StandaloneAckDeadlineFired`] (one outbound counter).
+    ///
+    /// The one path every standalone ACK from MRP's timer or close takes, so
+    /// [`Self::handle_timeout`], [`Self::finish_exchange`],
+    /// [`Self::abort_exchange`] and [`Self::flush_pending_acks`] cannot drift
+    /// apart. An exhausted counter becomes
+    /// [`MrpEvent::SessionCounterExhausted`] (the counter cannot overflow,
+    /// Matter Core Spec §4.6.2, so the caller must re-key); any other build
+    /// failure (`PayloadTooLarge`, impossible for a header-only packet) drops
+    /// the event.
+    fn fold_timer_event(
+        session_id: SessionId,
+        session: &mut Session,
+        event: MrpTimerEvent,
+    ) -> Option<MrpEvent> {
+        match event {
+            MrpTimerEvent::Retransmit {
+                exchange_id,
+                counter,
+                packet,
+            } => Some(MrpEvent::Retransmit {
+                session_id,
+                exchange_id,
+                counter,
+                packet,
+            }),
+            MrpTimerEvent::Expired {
+                exchange_id,
+                counter,
+            } => Some(MrpEvent::Expired {
+                session_id,
+                exchange_id,
+                counter,
+            }),
+            MrpTimerEvent::StandaloneAckDeadlineFired {
+                exchange_id,
+                ack_counter,
+                is_local_initiator,
+            } => match Self::build_standalone_ack_packet(
+                session,
+                exchange_id,
+                ack_counter,
+                is_local_initiator,
+            ) {
+                Ok(packet) => Some(MrpEvent::SendStandaloneAck {
+                    session_id,
+                    exchange_id,
+                    packet,
+                }),
+                Err(Error::CounterOverflow) => Some(MrpEvent::SessionCounterExhausted {
+                    session_id,
+                    exchange_id,
+                    ack_counter,
+                }),
+                Err(_) => None,
+            },
+        }
+    }
+
+    /// Finish an exchange: return the standalone ACK it still owes as an
+    /// [`MrpEvent::SendStandaloneAck`] to send now, and reclaim it
+    /// ([`MrpState::flush_exchange_acks`]). Our own retransmits on it keep
+    /// running (chip's `Close()`).
+    ///
+    /// Not to be confused with [`MrpState::close_exchange`], which is an
+    /// abort that **drops** the owed ACK unsent; this method is the one that
+    /// sends it. [`Self::abort_exchange`] is the abort that sends it first.
+    ///
+    /// Matter Core Spec §4.12 lets an ACK wait up to `MRP_STANDALONE_ACK_TIMEOUT`
+    /// for a message to piggyback on; once the exchange is over there will
+    /// be none (§4.12 does not allow piggybacking onto another exchange), so
+    /// chip (`ExchangeContext::DoClose` → `FlushAcks`) and matter.js
+    /// (`MessageExchange.close()`) send it at once. Call this at the point an
+    /// exchange ends, before answering whoever waited on it, and never while
+    /// the exchange will carry another message from us (see
+    /// [`MrpState::flush_exchange_acks`]).
+    ///
+    /// Returns what [`Self::handle_timeout`] would have: a
+    /// [`MrpEvent::SendStandaloneAck`], or a
+    /// [`MrpEvent::SessionCounterExhausted`] if the counter is spent. Empty
+    /// when nothing is owed, the session is unknown, or the session runs over
+    /// a reliable transport (BTP never buffers an MRP ACK).
+    pub fn finish_exchange(&mut self, session_id: SessionId, exchange_id: u16) -> Vec<MrpEvent> {
+        let Some(session) = self.sessions.get_mut(&session_id) else {
+            return Vec::new();
+        };
+        let flushed = session.mrp.flush_exchange_acks(exchange_id);
+        flushed
+            .into_iter()
+            .filter_map(|event| Self::fold_timer_event(session_id, session, event))
+            .collect()
+    }
+
+    /// Abort an exchange the way chip's `Abort()` does: send the ACK it still
+    /// owes first, exactly as [`Self::finish_exchange`], then drop our own
+    /// pending retransmits on it ([`MrpState::close_exchange`]). For an
+    /// exchange we are abandoning, such as a cancelled request.
+    pub fn abort_exchange(&mut self, session_id: SessionId, exchange_id: u16) -> Vec<MrpEvent> {
+        let Some(session) = self.sessions.get_mut(&session_id) else {
+            return Vec::new();
+        };
+        let flushed = session.mrp.flush_exchange_acks(exchange_id);
+        session.mrp.close_exchange(exchange_id);
+        flushed
+            .into_iter()
+            .filter_map(|event| Self::fold_timer_event(session_id, session, event))
+            .collect()
+    }
+
+    /// Every standalone ACK any session still owes, as [`Self::finish_exchange`]
+    /// would return them, in ascending session-id order. For teardown, when
+    /// nothing will pump [`Self::handle_timeout`] again.
+    pub fn flush_pending_acks(&mut self) -> Vec<MrpEvent> {
+        let mut session_ids: Vec<SessionId> = self.sessions.keys().copied().collect();
+        session_ids.sort_unstable_by_key(|sid| sid.0);
+        let mut out = Vec::new();
+        for sid in session_ids {
+            let Some(session) = self.sessions.get_mut(&sid) else {
+                continue;
+            };
+            let flushed = session.mrp.flush_all_acks();
+            for event in flushed {
+                out.extend(Self::fold_timer_event(sid, session, event));
+            }
+        }
+        out
+    }
+
+    /// Build a standalone-ack secured-message packet. Used by
+    /// [`Self::decode_inbound`]'s duplicate-reliable-resend path and by
+    /// [`Self::fold_timer_event`], which every timer and close path goes
+    /// through.
     ///
     /// Consumes one outbound counter slot on `session`.
     ///
@@ -1394,6 +1462,151 @@ mod tests {
                 } if *s == session_id && *ack_counter == MessageCounter(100)
             )),
             "counter-overflow standalone-ack must surface SessionCounterExhausted, got {events:?}"
+        );
+    }
+
+    /// Hand a reliable inbound for `exchange_id` straight to `mgr`'s MRP, so a
+    /// standalone ACK is buffered without a real encrypted frame (the same
+    /// shortcut `standalone_ack_counter_overflow_surfaces_event` takes).
+    fn buffer_reliable_inbound(
+        mgr: &mut SessionManager,
+        session_id: SessionId,
+        exchange_id: u16,
+        counter: MessageCounter,
+        now: Instant,
+    ) {
+        let header = crate::protocol_header::ProtocolHeader {
+            exchange_flags: crate::protocol_header::ExchangeFlags::INITIATOR
+                | crate::protocol_header::ExchangeFlags::RELIABLE,
+            opcode: 0x02,
+            exchange_id,
+            protocol_id: ProtocolId::INTERACTION_MODEL,
+            ack_counter: None,
+        };
+        let mut payload = Vec::new();
+        encode_protocol_header(&header, &mut payload);
+        mgr.sessions
+            .get_mut(&session_id)
+            .unwrap()
+            .mrp
+            .process_inbound(payload, counter, now)
+            .unwrap();
+    }
+
+    /// Counter exhaustion: finishing an exchange whose ACK cannot be built (the
+    /// outbound counter is at `u32::MAX`; spec §4.6.2 forbids an overflow)
+    /// reports it once, as `handle_timeout` does, and never wraps the counter.
+    #[test]
+    fn finish_exchange_on_an_exhausted_counter_surfaces_the_event_once() {
+        let (_a, mut b) = paired_sessions();
+        let session_id = SessionId(1);
+        let now = Instant::now();
+        buffer_reliable_inbound(&mut b, session_id, 0x4242, MessageCounter(100), now);
+        b.sessions.get_mut(&session_id).unwrap().outbound_counter = u32::MAX;
+
+        let events = b.finish_exchange(session_id, 0x4242);
+
+        assert!(
+            matches!(
+                events.as_slice(),
+                [MrpEvent::SessionCounterExhausted {
+                    session_id: s,
+                    exchange_id: 0x4242,
+                    ack_counter,
+                }] if *s == session_id && *ack_counter == MessageCounter(100)
+            ),
+            "got {events:?}"
+        );
+        assert_eq!(
+            b.sessions.get(&session_id).unwrap().outbound_counter,
+            u32::MAX,
+            "never wraps"
+        );
+        assert_eq!(
+            b.handle_timeout(now + std::time::Duration::from_secs(1))
+                .len(),
+            0,
+            "reported once, not again by the timer"
+        );
+    }
+
+    /// BTP: a `transport_reliable` session never buffers an MRP ACK, even
+    /// when a buggy peer sets R (BTP acknowledges at its own layer, spec
+    /// §4.12), so finishing an exchange on it sends nothing and spends no
+    /// counter.
+    #[test]
+    fn finish_exchange_on_a_transport_reliable_session_is_empty() {
+        let (mut a, mut b) = paired_sessions();
+        let sid = SessionId(1);
+        // Only `b` is on BTP: `a` still sets R=1, which `b` must ignore.
+        b.set_transport_reliable(sid, true).unwrap();
+        let now = Instant::now();
+        let out = a
+            .encode_outbound(
+                sid,
+                None,
+                0x02,
+                ProtocolId::INTERACTION_MODEL,
+                b"req",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+        b.decode_inbound(&out.wire_bytes, now).unwrap();
+        let counter_before = b.sessions.get(&sid).unwrap().outbound_counter;
+
+        assert_eq!(b.finish_exchange(sid, out.exchange_id).len(), 0);
+        assert_eq!(b.flush_pending_acks().len(), 0);
+        assert_eq!(
+            b.sessions.get(&sid).unwrap().outbound_counter,
+            counter_before
+        );
+    }
+
+    /// A session that is gone: finishing or aborting on it is a no-op value.
+    #[test]
+    fn finish_exchange_on_an_unknown_session_is_empty() {
+        let (_a, mut b) = paired_sessions();
+        assert_eq!(b.finish_exchange(SessionId(99), 1).len(), 0);
+        assert_eq!(b.abort_exchange(SessionId(99), 1).len(), 0);
+    }
+
+    /// A retransmit of a message whose ACK is still buffered gets an ACK at
+    /// once from the duplicate path; the buffered one must then go, or a later
+    /// finish or timer sends a second ACK for the same counter. chip clears its
+    /// pending flag the same way (ReliableMessageContext.cpp:120-153, at chip
+    /// master and v1.4.2.0).
+    #[test]
+    fn a_duplicate_does_not_earn_a_second_ack() {
+        let (mut a, mut b) = paired_sessions();
+        let sid = SessionId(1);
+        let now = Instant::now();
+        let out = a
+            .encode_outbound(
+                sid,
+                None,
+                0x05,
+                ProtocolId::INTERACTION_MODEL,
+                b"report",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+        b.decode_inbound(&out.wire_bytes, now).unwrap();
+        assert!(matches!(
+            b.decode_inbound(&out.wire_bytes, now).unwrap(),
+            DecodeInboundOutput::DuplicateReliableAckResent { .. }
+        ));
+        assert_eq!(
+            b.finish_exchange(sid, out.exchange_id).len(),
+            0,
+            "the duplicate path already ACKed it"
+        );
+        assert_eq!(
+            b.handle_timeout(now + std::time::Duration::from_secs(1))
+                .len(),
+            0,
+            "nor does the timer"
         );
     }
 

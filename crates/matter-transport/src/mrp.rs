@@ -522,6 +522,18 @@ struct PendingOutboundAck {
     deadline: Instant,
 }
 
+impl PendingOutboundAck {
+    /// This ACK as the timer event `SessionManager` turns into an encrypted
+    /// standalone-ACK packet.
+    fn fired(self, exchange_id: u16) -> MrpTimerEvent {
+        MrpTimerEvent::StandaloneAckDeadlineFired {
+            exchange_id,
+            ack_counter: self.ack_counter,
+            is_local_initiator: self.is_local_initiator,
+        }
+    }
+}
+
 /// Cache entry for a recently-seen reliable inbound, kept in a 32-slot
 /// ring buffer for duplicate-reliable detection (Matter Core Spec §4.12.6
 /// dedup-resend path; M5.2 design Q5).
@@ -923,11 +935,7 @@ impl MrpState {
         due_exchanges.sort_unstable();
         for exchange_id in due_exchanges {
             if let Some(p) = self.pending_outbound_acks.remove(&exchange_id) {
-                events.push(MrpTimerEvent::StandaloneAckDeadlineFired {
-                    exchange_id,
-                    ack_counter: p.ack_counter,
-                    is_local_initiator: p.is_local_initiator,
-                });
+                events.push(p.fired(exchange_id));
                 reclaim_candidates.push(exchange_id);
             }
         }
@@ -1095,11 +1103,15 @@ impl MrpState {
             })
     }
 
-    /// Close the exchange identified by `exchange_id`:
+    /// Abort the exchange identified by `exchange_id` (chip's `Abort()`
+    /// without its ACK flush):
     /// - Removes it from the exchange table.
     /// - Drops any pending retransmits scoped to that exchange.
-    /// - Clears the pending piggyback-ack slot if it targets this
-    ///   exchange.
+    /// - **Drops** its buffered piggyback ACK unsent.
+    ///
+    /// To abort the way chip does, sending the ACK first, use
+    /// [`SessionManager::abort_exchange`](crate::SessionManager::abort_exchange),
+    /// or call [`Self::flush_exchange_acks`] before this.
     ///
     /// `recent_reliable` entries for this exchange are intentionally
     /// preserved: a late peer retransmit of a request from the now-closed
@@ -1110,6 +1122,66 @@ impl MrpState {
         self.pending_acks
             .retain(|_, p| p.exchange_id != exchange_id);
         self.pending_outbound_acks.remove(&exchange_id);
+    }
+
+    /// Take `exchange_id`'s buffered piggyback ACK, if it has one, as a
+    /// [`MrpTimerEvent::StandaloneAckDeadlineFired`] to send now, then reclaim
+    /// the exchange if nothing else keeps it live.
+    ///
+    /// The sans-IO half of finishing an exchange. chip's
+    /// `ExchangeContext::DoClose` calls `FlushAcks()` on every `Close()` and
+    /// `Abort()`, and matter.js's `MessageExchange.close()` sends the pending
+    /// ACK before it closes. Without it, an ACK nothing can piggyback
+    /// (the next request always opens a new exchange) waits for the
+    /// [`MrpConfig::standalone_ack_deadline`] timer, and is lost if the
+    /// timer's owner stops first.
+    ///
+    /// Our own pending retransmits on the exchange keep running (chip's
+    /// `Close()`); [`Self::close_exchange`] is the abort.
+    ///
+    /// Call it only when the exchange will carry nothing more from our side:
+    /// once the exchange is reclaimed, [`Self::prepare_outbound`] on the same
+    /// id re-creates it as peer-initiated and the message goes out with
+    /// `I=0`. With nothing buffered it returns an empty `Vec`, so a second
+    /// call is harmless.
+    pub fn flush_exchange_acks(&mut self, exchange_id: u16) -> Vec<MrpTimerEvent> {
+        let mut events = Vec::new();
+        if let Some(p) = self.pending_outbound_acks.remove(&exchange_id) {
+            events.push(p.fired(exchange_id));
+        }
+        self.reclaim_if_idle(exchange_id);
+        events
+    }
+
+    /// [`Self::flush_exchange_acks`] for every exchange that owes an ACK, in
+    /// ascending exchange-id order (the order [`Self::handle_timeout`] uses).
+    /// For a session that is going away.
+    pub fn flush_all_acks(&mut self) -> Vec<MrpTimerEvent> {
+        let mut exchange_ids: Vec<u16> = self.pending_outbound_acks.keys().copied().collect();
+        exchange_ids.sort_unstable();
+        let mut events = Vec::new();
+        for exchange_id in exchange_ids {
+            events.extend(self.flush_exchange_acks(exchange_id));
+        }
+        events
+    }
+
+    /// Drop the ACK still buffered for the peer's message `counter`, if any,
+    /// and reclaim its exchange if that leaves it idle. The duplicate path
+    /// calls it right after re-sending an ACK for `counter`, so a later close
+    /// or timer does not send a second one; chip clears its pending flag the
+    /// same way (`ReliableMessageContext.cpp:120-153`).
+    pub(crate) fn forget_ack_for(&mut self, counter: MessageCounter) {
+        let exchanges: Vec<u16> = self
+            .pending_outbound_acks
+            .iter()
+            .filter(|(_, p)| p.ack_counter == counter)
+            .map(|(id, _)| *id)
+            .collect();
+        for exchange_id in exchanges {
+            self.pending_outbound_acks.remove(&exchange_id);
+            self.reclaim_if_idle(exchange_id);
+        }
     }
 
     /// Returns `true` if `exchange_id` has no live work attached: no pending
@@ -2566,6 +2638,165 @@ mod tests {
             !mrp.exchanges.contains_key(&0x4242),
             "exchange reclaimed once its buffered ack drains and it is idle"
         );
+    }
+
+    /// `(exchange, acked counter)` of each event, which must all be ACKs.
+    fn acked(events: Vec<MrpTimerEvent>) -> Vec<(u16, MessageCounter)> {
+        events
+            .into_iter()
+            .map(|e| match e {
+                MrpTimerEvent::StandaloneAckDeadlineFired {
+                    exchange_id,
+                    ack_counter,
+                    ..
+                } => (exchange_id, ack_counter),
+                other => panic!("expected only standalone ACKs, got {other:?}"),
+            })
+            .collect()
+    }
+
+    /// A reliable inbound buffers an ACK; closing the exchange hands it out at
+    /// once, with the peer's counter and our role, and reclaims the exchange.
+    /// No time passes: this is the close path (chip `DoClose` → `FlushAcks`),
+    /// not the 200 ms timer.
+    #[test]
+    fn flush_exchange_acks_emits_the_buffered_ack_without_waiting() {
+        let mut mrp = MrpState::new(cfg());
+        let now = t0();
+        let inbound = build_inbound_payload(
+            ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+            0x02,
+            0x4242,
+            None,
+            b"req",
+        );
+        mrp.process_inbound(inbound, MessageCounter(100), now)
+            .unwrap();
+
+        let events = mrp.flush_exchange_acks(0x4242);
+
+        assert_eq!(events.len(), 1, "{events:?}");
+        match &events[0] {
+            MrpTimerEvent::StandaloneAckDeadlineFired {
+                exchange_id,
+                ack_counter,
+                is_local_initiator,
+            } => {
+                assert_eq!(*exchange_id, 0x4242);
+                assert_eq!(*ack_counter, MessageCounter(100));
+                assert!(
+                    !*is_local_initiator,
+                    "the peer set I=1, so we are the responder"
+                );
+            }
+            other => panic!("expected StandaloneAckDeadlineFired, got {other:?}"),
+        }
+        assert_eq!(mrp.poll_timeout(), None, "nothing left for the timer");
+        assert!(
+            !mrp.exchanges.contains_key(&0x4242),
+            "the closed exchange is reclaimed"
+        );
+    }
+
+    #[test]
+    fn flush_exchange_acks_with_nothing_buffered_is_empty() {
+        let mut mrp = MrpState::new(cfg());
+        assert_eq!(mrp.flush_exchange_acks(0x4242).len(), 0);
+    }
+
+    /// Double ACK: a second close, and the timer after a close, send nothing.
+    #[test]
+    fn a_flushed_ack_is_never_sent_twice() {
+        let mut mrp = MrpState::new(cfg());
+        let now = t0();
+        let inbound = build_inbound_payload(
+            ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+            0x02,
+            0x4242,
+            None,
+            b"req",
+        );
+        mrp.process_inbound(inbound, MessageCounter(100), now)
+            .unwrap();
+        assert_eq!(mrp.flush_exchange_acks(0x4242).len(), 1);
+        assert_eq!(mrp.flush_exchange_acks(0x4242).len(), 0, "second close");
+        assert_eq!(
+            mrp.handle_timeout(now + Duration::from_secs(1)).len(),
+            0,
+            "the timer after a close"
+        );
+    }
+
+    /// Close keeps our own retransmits (chip `Close()`); only the abort
+    /// (`close_exchange`) drops them.
+    #[test]
+    fn flush_exchange_acks_keeps_our_retransmits() {
+        let mut mrp = MrpState::new(cfg());
+        let now = t0();
+        // We open the exchange with a reliable request...
+        let prepared = mrp
+            .prepare_outbound_local(
+                0x02,
+                ProtocolId::INTERACTION_MODEL,
+                b"req",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+        mrp.mark_packet_sent(
+            MessageCounter(1),
+            prepared.exchange_id,
+            vec![1u8; 4],
+            true,
+            now,
+        );
+        // ...and the peer sends a reliable message on it that does not ACK ours.
+        let inbound = build_inbound_payload(
+            ExchangeFlags::RELIABLE,
+            0x05,
+            prepared.exchange_id,
+            None,
+            b"report",
+        );
+        mrp.process_inbound(inbound, MessageCounter(100), now)
+            .unwrap();
+
+        assert_eq!(mrp.flush_exchange_acks(prepared.exchange_id).len(), 1);
+        assert!(
+            mrp.poll_timeout().is_some(),
+            "our retransmit is still scheduled"
+        );
+        assert!(
+            mrp.exchanges.contains_key(&prepared.exchange_id),
+            "an exchange with a pending retransmit stays live"
+        );
+    }
+
+    #[test]
+    fn flush_all_acks_drains_every_exchange_in_ascending_order() {
+        let mut mrp = MrpState::new(cfg());
+        let now = t0();
+        for (exchange, counter) in [(0x30u16, 3u32), (0x10, 1), (0x20, 2)] {
+            let inbound = build_inbound_payload(
+                ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+                0x02,
+                exchange,
+                None,
+                b"",
+            );
+            mrp.process_inbound(inbound, MessageCounter(counter), now)
+                .unwrap();
+        }
+        assert_eq!(
+            acked(mrp.flush_all_acks()),
+            vec![
+                (0x10, MessageCounter(1)),
+                (0x20, MessageCounter(2)),
+                (0x30, MessageCounter(3)),
+            ]
+        );
+        assert_eq!(mrp.poll_timeout(), None);
+        assert_eq!(mrp.exchanges.len(), 0);
     }
 
     #[test]
