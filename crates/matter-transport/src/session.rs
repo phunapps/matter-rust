@@ -753,6 +753,10 @@ impl SessionManager {
 
     /// Drop a session (e.g. on close, on counter overflow, on attestation
     /// failure).
+    ///
+    /// A standalone ACK the session still owes is dropped with it; a caller
+    /// closing the session on purpose takes those first with
+    /// [`Self::flush_session_acks`].
     pub fn remove(&mut self, id: SessionId) -> Option<Session> {
         self.sessions.remove(&id)
     }
@@ -1083,8 +1087,8 @@ impl SessionManager {
     ///
     /// The one path every standalone ACK from MRP's timer or close takes, so
     /// [`Self::handle_timeout`], [`Self::finish_exchange`],
-    /// [`Self::abort_exchange`] and [`Self::flush_pending_acks`] cannot drift
-    /// apart. An exhausted counter becomes
+    /// [`Self::abort_exchange`] and [`Self::flush_session_acks`] (which
+    /// [`Self::flush_pending_acks`] calls per session) cannot drift apart. An exhausted counter becomes
     /// [`MrpEvent::SessionCounterExhausted`] (the counter cannot overflow,
     /// Matter Core Spec §4.6.2, so the caller must re-key); any other build
     /// failure (`PayloadTooLarge`, impossible for a header-only packet) drops
@@ -1196,15 +1200,35 @@ impl SessionManager {
         session_ids.sort_unstable_by_key(|sid| sid.0);
         let mut out = Vec::new();
         for sid in session_ids {
-            let Some(session) = self.sessions.get_mut(&sid) else {
-                continue;
-            };
-            let flushed = session.mrp.flush_all_acks();
-            for event in flushed {
-                out.extend(Self::fold_timer_event(sid, session, event));
-            }
+            out.extend(self.flush_session_acks(sid));
         }
         out
+    }
+
+    /// Every standalone ACK one session still owes, as
+    /// [`Self::finish_exchange`] would return them, in ascending exchange-id
+    /// order: for a caller about to [`Self::remove`] the session on purpose.
+    ///
+    /// matter.js sends these when it closes a session (`Session.ts:279-284`:
+    /// each open exchange's `close()` flushes its ACK while the session still
+    /// exists). chip, in effect, does not: its release path reaches
+    /// `FlushAcks` only after `SessionHolderWithDelegate::SessionReleased`
+    /// has released the session (`Session.h:178-184`), so the send fails with
+    /// `CHIP_ERROR_CONNECTION_ABORTED` (`ExchangeContext.cpp:101` at master
+    /// 5cd2917a, `:99` at v1.4.2.0). [`Self::remove`] itself and the table's
+    /// internal eviction flush nothing, as in chip.
+    ///
+    /// Empty for an unknown session, or one on a reliable transport (BTP
+    /// never buffers an MRP ACK).
+    pub fn flush_session_acks(&mut self, session_id: SessionId) -> Vec<MrpEvent> {
+        let Some(session) = self.sessions.get_mut(&session_id) else {
+            return Vec::new();
+        };
+        let flushed = session.mrp.flush_all_acks();
+        flushed
+            .into_iter()
+            .filter_map(|event| Self::fold_timer_event(session_id, session, event))
+            .collect()
     }
 
     /// Build a standalone-ack secured-message packet. Used by
@@ -1569,6 +1593,186 @@ mod tests {
         let (_a, mut b) = paired_sessions();
         assert_eq!(b.finish_exchange(SessionId(99), 1).len(), 0);
         assert_eq!(b.abort_exchange(SessionId(99), 1).len(), 0);
+    }
+
+    /// A caller removing a session on purpose takes the ACKs it still owes
+    /// first, as packets the peer accepts; a second call finds nothing, and an
+    /// unknown session yields nothing. matter.js sends these when it closes a
+    /// session; chip's release path reaches `FlushAcks` only after the
+    /// session holder is released, so its send fails.
+    #[test]
+    fn flush_session_acks_returns_what_a_session_owes() {
+        let (mut a, mut b) = paired_sessions();
+        let sid = SessionId(1);
+        let now = Instant::now();
+        let out = a
+            .encode_outbound(
+                sid,
+                None,
+                0x05,
+                ProtocolId::INTERACTION_MODEL,
+                b"report",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+        b.decode_inbound(&out.wire_bytes, now).unwrap();
+
+        let events = b.flush_session_acks(sid);
+
+        let [MrpEvent::SendStandaloneAck {
+            session_id,
+            exchange_id,
+            packet,
+        }] = events.as_slice()
+        else {
+            panic!("expected one standalone ACK, got {events:?}");
+        };
+        assert_eq!((*session_id, *exchange_id), (sid, out.exchange_id));
+        match a.decode_inbound(packet, now).unwrap() {
+            DecodeInboundOutput::AckOnly { acked_counter, .. } => {
+                assert_eq!(acked_counter, out.message_counter);
+            }
+            other => panic!("expected AckOnly, got {other:?}"),
+        }
+        assert_eq!(b.flush_session_acks(sid).len(), 0, "taken once");
+        assert_eq!(b.poll_timeout(), None);
+        assert_eq!(
+            b.flush_session_acks(SessionId(99)).len(),
+            0,
+            "unknown session"
+        );
+    }
+
+    /// The exchange flags inside `packet`, decrypted with `receiver`'s keys
+    /// for session `sid` (a fresh replay window, so `receiver`'s own is
+    /// untouched).
+    fn exchange_flags_of(
+        receiver: &SessionManager,
+        sid: SessionId,
+        packet: &[u8],
+    ) -> crate::protocol_header::ExchangeFlags {
+        let session = receiver.get(sid).unwrap();
+        let (_, plaintext) = crate::framing::decode_secured(
+            packet,
+            &session.keys,
+            session.role,
+            &mut crate::framing::ReplayWindow::new(),
+            session.peer_nonce_node_id,
+        )
+        .unwrap();
+        crate::protocol_header::decode_protocol_header(&plaintext)
+            .unwrap()
+            .0
+            .exchange_flags
+    }
+
+    /// A session's flush includes its displaced ACKs (a second reliable
+    /// message on one exchange forces the first one's ACK out), each with its
+    /// own exchange's I flag, in ascending exchange-id order and, within an
+    /// exchange, the displaced (older) ACK first. Three exchanges on `b`:
+    /// - `0x0100`, started by `a`: one buffered ACK, sent without I;
+    /// - `0x0101`, started by `a`: only a displaced ACK left, because `b`'s
+    ///   unreliable answer piggybacked the newer one; sent without I;
+    /// - `0x0200`, started by `b`: a displaced and a buffered ACK, both with
+    ///   I (spec §4.4.3.1; chip matches an inbound to its exchange on it).
+    ///
+    /// `a` accepts every one, so nothing is left on either side's timer.
+    #[test]
+    fn flush_session_acks_includes_displaced_acks_with_their_i_flags() {
+        use crate::protocol_header::ExchangeFlags;
+
+        let (mut a, mut b) = paired_sessions();
+        let sid = SessionId(1);
+        let now = Instant::now();
+        a.next_exchange_id = 0x0100;
+        b.next_exchange_id = 0x0200;
+        let reliable = MrpFlags { reliable: true };
+        let im = ProtocolId::INTERACTION_MODEL;
+
+        // 0x0100: one reliable message from `a`, its ACK buffered on `b`.
+        let y = a
+            .encode_outbound(sid, None, 0x06, im, b"write", reliable, now)
+            .unwrap();
+        b.decode_inbound(&y.wire_bytes, now).unwrap();
+
+        // 0x0101: two reliable messages from `a` displace the first one's
+        // ACK; `b`'s unreliable answer piggybacks the second one's.
+        let z1 = a
+            .encode_outbound(sid, None, 0x02, im, b"z1", reliable, now)
+            .unwrap();
+        let z2 = a
+            .encode_outbound(sid, Some(z1.exchange_id), 0x02, im, b"z2", reliable, now)
+            .unwrap();
+        b.decode_inbound(&z1.wire_bytes, now).unwrap();
+        b.decode_inbound(&z2.wire_bytes, now).unwrap();
+        let answer = b
+            .encode_outbound(
+                sid,
+                Some(z1.exchange_id),
+                0x01,
+                im,
+                b"status",
+                MrpFlags::default(),
+                now,
+            )
+            .unwrap();
+        a.decode_inbound(&answer.wire_bytes, now).unwrap();
+
+        // 0x0200: `b` starts it; `a`'s first reply piggybacks the ACK for
+        // `b`'s request, then two reliable messages displace the first ACK.
+        let x = b
+            .encode_outbound(sid, None, 0x02, im, b"req", reliable, now)
+            .unwrap();
+        a.decode_inbound(&x.wire_bytes, now).unwrap();
+        let m1 = a
+            .encode_outbound(sid, Some(x.exchange_id), 0x05, im, b"m1", reliable, now)
+            .unwrap();
+        let m2 = a
+            .encode_outbound(sid, Some(x.exchange_id), 0x05, im, b"m2", reliable, now)
+            .unwrap();
+        b.decode_inbound(&m1.wire_bytes, now).unwrap();
+        b.decode_inbound(&m2.wire_bytes, now).unwrap();
+        assert_eq!(
+            (y.exchange_id, z1.exchange_id, x.exchange_id),
+            (0x0100, 0x0101, 0x0200)
+        );
+
+        let events = b.flush_session_acks(sid);
+
+        let got: Vec<(u16, MessageCounter, bool)> = events
+            .iter()
+            .map(|e| match e {
+                MrpEvent::SendStandaloneAck {
+                    session_id,
+                    exchange_id,
+                    packet,
+                } => {
+                    assert_eq!(*session_id, sid);
+                    let flags = exchange_flags_of(&a, sid, packet);
+                    assert!(flags.contains(ExchangeFlags::ACK), "{flags:?}");
+                    let initiator = flags.contains(ExchangeFlags::INITIATOR);
+                    let acked = match a.decode_inbound(packet, now).unwrap() {
+                        DecodeInboundOutput::AckOnly { acked_counter, .. } => acked_counter,
+                        other => panic!("expected AckOnly, got {other:?}"),
+                    };
+                    (*exchange_id, acked, initiator)
+                }
+                other => panic!("expected only standalone ACKs, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (0x0100, y.message_counter, false),
+                (0x0101, z1.message_counter, false),
+                (0x0200, m1.message_counter, true),
+                (0x0200, m2.message_counter, true),
+            ]
+        );
+        assert_eq!(b.flush_session_acks(sid).len(), 0, "taken once");
+        assert_eq!(b.poll_timeout(), None);
+        assert_eq!(a.poll_timeout(), None, "a's retransmits are all ACKed");
     }
 
     /// A retransmit of a message whose ACK is still buffered gets an ACK at
