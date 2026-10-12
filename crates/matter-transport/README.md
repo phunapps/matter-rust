@@ -24,7 +24,10 @@ MRP reliability layer (§4.11) and the application protocol header
   activity within its Session Active Threshold (re-evaluated per
   retransmit, chip `GetMRPBaseTimeout`) using the peer's advertised
   `SII`/`SAI`/`SAT` (`MrpConfig::for_peer`), so a sleepy/ICD device is
-  never hammered with active-interval spacing.
+  never hammered with active-interval spacing. Closing an exchange hands
+  out the ACK it still owes at once (`SessionManager::finish_exchange`,
+  as chip's `FlushAcks` on close); the 200 ms standalone-ACK timer is
+  only the fallback.
 - **Protocol header:** the Matter application protocol header codec,
   with skip-and-ignore handling of SX/V extensions.
 - **Transport + Discovery:** sans-IO `Transport` / `Discovery` traits

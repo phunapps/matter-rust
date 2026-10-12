@@ -22,12 +22,15 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
-## Unreleased — security patches
+## Unreleased — security and MRP patches
 
 **Not released.** These fixes stop secrets reaching logs through `{:?}` and
-through `matter-commissioning`'s `tracing` feature, and stop a withheld ACL
-field from being read as a wildcard. None of them changes a
-public API, so each affected crate needs only a patch release:
+through `matter-commissioning`'s `tracing` feature, stop a withheld ACL field
+from being read as a wildcard, and make the controller acknowledge every
+reliable response as soon as its exchange ends, instead of up to 200 ms later
+or never (the MRP entries, last in each crate's list). Only
+`matter-transport` adds public API, and only additively, so each affected
+crate needs only a patch release:
 
 | Crate | Current | Patch |
 |---|---|---|
@@ -48,12 +51,18 @@ Dependency floors to raise at release (no `Cargo.toml` changes yet):
 - `matter-controller` 0.18.2 requires `matter-transport` 0.7.4,
   `matter-commissioning` 0.10.1 and `matter-interaction` 0.4.3. Raise
   `matter-commissioning` in both `[dependencies]` and `[dev-dependencies]`.
+  (0.7.4 for `SessionManager::finish_exchange`, `abort_exchange`,
+  `flush_pending_acks` and `flush_session_acks` too.)
 - `matter-commissioning` 0.10.1 requires `matter-interaction` 0.4.3,
   because it re-exports `InvokeResponse` and the whole crate (as `im`).
+- `matter-commissioning` 0.10.1 also requires `matter-transport` 0.7.4: its
+  exchange helpers call `SessionManager::finish_exchange` and `run_commission`
+  calls `SessionManager::flush_pending_acks`.
 
 Otherwise an application that upgrades only the controller, or only
 commissioning, keeps the leaking `Session`, `Action` and payload `Debug`
-impls from its lockfile.
+impls from its lockfile, and, for the MRP fix, a transport without
+`SessionManager::finish_exchange`.
 
 Every `Debug` change below follows one pattern. The type drops `Debug` from
 its derive and gains a hand-written impl. That impl prints the same type name,
@@ -143,6 +152,30 @@ still means wildcard. Conforming devices always send both fields for the
 reader's own fabric, so their results do not change. Affected: every
 published release, `0.1.0` through `0.18.1`.
 
+### matter-controller: Fixed — responses are acknowledged when their exchange ends
+
+- The MRP acknowledgement for a device's final response (InvokeResponse, the
+  last ReportData chunk, WriteResponse, SubscribeResponse) waited for the
+  200 ms standalone-ACK timer, because nothing could carry it: the next
+  request always opens a new exchange. A controller dropped within those
+  200 ms never sent it. Until the ACK arrives a device keeps the response in
+  a packet buffer and retransmits it; chip's tv-app at master gets only 15
+  such buffers on Linux, so a run of short-lived controllers ran it dry and
+  it dropped responses.
+- The controller now sends the ACK as soon as the exchange ends, before the
+  caller's `.await` returns, as chip (`ExchangeContext::DoClose` →
+  `FlushAcks`) and matter.js (`MessageExchange.close()`) do. A message the
+  controller does not handle is ACKed at once; a cancelled resubscribe or a
+  timed-out request sends its owed ACK before the exchange is dropped; a
+  session the controller removes on purpose (forgetting a node, replacing a
+  session) sends its owed ACKs first, as matter.js does; and the actor sends
+  any ACK still owed when the last `MatterController` handle is dropped (best
+  effort). Exchanges that continue (a timed action, a chunked read or write,
+  a subscription being primed) still carry the ACK on the controller's next
+  message. The 200 ms timer remains as the fallback.
+- Affected: every published release through `0.18.1`. Requires
+  `matter-transport` 0.7.4 and `matter-commissioning` 0.10.1.
+
 ### matter-transport: Fixed (security) — session keys stay out of `Debug` output
 
 - `SessionKeys` derived `Debug`, and `Session` derives `Debug` and prints its
@@ -169,6 +202,42 @@ published release, `0.1.0` through `0.18.1`.
   published release, `0.1.0` through `0.7.3`.
 - The trait set is unchanged (`Debug` only; it is now written by hand), and so
   are the fields and wire bytes.
+
+### matter-transport: Added — closing an exchange hands out its owed ACK
+
+- `SessionManager::finish_exchange(session_id, exchange_id)` returns the
+  standalone ACK an exchange still owes, ready to send, and reclaims the
+  exchange; `SessionManager::abort_exchange` does the same and then drops
+  our own retransmits on it; `SessionManager::flush_session_acks(session_id)`
+  returns everything one session owes, for a caller about to remove it;
+  `SessionManager::flush_pending_acks()` returns every owed ACK, for
+  teardown. They return the same `MrpEvent` values `handle_timeout` does, so
+  an exhausted counter, which cannot overflow (Matter Core Spec §4.6.2),
+  comes back as `MrpEvent::SessionCounterExhausted`. The sans-IO halves are
+  `MrpState::flush_exchange_acks` and `MrpState::flush_all_acks`.
+- `MrpState::close_exchange` is unchanged and still drops the exchange's
+  buffered ACK; its documentation now says so and points at
+  `SessionManager::abort_exchange`. `SessionManager::remove` and the session
+  table's eviction still drop a session's owed ACKs.
+- Additive only: new methods, no new types or variants.
+
+### matter-transport: Fixed — an owed ACK is no longer dropped
+
+- A second reliable message on an exchange that still owed an ACK replaced
+  that ACK, and the first message went unacknowledged until the peer
+  retransmitted it. The older ACK is now owed at once, as chip
+  (`ReliableMessageContext.cpp`, "forcing tx of solitary ack") and matter.js
+  do: `poll_timeout` reports it due immediately and the next `handle_timeout`
+  sends it first. A conformant peer never does this; a flooding one is
+  capped at 32 queued ACKs.
+- A retransmit of a message whose ACK was still buffered was ACKed at once by
+  the duplicate path, and the buffered ACK was sent again later. The buffered
+  one is now dropped, as chip clears its pending flag there.
+- Known limitation: if `SessionManager::encode_outbound` fails with
+  `PayloadTooLarge`, the exchange's buffered ACK was already taken to ride
+  that message and is lost; the peer's retransmit recovers it, through the
+  duplicate path.
+- Affected: every published release through `0.7.3`.
 
 ### matter-commissioning: Fixed (security) — the setup passcode stays out of `Debug` output
 
@@ -226,6 +295,26 @@ published release, `0.1.0` through `0.18.1`.
   the attestation certificates, the RCAC being installed and the CASE
   Sigma2 / Sigma2_Resume messages.
 - Features are additive and no public item changed, so this is a patch.
+
+### matter-commissioning: Fixed — the CommissioningComplete response is acknowledged
+
+- `secured_round_trip` and `secured_read` left the MRP ACK for the device's
+  response buffered for a later exchange's timer. After `commission()`'s
+  last exchange (CommissioningComplete) nothing ever sent it: the session
+  table was dropped when `commission()` returned. The device retransmitted
+  its CommissioningCompleteResponse until it gave up, holding a packet
+  buffer, and a later receive loop could see the retransmits as frames for
+  an unknown session. The failure path's `ArmFailSafe(0)` lost its ACK the
+  same way.
+- Both helpers now send the ACK before they return, on error returns too,
+  best effort (a failed send never fails an exchange whose response
+  arrived), and `commission()`/`commission_ble()` send any ACK still owed
+  before they return, each over its session's transport, so
+  `commission_ble`'s CASE leg uses UDP. The flush before CASE that covered
+  one instance of this stays as a guard; it no longer waits, because nothing
+  is owed by then.
+- Affected: every published release through `0.10.0`. Requires
+  `matter-transport` 0.7.4.
 
 ### matter-interaction: Fixed (security) — command and attribute payloads stay out of `Debug` output
 
