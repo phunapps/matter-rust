@@ -110,7 +110,7 @@ pub mod opcode {
         /// Empty payload, A=1, R=0.
         pub const STANDALONE_ACK: u8 = 0x10;
 
-        /// Status Report (Matter 1.4 Core §4.11.1.2, Table 18): a common
+        /// Status Report (Matter 1.4 Core §4.11.1, Table 18): a common
         /// status format (Appendix D) that every protocol uses, always sent
         /// under the Secure Channel protocol id.
         pub const STATUS_REPORT: u8 = 0x40;
