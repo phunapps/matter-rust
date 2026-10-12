@@ -1088,7 +1088,8 @@ impl SessionManager {
     /// The one path every standalone ACK from MRP's timer or close takes, so
     /// [`Self::handle_timeout`], [`Self::finish_exchange`],
     /// [`Self::abort_exchange`] and [`Self::flush_session_acks`] (which
-    /// [`Self::flush_pending_acks`] calls per session) cannot drift apart. An exhausted counter becomes
+    /// [`Self::flush_pending_acks`] calls per session) cannot drift apart. An
+    /// exhausted counter becomes
     /// [`MrpEvent::SessionCounterExhausted`] (the counter cannot overflow,
     /// Matter Core Spec §4.6.2, so the caller must re-key); any other build
     /// failure (`PayloadTooLarge`, impossible for a header-only packet) drops
@@ -1220,6 +1221,11 @@ impl SessionManager {
     ///
     /// Empty for an unknown session, or one on a reliable transport (BTP
     /// never buffers an MRP ACK).
+    ///
+    /// Call it only when the session will carry nothing more: like
+    /// [`Self::finish_exchange`], it reclaims every exchange it leaves idle, so
+    /// a later message on one of our still-open exchanges would go out on a
+    /// re-created exchange without the initiator flag.
     pub fn flush_session_acks(&mut self, session_id: SessionId) -> Vec<MrpEvent> {
         let Some(session) = self.sessions.get_mut(&session_id) else {
             return Vec::new();
@@ -1579,6 +1585,8 @@ mod tests {
         b.decode_inbound(&out.wire_bytes, now).unwrap();
         let counter_before = b.sessions.get(&sid).unwrap().outbound_counter;
 
+        // Checked first, while nothing has taken any buffered ACK yet.
+        assert_eq!(b.flush_session_acks(sid).len(), 0);
         assert_eq!(b.finish_exchange(sid, out.exchange_id).len(), 0);
         assert_eq!(b.flush_pending_acks().len(), 0);
         assert_eq!(
