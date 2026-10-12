@@ -1032,12 +1032,11 @@ async fn flush_owed_acks<P: AsyncDatagram, O: AsyncDatagram>(
 /// failure the device usually expires it with the fail-safe anyway, but not
 /// if `CommissioningComplete` had already succeeded on the device. It waits for
 /// nothing (the message asks for no ACK) and is best effort: a failed encode
-/// or send leaves the device as it was. If the session is no longer in
-/// `sessions` (the device closed it first and the exchange helpers removed
-/// it), the encode fails with `UnknownSession` and nothing is sent back. The
-/// PASE session is never closed here: the device
-/// clears it on `CommissioningComplete`, and a `CloseSession` on it would
-/// expire the fail-safe (spec §5.5).
+/// or send leaves the device as it was, and the session is removed either
+/// way. If the session is no longer in `sessions`, the encode fails with
+/// `UnknownSession` and nothing is sent. The PASE session is never closed
+/// here: the device clears it on `CommissioningComplete`, and a
+/// `CloseSession` on it would expire the fail-safe (spec §5.5).
 async fn close_case_session<O: AsyncDatagram>(
     op_transport: &O,
     case_slot: Option<(SessionId, SocketAddr)>,
@@ -1051,19 +1050,22 @@ async fn close_case_session<O: AsyncDatagram>(
         sid,
         std::time::Instant::now(),
     ) {
-        // M6 wire-trace capture: feeds JsonlLayer / cargo xtask trace-diff.
-        #[cfg(feature = "tracing")]
-        tracing::debug!(
-            target: "matter_wire",
-            dir = "tx",
-            session_id = u64::from(sid.0),
-            exchange_id = u64::from(out.exchange_id),
-            protocol = u64::from(ProtocolId::SECURE_CHANNEL.protocol),
-            opcode = u64::from(matter_transport::protocol_header::opcode::secure_channel::STATUS_REPORT),
-            payload = crate::hexdump::payload(&matter_transport::secure_channel::CLOSE_SESSION_PAYLOAD),
-            "wire"
-        );
-        let _ = op_transport.send_to(&out.wire_bytes, addr).await;
+        if op_transport.send_to(&out.wire_bytes, addr).await.is_ok() {
+            // M6 wire-trace capture: feeds JsonlLayer / cargo xtask trace-diff.
+            // Written only for a send that succeeded, as in `secured_round_trip`:
+            // a `tx` record claims the datagram went out.
+            #[cfg(feature = "tracing")]
+            tracing::debug!(
+                target: "matter_wire",
+                dir = "tx",
+                session_id = u64::from(sid.0),
+                exchange_id = u64::from(out.exchange_id),
+                protocol = u64::from(ProtocolId::SECURE_CHANNEL.protocol),
+                opcode = u64::from(matter_transport::protocol_header::opcode::secure_channel::STATUS_REPORT),
+                payload = crate::hexdump::payload(&matter_transport::secure_channel::CLOSE_SESSION_PAYLOAD),
+                "wire"
+            );
+        }
     }
     sessions.remove(sid);
 }
@@ -2617,8 +2619,8 @@ mod tests {
         assert_eq!(ctrl.poll_timeout(), None);
     }
 
-    /// One controller/device session pair over an in-memory datagram pair,
-    /// standing in for the commissioning CASE session.
+    /// One controller/device session pair sharing a key set, standing in for
+    /// the commissioning CASE session.
     fn case_pair() -> (SessionManager, SessionId, SessionManager, SessionId) {
         let keys = PaseSessionKeys {
             ke: [0u8; 16],
@@ -2686,22 +2688,42 @@ mod tests {
         );
     }
 
-    /// A device that is gone (its end of the channel dropped, so the send
-    /// fails) costs nothing: the call returns at once and the session is
+    /// A transport whose every send fails with `HostUnreachable`, as a UDP
+    /// socket does when the device's address has no route. Nothing ever
+    /// arrives on it. (`InMemoryDatagram::send_to` cannot fail: it returns
+    /// `Ok(())` even when the peer endpoint is gone.)
+    struct UnreachableDatagram;
+
+    impl AsyncDatagram for UnreachableDatagram {
+        fn send_to(
+            &self,
+            _buf: &[u8],
+            _peer: SocketAddr,
+        ) -> impl std::future::Future<Output = std::io::Result<()>> + Send {
+            std::future::ready(Err(std::io::ErrorKind::HostUnreachable.into()))
+        }
+
+        async fn recv_from(&self) -> std::io::Result<(Vec<u8>, SocketAddr)> {
+            std::future::pending().await
+        }
+    }
+
+    /// A device that cannot be reached (the send fails) costs nothing: the
+    /// call returns at once, without retrying or waiting, and the session is
     /// still forgotten.
     #[tokio::test]
-    async fn close_case_session_does_not_wait_when_the_device_is_gone() {
+    async fn close_case_session_forgets_the_session_when_the_send_fails() {
         let (mut ctrl, sid, _dev, _dev_sid) = case_pair();
-        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
-        let dev_addr = dev_io.local_addr();
-        drop(dev_io);
         tokio::time::timeout(
             Duration::from_secs(1),
-            close_case_session(&ctrl_io, Some((sid, dev_addr)), &mut ctrl),
+            close_case_session(&UnreachableDatagram, Some((sid, STREAM_PEER)), &mut ctrl),
         )
         .await
         .expect("returns without waiting");
-        assert!(ctrl.get(sid).is_none());
+        assert!(
+            ctrl.get(sid).is_none(),
+            "the session is removed even though the CloseSession never went out"
+        );
     }
 
     /// `establish_case_session` drives `resolve_operational` + `run_case` and
