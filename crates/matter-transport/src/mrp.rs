@@ -885,7 +885,7 @@ impl MrpState {
             // exchange we answer unreliably (a subscription ReportData's
             // StatusResponse) leaked a slot until `MAX_EXCHANGES_PER_SESSION`
             // was reached and the session rejected every new peer exchange.
-            // Hanging it off the send, not the ack drain in `prepare_outbound`,
+            // Hanging it off the send, not the ack drain (`commit_outbound`),
             // also covers an answer sent after the standalone-ack deadline
             // already flushed the ack (nothing left to drain, entry re-created).
             self.reclaim_if_idle(exchange_id);
@@ -1666,6 +1666,12 @@ mod tests {
     impl MrpState {
         /// Test shim reproducing the old `prepare_outbound(.., None, ..)`
         /// behaviour: mark a locally-initiated exchange, then prepare on it.
+        ///
+        /// It notes the exchange only when the table does not hold it (the
+        /// first send, or a send after the exchange was reclaimed). A later
+        /// send on a live exchange reads its `I` flag back from the table,
+        /// as `encode_outbound` does, so a bug that records the wrong flag
+        /// shows up here instead of being overwritten by a fresh note.
         fn prepare_outbound_local(
             &mut self,
             opcode: u8,
@@ -1674,7 +1680,9 @@ mod tests {
             mrp_flags: MrpFlags,
             now: Instant,
         ) -> Result<PreparedOutbound> {
-            self.note_local_exchange(TEST_LOCAL_EXCHANGE);
+            if !self.exchanges.contains_key(&TEST_LOCAL_EXCHANGE) {
+                self.note_local_exchange(TEST_LOCAL_EXCHANGE);
+            }
             self.prepare_outbound(
                 opcode,
                 protocol_id,
@@ -1950,6 +1958,35 @@ mod tests {
             much_later + Duration::from_millis(880),
             "peer silent past SAT: retransmit re-evaluates to the idle base (SII)",
         );
+    }
+
+    /// An exchange noted once as ours keeps `I=1` on every message
+    /// `prepare_outbound` builds on it, with no `note_local_exchange` before
+    /// each send: the first send records the exchange with the flag it was
+    /// built with, and later sends read it back from the table.
+    #[test]
+    fn prepare_outbound_keeps_the_initiator_flag_without_re_noting() {
+        let mut mrp = MrpState::new(cfg());
+        let now = t0();
+        mrp.note_local_exchange(0x0700);
+        for send in 0..3 {
+            let prepared = mrp
+                .prepare_outbound(
+                    0x08,
+                    crate::protocol_header::ProtocolId::INTERACTION_MODEL,
+                    0x0700,
+                    b"data",
+                    MrpFlags { reliable: true },
+                    now,
+                )
+                .unwrap();
+            assert!(prepared.is_local_initiator, "send {send}");
+            let (header, _) = decode_protocol_header(&prepared.wire_payload).unwrap();
+            assert!(
+                header.exchange_flags.contains(ExchangeFlags::INITIATOR),
+                "send {send}: header must carry I=1"
+            );
+        }
     }
 
     #[test]

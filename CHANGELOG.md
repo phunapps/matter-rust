@@ -177,6 +177,10 @@ published release, `0.1.0` through `0.18.1`.
   message. The 200 ms timer remains as the fallback.
 - Affected: every published release through `0.18.1`. Requires
   `matter-transport` 0.7.4 and `matter-commissioning` 0.10.1.
+- The `matter-transport` 0.7.4 floor also brings its exchange-slot fix (see
+  "a failed send no longer leaks an exchange slot" below): an `invoke`,
+  `invoke_tlv` or `write` too large to send no longer leaks a slot, so enough
+  of them can no longer stop a node's subscription reports.
 
 ### matter-transport: Fixed (security) — session keys stay out of `Debug` output
 
@@ -242,10 +246,11 @@ published release, `0.1.0` through `0.18.1`.
 - `SessionManager::encode_outbound` recorded the message's exchange in the
   session's MRP exchange table, and took the ACK that exchange owed to ride
   the message, before framing could fail. When it then failed with
-  `PayloadTooLarge` (an encoded message over the 1024-byte framing cap),
-  nothing removed the exchange: each such failure leaked one of the
-  session's 256 exchange slots (`MAX_EXCHANGES_PER_SESSION`), and the owed
-  ACK was lost until the peer's retransmit went through the duplicate path.
+  `PayloadTooLarge` (a protocol header plus application payload over the
+  1024-byte framing cap), nothing removed the exchange: each such failure
+  leaked one of the session's 256 exchange slots
+  (`MAX_EXCHANGES_PER_SESSION`), and the owed ACK was lost until the peer's
+  retransmit went through the duplicate path.
   Once the leaked slots filled the table, the session refused every exchange
   the device started, with `ExchangeTableFull`, so its subscription reports
   stopped arriving: the same symptom as the leak fixed in 0.7.1. Through

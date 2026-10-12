@@ -2017,6 +2017,62 @@ mod tests {
         );
     }
 
+    /// Every message we send on an exchange we started carries `I=1`, not
+    /// only the first: a timed action after its `TimedRequest`, a chunked
+    /// write's later chunks, the `StatusResponse` that asks for the next read
+    /// chunk. The first send records the exchange as ours, and the next send
+    /// on it reads the flag from there (the build only forces `I=1` for a
+    /// freshly allocated id). A chip responder matches an inbound to its
+    /// exchange on the id AND the `I` flag, so a follow-up with `I=0` would
+    /// not reach the exchange the device is answering. Checked with the peer
+    /// replying in between and without it.
+    #[test]
+    fn follow_ups_on_our_own_exchange_keep_the_initiator_flag() {
+        use crate::protocol_header::ExchangeFlags;
+
+        let sid = SessionId(1);
+        let now = Instant::now();
+        let im = ProtocolId::INTERACTION_MODEL;
+        let reliable = MrpFlags { reliable: true };
+        for peer_replies in [false, true] {
+            let (mut a, mut b) = paired_sessions();
+            let first = a
+                .encode_outbound(sid, None, 0x0A, im, b"timed", reliable, now)
+                .unwrap();
+            assert!(first.is_local_initiator);
+            if peer_replies {
+                b.decode_inbound(&first.wire_bytes, now).unwrap();
+                let reply = b
+                    .encode_outbound(sid, Some(first.exchange_id), 0x01, im, b"ok", reliable, now)
+                    .unwrap();
+                assert!(!reply.is_local_initiator, "b is responding");
+                a.decode_inbound(&reply.wire_bytes, now).unwrap();
+            }
+
+            let follow_up = a
+                .encode_outbound(
+                    sid,
+                    Some(first.exchange_id),
+                    0x08,
+                    im,
+                    b"action",
+                    reliable,
+                    now,
+                )
+                .unwrap();
+
+            assert!(
+                follow_up.is_local_initiator,
+                "peer_replies={peer_replies}: the follow-up must report I=1"
+            );
+            assert!(
+                exchange_flags_of(&b, sid, &follow_up.wire_bytes)
+                    .contains(ExchangeFlags::INITIATOR),
+                "peer_replies={peer_replies}: the follow-up's header must carry I=1"
+            );
+        }
+    }
+
     /// `b` starts a reliable exchange, so `a` owes it an ACK, and `a`'s
     /// first answer fails with `PayloadTooLarge`. Returns the request.
     fn owe_an_ack_then_fail_to_answer(
