@@ -61,8 +61,8 @@ Dependency floors to raise at release (no `Cargo.toml` changes yet):
 
 Otherwise an application that upgrades only the controller, or only
 commissioning, keeps the leaking `Session`, `Action` and payload `Debug`
-impls from its lockfile, and, for the MRP fix, a transport without
-`SessionManager::finish_exchange`.
+impls from its lockfile, and, for the MRP fix, fails to build against a
+transport without `SessionManager::finish_exchange`.
 
 Every `Debug` change below follows one pattern. The type drops `Debug` from
 its derive and gains a hand-written impl. That impl prints the same type name,
@@ -206,7 +206,7 @@ published release, `0.1.0` through `0.18.1`.
 ### matter-transport: Added — closing an exchange hands out its owed ACK
 
 - `SessionManager::finish_exchange(session_id, exchange_id)` returns the
-  standalone ACK an exchange still owes, ready to send, and reclaims the
+  standalone ACKs an exchange still owes, ready to send, and reclaims the
   exchange; `SessionManager::abort_exchange` does the same and then drops
   our own retransmits on it; `SessionManager::flush_session_acks(session_id)`
   returns everything one session owes, for a caller about to remove it;
@@ -229,7 +229,7 @@ published release, `0.1.0` through `0.18.1`.
   (`ReliableMessageContext.cpp`, "forcing tx of solitary ack") and matter.js
   do: `poll_timeout` reports it due immediately and the next `handle_timeout`
   sends it first. A conformant peer never does this; a flooding one is
-  capped at 32 queued ACKs.
+  capped at 32 queued ACKs per session.
 - A retransmit of a message whose ACK was still buffered was ACKed at once by
   the duplicate path, and the buffered ACK was sent again later. The buffered
   one is now dropped, as chip clears its pending flag there.
@@ -311,8 +311,8 @@ published release, `0.1.0` through `0.18.1`.
   arrived), and `commission()`/`commission_ble()` send any ACK still owed
   before they return, each over its session's transport, so
   `commission_ble`'s CASE leg uses UDP. The flush before CASE that covered
-  one instance of this stays as a guard; it no longer waits, because nothing
-  is owed by then.
+  one instance of this stays as a guard; it normally returns at once, because
+  nothing is owed by then.
 - Affected: every published release through `0.10.0`. Requires
   `matter-transport` 0.7.4.
 
