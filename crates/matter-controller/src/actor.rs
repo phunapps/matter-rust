@@ -752,6 +752,9 @@ enum SubscribeFailure {
     /// opcode — including a Success `StatusResponse`, which is no answer to a
     /// `SubscribeRequest` (chip: `CHIP_ERROR_INVALID_MESSAGE_TYPE`).
     UnexpectedMessage(u8),
+    /// The device closed the session the attempt ran on, with a Secure
+    /// Channel `CloseSession` (Matter 1.4 Core §4.11.1.4).
+    SessionClosed,
 }
 
 impl SubscribeFailure {
@@ -782,6 +785,10 @@ impl SubscribeFailure {
             // fails it with `ResponseTimeout`) and never come here (review B1).
             Self::MrpExpired => Error::Operational(Self::MrpExpired.to_string()),
             Self::ResponseDeadline => Error::Operational(Self::ResponseDeadline.to_string()),
+            // Not reached: `on_peer_close_session` re-sends an initial
+            // subscribe once through `on_pending_timeout`'s reconnect path and
+            // fails a retried one directly.
+            Self::SessionClosed => Error::Operational(Self::SessionClosed.to_string()),
         }
     }
 }
@@ -795,6 +802,7 @@ impl std::fmt::Display for SubscribeFailure {
             Self::ResponseDeadline => f.write_str(
                 "response deadline elapsed: the request was acknowledged but never answered",
             ),
+            Self::SessionClosed => f.write_str("the device closed the session (CloseSession)"),
             Self::Malformed(e) => write!(f, "malformed response: {e}"),
             Self::Rejected(status) => write!(f, "rejected by the device: IM status 0x{status:02x}"),
             Self::UnexpectedMessage(opcode) => write!(
@@ -6248,11 +6256,28 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             DecodeInboundOutput::AppMessage {
                 session_id,
                 exchange_id,
+                is_initiator,
                 protocol_id,
                 opcode,
                 payload,
                 ..
             } => {
+                // A CloseSession (Matter 1.4 Core §4.11.1.4) is a Secure
+                // Channel status report that starts an exchange the device
+                // opened, encrypted on the session it closes; `decode_inbound`
+                // has just authenticated it with that session's keys. chip
+                // honours exactly that (`UnsolicitedStatusHandler.cpp:28-56`);
+                // one on an exchange we started is not a CloseSession.
+                if is_initiator
+                    && matter_transport::secure_channel::is_close_session(
+                        protocol_id,
+                        opcode,
+                        &payload,
+                    )
+                {
+                    self.on_peer_close_session(session_id).await;
+                    return;
+                }
                 if self.pending.contains_key(&(session_id, exchange_id)) {
                     self.resolve_pending(session_id, exchange_id, protocol_id, opcode, payload)
                         .await;
@@ -7278,6 +7303,94 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             }
         }
         self.sessions.remove(sid).is_some()
+    }
+
+    /// The device closed session `sid` with a `CloseSession` (Matter 1.4 Core
+    /// §4.11.1.4). Remove it and everything that leads to it, as the spec
+    /// requires of a node that receives one. chip marks the session for
+    /// eviction (`UnsolicitedStatusHandler.cpp:55`); matter.js force-closes it
+    /// (`SecureChannelProtocol.ts:86-88`).
+    ///
+    /// - **Routes** on `sid` are evicted, so the next request to the node
+    ///   opens a fresh CASE session. Its resumption record is kept: the spec
+    ///   lets the device keep resumption state too.
+    /// - **Subscriptions** on `sid` go straight into the resubscribe queue, as
+    ///   a liveness timeout would put them, without waiting for one: their
+    ///   reports can no longer be decrypted.
+    /// - **In-flight requests** on `sid` can no longer be answered. A
+    ///   resubscribe attempt, and a read or initial subscribe not yet
+    ///   retried, take [`Self::on_pending_timeout`]: reconnect and re-send
+    ///   once, or reschedule. They are idempotent (#126). Every other request
+    ///   (an invoke, a timed action, a write, a raw round trip, or a read or
+    ///   subscribe already retried) fails at once: the device may have
+    ///   executed it, so it is not re-sent (#119). chip fails every exchange
+    ///   on a released session with a timeout
+    ///   (`ExchangeContext::OnSessionReleased`).
+    /// - **The session** goes last, through [`Self::release_session`], which
+    ///   first queues any ACK it still owes (none for a conformant
+    ///   `CloseSession`, which asks for no ACK).
+    ///
+    /// Nothing is sent in reply: a `CloseSession` is not answered.
+    async fn on_peer_close_session(&mut self, sid: SessionId) {
+        tracing::debug!(
+            target: "matter_controller::actor",
+            session_id = sid.0,
+            "the device closed the session (CloseSession); evicting it"
+        );
+        let routes: Vec<(u64, u64)> = self
+            .cache
+            .iter()
+            .filter(|(_, c)| c.session_id == sid)
+            .map(|(key, _)| *key)
+            .collect();
+        for (fabric_id, node_id) in routes {
+            self.evict_cached_route_if(fabric_id, node_id, sid);
+        }
+        let subs: Vec<SubId> = self
+            .subscriptions
+            .iter()
+            .filter(|(_, e)| e.session_id == sid)
+            .map(|(id, _)| *id)
+            .collect();
+        for sub_id in subs {
+            self.begin_resubscribe(
+                sub_id,
+                Error::Operational(SubscribeFailure::SessionClosed.to_string()),
+            );
+        }
+        let keys: Vec<(SessionId, u16)> = self
+            .pending
+            .keys()
+            .filter(|(s, _)| *s == sid)
+            .copied()
+            .collect();
+        for key in keys {
+            let retry = match self.pending.get(&key) {
+                Some(p) => {
+                    matches!(&p.reply, PendingReply::Subscribe { reply: None, .. })
+                        || (!p.retried
+                            && matches!(
+                                &p.reply,
+                                PendingReply::Read { .. } | PendingReply::Subscribe { .. }
+                            ))
+                }
+                None => continue,
+            };
+            if retry {
+                self.on_pending_timeout(key.0, key.1, SubscribeFailure::SessionClosed)
+                    .await;
+            } else if let Some(p) = self.pending.remove(&key) {
+                let node_id = p.node_id;
+                Self::fail_pending(
+                    p,
+                    Error::Operational(format!(
+                        "node {node_id:016X}: the device closed the session (CloseSession) \
+                         before answering"
+                    )),
+                );
+            }
+        }
+        self.release_session(sid);
     }
 
     /// Send the ACKs [`Self::release_session`] queued. Best effort.
@@ -22844,6 +22957,291 @@ mod tests {
                 "the resolving branch must flush the ACK itself"
             );
         }
+    }
+
+    impl Wired {
+        /// The device closes the shared session: a `CloseSession` encoded on its
+        /// side (new exchange, R clear) through the actor's inbound path.
+        async fn deliver_close_session(&mut self) {
+            let out = matter_transport::secure_channel::encode_close_session(
+                &mut self.device,
+                self.dev_sid,
+                Instant::now(),
+            )
+            .unwrap();
+            let from = self.dev.local_addr();
+            self.actor.handle_inbound(&out.wire_bytes, from).await;
+        }
+
+        /// Route `node_id` to the shared session; returns the fabric id.
+        fn route_node(&mut self, node_id: u64) -> u64 {
+            let fabric_id = self.actor.sole_fabric().unwrap().fabric_id;
+            let peer = self.dev.local_addr();
+            self.actor.cache.insert(
+                (fabric_id, node_id),
+                CachedSession {
+                    session_id: self.sid,
+                    peer,
+                },
+            );
+            fabric_id
+        }
+    }
+
+    /// Matter 1.4 Core §4.11.1.4: a node that receives a `CloseSession` SHALL
+    /// remove the session. The session and its route go, and nothing is sent
+    /// back (not a `CloseSession`, not an ACK: it asked for none).
+    #[tokio::test]
+    async fn a_close_session_from_the_device_evicts_the_session_and_its_route() {
+        let mut w = wired_actor();
+        let fabric_id = w.route_node(0x42);
+        w.deliver_close_session().await;
+        assert!(
+            w.actor.sessions.get(w.sid).is_none(),
+            "the session is removed"
+        );
+        assert!(
+            !w.actor.cache.contains_key(&(fabric_id, 0x42)),
+            "its route is evicted"
+        );
+        w.actor.send_queued_acks().await;
+        assert_eq!(w.next_frame(NOTHING_SENT_WITHIN).await, None);
+    }
+
+    /// An invoke in flight on the closed session fails at once and is not
+    /// re-sent (the device may have executed it). A response that arrives
+    /// after the close is dropped: its session is gone.
+    #[tokio::test]
+    async fn a_close_session_fails_an_in_flight_invoke_at_once() {
+        let mut w = wired_actor();
+        w.route_node(0x42);
+        let (reply, reply_rx) = oneshot::channel();
+        w.seed(0x30, 0x08, PendingReply::RoundTrip(reply));
+        w.deliver_close_session().await;
+        match reply_rx.await {
+            Ok(Err(Error::Operational(m))) => assert!(m.contains("closed the session"), "{m}"),
+            other => panic!("expected Err(Operational), got {other:?}"),
+        }
+        assert_eq!(w.actor.pending.len(), 0);
+        assert!(
+            w.actor.pending_connects.is_empty(),
+            "an invoke is not re-sent"
+        );
+        w.deliver(
+            Some(0x30),
+            ProtocolId::INTERACTION_MODEL,
+            0x09,
+            &[0x15, 0x18],
+        )
+        .await;
+        assert_eq!(w.actor.pending.len(), 0);
+    }
+
+    /// The production shape of #119's case: an invoke that has NOT been
+    /// retried (`Wired::seed` always seeds `retried: true`, which would skip
+    /// the branch that matters). `on_pending_timeout` would reconnect and
+    /// re-send it; a `CloseSession` must not: it fails at once and queues no
+    /// reconnect, because the device may already have executed it.
+    #[tokio::test]
+    async fn a_close_session_fails_a_not_yet_retried_invoke_without_resending() {
+        let mut w = wired_actor();
+        w.route_node(0x42);
+        let (reply, reply_rx) = oneshot::channel();
+        let peer = w.dev.local_addr();
+        w.actor.pending.insert(
+            (w.sid, 0x33),
+            Pending {
+                response_deadline: far_future(),
+                node_id: 0x42,
+                peer,
+                request: PendingRequest {
+                    opcode: 0x08, // InvokeRequest
+                    protocol_id: ProtocolId::INTERACTION_MODEL,
+                    payload: vec![],
+                },
+                retried: false,
+                reply: PendingReply::RoundTrip(reply),
+            },
+        );
+        w.deliver_close_session().await;
+        match reply_rx.await {
+            Ok(Err(Error::Operational(m))) => assert!(m.contains("closed the session"), "{m}"),
+            other => panic!("expected Err(Operational), got {other:?}"),
+        }
+        assert!(
+            w.actor.pending_connects.is_empty(),
+            "a not-yet-retried invoke is not re-sent"
+        );
+        assert_eq!(w.actor.pending.len(), 0);
+    }
+
+    /// A read in flight on the closed session is re-sent once on a fresh
+    /// session (reads are idempotent, #126): a reconnect is queued and the
+    /// caller is not answered yet.
+    #[tokio::test]
+    async fn a_close_session_resends_an_in_flight_read_once() {
+        let mut w = wired_actor();
+        w.route_node(0x42);
+        // The deadline is irrelevant: nothing drives deadlines here.
+        let mut reply_rx = seed_expired_read(&mut w.actor, w.sid, 0x31, 0x42, false);
+        w.deliver_close_session().await;
+        assert!(
+            !w.actor.pending_connects.is_empty(),
+            "a reconnect carries the re-sent read"
+        );
+        assert!(
+            reply_rx.try_recv().is_err(),
+            "the caller is not answered yet"
+        );
+        assert!(w.actor.sessions.get(w.sid).is_none());
+    }
+
+    /// A read already re-sent once fails at once instead of a second retry.
+    #[tokio::test]
+    async fn a_close_session_fails_a_read_already_retried() {
+        let mut w = wired_actor();
+        w.route_node(0x42);
+        let reply_rx = seed_expired_read(&mut w.actor, w.sid, 0x32, 0x42, true);
+        w.deliver_close_session().await;
+        match reply_rx.await {
+            Ok(Err(Error::Operational(m))) => assert!(m.contains("closed the session"), "{m}"),
+            other => panic!("expected Err(Operational), got {other:?}"),
+        }
+        assert!(w.actor.pending_connects.is_empty());
+    }
+
+    /// A resubscribe attempt in flight on the closed session is rescheduled
+    /// on its backoff, with the cause logged.
+    #[tokio::test]
+    async fn a_close_session_reschedules_a_resubscribe_attempt() {
+        let mut w = wired_actor();
+        w.route_node(0x42);
+        let (pr, _reports, _ctrl) = test_pending_resubscribe(1, 0x42, 0, Instant::now());
+        seed_inflight_resubscribe(&mut w.actor, (w.sid, 0x70), pr, far_future());
+        w.deliver_close_session().await;
+        assert_eq!(w.actor.pending.len(), 0);
+        assert!(w
+            .actor
+            .resubscribes
+            .iter()
+            .any(|pr| pr.sub_id == SubId(1) && pr.retry_count == 1));
+        assert!(w
+            .actor
+            .reschedule_causes
+            .iter()
+            .any(|(id, cause)| *id == SubId(1) && cause.contains("closed the session")));
+    }
+
+    /// Subscriptions on the closed session go straight into the resubscribe
+    /// queue (their reports can no longer be decrypted); one on another
+    /// session is untouched.
+    #[tokio::test]
+    async fn a_close_session_moves_its_subscriptions_into_resubscribe() {
+        let mut w = wired_actor();
+        w.route_node(0x42);
+        let (tx, _reports, mut ctrl) = test_report_sink();
+        w.actor
+            .insert_subscription(SubId(9), test_sub_entry(tx, w.sid, 7, 0x42, far_future()));
+        let (tx2, _reports2, _ctrl2) = test_report_sink();
+        w.actor.insert_subscription(
+            SubId(10),
+            test_sub_entry(tx2, SessionId(0x7777), 8, 0x43, far_future()),
+        );
+        w.deliver_close_session().await;
+        assert!(!w.actor.subscriptions.contains_key(&SubId(9)));
+        assert!(w.actor.subscriptions.contains_key(&SubId(10)));
+        assert!(w
+            .actor
+            .resubscribes
+            .iter()
+            .any(|pr| pr.sub_id == SubId(9) && pr.retry_count == 0));
+        assert!(matches!(
+            ctrl.try_recv(),
+            Ok(SubscriptionEvent::Resubscribing { .. })
+        ));
+    }
+
+    /// Guard (spoofing): an UNSECURED frame carrying the `CloseSession` payload
+    /// evicts nothing.
+    #[tokio::test]
+    async fn an_unsecured_close_session_is_ignored() {
+        let mut w = wired_actor();
+        let fabric_id = w.route_node(0x42);
+        let spoof = matter_commissioning::driver::encode_unsecured(
+            1,
+            0x1234,
+            0x40,
+            ProtocolId::SECURE_CHANNEL,
+            true,
+            false,
+            None,
+            None,
+            &matter_transport::secure_channel::CLOSE_SESSION_PAYLOAD,
+        );
+        let from = w.dev.local_addr();
+        w.actor.handle_inbound(&spoof, from).await;
+        assert!(w.actor.sessions.get(w.sid).is_some());
+        assert!(w.actor.cache.contains_key(&(fabric_id, 0x42)));
+    }
+
+    /// Guard: a `CloseSession`-shaped report on an exchange WE started (the
+    /// device's I flag clear) is no `CloseSession`. chip honours only a status
+    /// report that starts an exchange.
+    #[tokio::test]
+    async fn a_close_session_on_an_exchange_we_started_is_ignored() {
+        let mut w = wired_actor();
+        let fabric_id = w.route_node(0x42);
+        // The actor starts an exchange; the device learns it.
+        let ours = w
+            .actor
+            .sessions
+            .encode_outbound(
+                w.sid,
+                None,
+                0x02,
+                ProtocolId::INTERACTION_MODEL,
+                &[0x15, 0x18],
+                MrpFlags { reliable: true },
+                Instant::now(),
+            )
+            .unwrap();
+        w.device
+            .decode_inbound(&ours.wire_bytes, Instant::now())
+            .unwrap();
+        // The device answers on it with the CloseSession payload.
+        let reply = w
+            .device
+            .encode_outbound(
+                w.dev_sid,
+                Some(ours.exchange_id),
+                0x40,
+                ProtocolId::SECURE_CHANNEL,
+                &matter_transport::secure_channel::CLOSE_SESSION_PAYLOAD,
+                MrpFlags { reliable: false },
+                Instant::now(),
+            )
+            .unwrap();
+        let from = w.dev.local_addr();
+        w.actor.handle_inbound(&reply.wire_bytes, from).await;
+        assert!(w.actor.sessions.get(w.sid).is_some());
+        assert!(w.actor.cache.contains_key(&(fabric_id, 0x42)));
+    }
+
+    /// Guard: another Secure Channel status report on a new exchange
+    /// (`SessionEstablishmentSuccess` here) evicts nothing.
+    #[tokio::test]
+    async fn a_status_report_that_is_not_close_session_is_ignored() {
+        let mut w = wired_actor();
+        let fabric_id = w.route_node(0x42);
+        w.deliver(
+            None,
+            ProtocolId::SECURE_CHANNEL,
+            0x40,
+            &[0, 0, 0, 0, 0, 0, 0, 0],
+        )
+        .await;
+        assert!(w.actor.sessions.get(w.sid).is_some());
+        assert!(w.actor.cache.contains_key(&(fabric_id, 0x42)));
     }
 
     /// `Wired` never pumps the MRP timer, so everything the actor sends is
