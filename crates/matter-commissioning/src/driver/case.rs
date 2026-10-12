@@ -769,7 +769,7 @@ pub async fn run_case_establish_with<T: AsyncDatagram>(
         initiator = initiator.with_session_params(params);
     }
 
-    // CSPRNG-seeded counter + ephemeral source node id (spec §4.5.1.1,
+    // CSPRNG-seeded counter + ephemeral source node id (spec §4.6.1.1,
     // §4.13.2.1) — same unsecured-header requirements as PASE apply to SIGMA.
     // Retransmits are sized to the peer's advertised SII: the operational layer
     // has always honoured it, but the handshake that gates the operational

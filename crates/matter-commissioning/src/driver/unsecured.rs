@@ -14,7 +14,7 @@
 //! random *ephemeral source node id* (Matter Core Spec §4.13.2.1) — devices
 //! key their unsecured session context on it and **silently drop** frames
 //! without it. The unsecured message counter SHALL be seeded as a random
-//! 28-bit value + 1 (§4.5.1.1). Security flags stay empty and the destination
+//! 28-bit value + 1 (§4.6.1.1). Security flags stay empty and the destination
 //! node id stays absent on the initiator side; the responder echoes our
 //! ephemeral id back as the destination.
 
@@ -527,7 +527,7 @@ impl UnsecuredExchange {
     /// Create an exchange with a CSPRNG-seeded message counter and ephemeral
     /// source node id — the production constructor.
     ///
-    /// - Counter: random 28-bit value + 1 (Matter Core Spec §4.5.1.1, matching
+    /// - Counter: random 28-bit value + 1 (Matter Core Spec §4.6.1.1, matching
     ///   matter.js's `MessageCounter` initialisation).
     /// - Source node id: random, masked to the low 60 bits (keeps it inside
     ///   the operational node-id range `1..=0xFFFF_FFEF_FFFF_FFFF` required
@@ -1219,7 +1219,7 @@ mod tests {
     #[tokio::test]
     async fn unsecured_new_ephemeral_seeds_counter_and_node_id() {
         // The production constructor must seed both the unsecured message
-        // counter (spec §4.5.1.1: random 28-bit + 1) and the ephemeral source
+        // counter (spec §4.6.1.1: random 28-bit + 1) and the ephemeral source
         // node id from the CSPRNG.
         let (a, b) = InMemoryDatagram::pair();
         let b_addr = b.local_addr();

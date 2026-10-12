@@ -1,5 +1,5 @@
 //! Matter secured-message framing (Matter Core Specification §4.4) plus the
-//! reception-side replay window (§4.4.3).
+//! reception-side replay window (§4.6.5).
 //!
 //! The header layer is implemented in this task. AES-CCM payload encryption
 //! is added in Task 5. The replay window is added in Task 3.
@@ -72,8 +72,10 @@ const FLAGS_MUST_BE_ZERO_MASK: u8 = 0b1111_1000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SessionId(pub u16);
 
-/// 32-bit monotonic message counter; per Matter Core Spec §4.4.3, sessions
-/// initialise this to a random value `> 1 << 31`.
+/// 32-bit monotonic message counter. Matter Core Spec §4.6.1.1 requires
+/// every message counter to start at `Crypto_DRBG(len = 28) + 1`, a CSPRNG
+/// value in `[1, 2^28]`; a secure session's outbound counter does not do
+/// that yet (see `Session::outbound_counter`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MessageCounter(pub u32);
 
@@ -243,7 +245,7 @@ pub fn decode_header(bytes: &[u8]) -> Result<(SecuredMessageHeader, &[u8])> {
 }
 
 /// Sliding-window dedup for inbound message counters per Matter Core
-/// Specification §4.4.3.
+/// Specification §4.6.5 (the message reception state of §4.6.5.1).
 ///
 /// Tracks the highest counter seen plus a 32-bit bitmap covering the 32
 /// counters immediately preceding it. Counters older than the window
@@ -1809,9 +1811,9 @@ mod tests {
 
         #[test]
         fn counter_zero_accepted() {
-            // Spec §4.4.3 says outbound counters start above 1<<31, but
-            // inbound counters from a peer can technically be anything; we
-            // do not special-case zero.
+            // Spec §4.6.1.1 has a sender start its counters at a random
+            // value in [1, 2^28], but inbound counters from a peer can
+            // technically be anything; we do not special-case zero.
             let mut w = ReplayWindow::new();
             w.check_and_record(0).unwrap();
             assert!(w.check_and_record(0).is_err());

@@ -133,9 +133,10 @@ pub struct Session {
     /// a fresh session instead — a debug build trips an assertion if you
     /// don't (each cached cipher keeps a copy of its source key to check).
     pub keys: SessionKeys,
-    /// Next outbound message counter. Initialised per Matter Core Spec
-    /// §4.4.3 (random and > `1 << 31`); M5.1 starts at 1 for simplicity
-    /// and lets M6 (or a future hardening pass) overwrite the field.
+    /// Next outbound message counter. Matter Core Spec §4.6.1.1 and §4.6.2
+    /// require it to start at `Crypto_DRBG(len = 28) + 1`, a CSPRNG value in
+    /// `[1, 2^28]`. This crate does not do that yet: every `register_*`
+    /// method starts it at 1, and nothing in this workspace overwrites it.
     pub outbound_counter: u32,
     /// Inbound replay window for this session.
     pub replay_window: ReplayWindow,

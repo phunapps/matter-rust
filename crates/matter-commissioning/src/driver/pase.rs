@@ -87,7 +87,7 @@ pub async fn run_pase_with<T: AsyncDatagram>(
 ) -> Result<SessionId, DriverError> {
     let local = sessions.allocate_session_id();
     let mut prover = PaseProver::new_with_negotiation(passcode, local.0)?;
-    // CSPRNG-seeded counter + ephemeral source node id (spec §4.5.1.1,
+    // CSPRNG-seeded counter + ephemeral source node id (spec §4.6.1.1,
     // §4.13.2.1) — devices drop session-establishment frames without them.
     // PASE talks to a device in an open commissioning window, which is actively
     // advertising and therefore awake, so the spec defaults are the right size.
