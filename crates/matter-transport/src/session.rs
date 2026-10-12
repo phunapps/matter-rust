@@ -1062,7 +1062,7 @@ impl SessionManager {
     /// If building a standalone-ack packet fails because the session's
     /// outbound counter is exhausted, a [`MrpEvent::SessionCounterExhausted`]
     /// is emitted instead of the ack: the counter cannot wrap (Matter Core
-    /// Spec §4.4.3), so the session must be re-keyed. Surfacing the event
+    /// Spec §4.6.2), so the session must be re-keyed. Surfacing the event
     /// (rather than silently dropping the ack) lets the caller tear the
     /// session down promptly instead of leaving the peer un-acked with no
     /// signal.

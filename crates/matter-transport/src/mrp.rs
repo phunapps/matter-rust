@@ -386,7 +386,7 @@ pub enum MrpEvent {
     /// A standalone-ack was due (the peer's reliable message must be
     /// acknowledged) but could not be built because the session's outbound
     /// message counter is exhausted (`u32::MAX`). Per Matter Core Spec
-    /// §4.4.3 a counter cannot wrap; the session must be re-keyed (a new
+    /// §4.6.2 a counter cannot wrap; the session must be re-keyed (a new
     /// CASE handshake) before any further traffic — including this ack —
     /// can be sent. Surfaced (rather than silently dropped) so the caller
     /// can tear the session down promptly instead of leaving the peer
