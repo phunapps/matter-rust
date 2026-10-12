@@ -1171,6 +1171,22 @@ impl MrpState {
     /// calls it right after re-sending an ACK for `counter`, so a later close
     /// or timer does not send a second one; chip clears its pending flag the
     /// same way (`ReliableMessageContext.cpp:120-153`).
+    ///
+    /// The reclaim goes one step past chip, which leaves the exchange open.
+    /// It is the reclaim [`Self::handle_timeout`] already does when the
+    /// [`MrpConfig::standalone_ack_deadline`] timer sends a buffered ACK, and
+    /// it carries the same close-invariant risk (see
+    /// [`Self::flush_exchange_acks`]): if a duplicate of a mid-exchange
+    /// message arrives before our follow-up on an exchange we started, the
+    /// follow-up goes out on a re-created, peer-initiated exchange with
+    /// `I=0`. That is acceptable for three reasons:
+    /// - This path runs only while the ACK is still buffered, which is
+    ///   before the timer would have done the same reclaim. It brings the
+    ///   timer's hazard forward rather than adding a new one.
+    /// - An IO layer that sends the follow-up in the same turn as it handles
+    ///   the message that prompts it never hits this.
+    /// - Without the reclaim, a caller that never finishes the exchange
+    ///   would leave an idle entry in the exchange table for good.
     pub(crate) fn forget_ack_for(&mut self, counter: MessageCounter) {
         let exchanges: Vec<u16> = self
             .pending_outbound_acks
@@ -2761,7 +2777,22 @@ mod tests {
         mrp.process_inbound(inbound, MessageCounter(100), now)
             .unwrap();
 
-        assert_eq!(mrp.flush_exchange_acks(prepared.exchange_id).len(), 1);
+        let events = mrp.flush_exchange_acks(prepared.exchange_id);
+        // We started this exchange, so our ACK on it must carry I=1 (spec
+        // §4.4.3.1); chip matches an inbound to its exchange on that bit
+        // (`ExchangeContext::MatchExchange`), so an ACK with I=0 would never
+        // reach the peer's exchange and the peer would keep retransmitting.
+        assert!(
+            matches!(
+                events.as_slice(),
+                [MrpTimerEvent::StandaloneAckDeadlineFired {
+                    ack_counter: MessageCounter(100),
+                    is_local_initiator: true,
+                    ..
+                }]
+            ),
+            "one ACK for counter 100, as the exchange initiator: {events:?}"
+        );
         assert!(
             mrp.poll_timeout().is_some(),
             "our retransmit is still scheduled"

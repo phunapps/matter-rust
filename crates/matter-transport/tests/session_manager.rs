@@ -19,8 +19,8 @@ use matter_transport::session::{
     DecodeInboundOutput, PeerHint, SessionKeys, SessionManager, SessionRole,
 };
 use matter_transport::{
-    encode_secured, MessageCounter, MrpEvent, SecuredMessageFlags, SecuredMessageHeader,
-    SecurityFlags, SessionId,
+    decode_protocol_header, decode_secured, encode_secured, ExchangeFlags, MessageCounter,
+    MrpEvent, ReplayWindow, SecuredMessageFlags, SecuredMessageHeader, SecurityFlags, SessionId,
 };
 
 fn pase_keys() -> PaseSessionKeys {
@@ -499,9 +499,26 @@ fn paired() -> (SessionManager, SessionId, SessionManager, SessionId) {
     (alice, alice_sid, bob, bob_sid)
 }
 
+/// The exchange flags inside `packet`, decrypted with `receiver`'s keys for
+/// session `sid` (a fresh replay window, so `receiver`'s own is untouched).
+fn exchange_flags_of(receiver: &SessionManager, sid: SessionId, packet: &[u8]) -> ExchangeFlags {
+    let session = receiver.get(sid).unwrap();
+    let (_, plaintext) = decode_secured(
+        packet,
+        &session.keys,
+        session.role,
+        &mut ReplayWindow::new(),
+        session.peer_nonce_node_id,
+    )
+    .unwrap();
+    decode_protocol_header(&plaintext).unwrap().0.exchange_flags
+}
+
 /// Alice sends a reliable request, Bob answers reliably, Alice finishes the
 /// exchange. The ACK she sends at once is one Bob accepts for his response,
 /// and it clears his retransmit, so nothing is left on either side's timer.
+/// Alice started the exchange, so her ACK carries I=1 (spec §4.4.3.1), the bit
+/// chip matches an inbound to its exchange on (`ExchangeContext::MatchExchange`).
 #[test]
 fn finish_exchange_sends_an_ack_the_peer_accepts() {
     let (mut alice, alice_sid, mut bob, bob_sid) = paired();
@@ -542,6 +559,15 @@ fn finish_exchange_sends_an_ack_the_peer_accepts() {
         panic!("expected one standalone ACK, got {events:?}");
     };
     assert_eq!((*session_id, *exchange_id), (alice_sid, req.exchange_id));
+    let flags = exchange_flags_of(&bob, bob_sid, packet);
+    assert!(
+        flags.contains(ExchangeFlags::INITIATOR | ExchangeFlags::ACK),
+        "the exchange initiator's ACK carries I and A: {flags:?}"
+    );
+    assert!(
+        !flags.contains(ExchangeFlags::RELIABLE),
+        "an ACK is never reliable"
+    );
     match bob.decode_inbound(packet, now).unwrap() {
         DecodeInboundOutput::AckOnly { acked_counter, .. } => {
             assert_eq!(acked_counter, resp.message_counter);
@@ -553,6 +579,45 @@ fn finish_exchange_sends_an_ack_the_peer_accepts() {
         alice.poll_timeout().is_none(),
         "nothing left on Alice's timer"
     );
+}
+
+/// The converse: Bob finishes an exchange Alice started without answering on
+/// it, so his ACK must NOT carry I, or Alice would not match it to her
+/// exchange.
+#[test]
+fn finish_exchange_on_a_peer_initiated_exchange_sends_an_ack_without_i() {
+    let (mut alice, alice_sid, mut bob, bob_sid) = paired();
+    let now = Instant::now();
+    let req = alice
+        .encode_outbound(
+            alice_sid,
+            None,
+            0x08,
+            ProtocolId::INTERACTION_MODEL,
+            b"req",
+            MrpFlags { reliable: true },
+            now,
+        )
+        .unwrap();
+    bob.decode_inbound(&req.wire_bytes, now).unwrap();
+
+    let events = bob.finish_exchange(bob_sid, req.exchange_id);
+
+    let [MrpEvent::SendStandaloneAck { packet, .. }] = events.as_slice() else {
+        panic!("expected one standalone ACK, got {events:?}");
+    };
+    let flags = exchange_flags_of(&alice, alice_sid, packet);
+    assert!(flags.contains(ExchangeFlags::ACK), "{flags:?}");
+    assert!(
+        !flags.contains(ExchangeFlags::INITIATOR),
+        "the responder's ACK must not carry I: {flags:?}"
+    );
+    match alice.decode_inbound(packet, now).unwrap() {
+        DecodeInboundOutput::AckOnly { acked_counter, .. } => {
+            assert_eq!(acked_counter, req.message_counter);
+        }
+        other => panic!("expected AckOnly at Alice, got {other:?}"),
+    }
 }
 
 /// Abort flushes the ACK first (chip `Abort()` → `DoClose(true)` →
@@ -605,42 +670,35 @@ fn abort_exchange_flushes_the_ack_then_drops_our_retransmits() {
     );
 }
 
-/// Teardown: one ACK per session that owes one, in session-id order.
+/// Teardown: one ACK per session that owes one, in session-id order. Eight
+/// sessions, so a `HashMap` walk without the sort does not land in ascending
+/// order by chance (with the sort removed this failed 100 runs out of 100;
+/// with five it still passed 2 runs out of 20).
 #[test]
 fn flush_pending_acks_covers_every_session() {
-    let other_keys = PaseSessionKeys {
-        ke: [0xBB; 16],
-        i2r_key: [0x44; 16],
-        r2i_key: [0x55; 16],
-        attestation_key: [0x66; 16],
+    const PEERS: u8 = 8;
+    let keys_for = |n: u8| PaseSessionKeys {
+        ke: [0xB0 + n; 16],
+        i2r_key: [0x40 + n; 16],
+        r2i_key: [0x50 + n; 16],
+        attestation_key: [0x60 + n; 16],
     };
     let mut alice = SessionManager::new();
-    let mut bob = SessionManager::new();
-    let mut carol = SessionManager::new();
-    let to_bob = alice.register_pase(pase_keys(), SessionRole::Initiator, 1, PeerHint::default());
-    let to_carol = alice.register_pase(
-        other_keys.clone(),
-        SessionRole::Initiator,
-        1,
-        PeerHint::default(),
-    );
-    let bob_sid = bob.register_pase(
-        pase_keys(),
-        SessionRole::Responder,
-        to_bob.0,
-        PeerHint::default(),
-    );
-    let carol_sid = carol.register_pase(
-        other_keys,
-        SessionRole::Responder,
-        to_carol.0,
-        PeerHint::default(),
-    );
     let now = Instant::now();
-    for (peer, sid) in [(&mut bob, bob_sid), (&mut carol, carol_sid)] {
+    let mut expected = Vec::new();
+    for n in 0..PEERS {
+        let alice_sid =
+            alice.register_pase(keys_for(n), SessionRole::Initiator, 1, PeerHint::default());
+        let mut peer = SessionManager::new();
+        let peer_sid = peer.register_pase(
+            keys_for(n),
+            SessionRole::Responder,
+            alice_sid.0,
+            PeerHint::default(),
+        );
         let out = peer
             .encode_outbound(
-                sid,
+                peer_sid,
                 None,
                 0x05,
                 ProtocolId::INTERACTION_MODEL,
@@ -650,7 +708,9 @@ fn flush_pending_acks_covers_every_session() {
             )
             .unwrap();
         alice.decode_inbound(&out.wire_bytes, now).unwrap();
+        expected.push(alice_sid);
     }
+    expected.sort_unstable_by_key(|sid| sid.0);
 
     let sessions: Vec<SessionId> = alice
         .flush_pending_acks()
@@ -661,6 +721,6 @@ fn flush_pending_acks_covers_every_session() {
         })
         .collect();
 
-    assert_eq!(sessions, vec![to_bob, to_carol]);
+    assert_eq!(sessions, expected);
     assert!(alice.poll_timeout().is_none());
 }
