@@ -499,10 +499,12 @@ async fn flush_exchange_ack<T: AsyncDatagram>(
 
 /// Honour a `CloseSession` from the device (Matter 1.4 Core §4.11.1.4) if
 /// `decoded` is one. That means an application message `decode_inbound`
-/// authenticated on one of `sessions`' secure sessions, that starts an
+/// authenticated on one of `sessions`' PASE or CASE sessions, that starts an
 /// exchange the device opened, and that
 /// `matter_transport::secure_channel::is_close_session` recognises. If so,
-/// remove that session and return its id.
+/// remove that session and return its id. Either kind counts: §4.11.1.4
+/// sends a `CloseSession` "within an exchange associated with a PASE or CASE
+/// session", and chip evicts any secure session that receives one.
 ///
 /// A node that receives a `CloseSession` SHALL remove the session's state.
 /// Its owed ACKs and our retransmits on it go too: the device has dropped
@@ -1495,5 +1497,52 @@ mod tests {
             "{got:?}"
         );
         assert!(ctrl.get(session).is_none());
+    }
+
+    /// Guard: a `CloseSession`-shaped report on the exchange WE started (I
+    /// clear from the device) is a response, not a close (§4.11.1.4 requires a
+    /// new exchange; chip routes only initiator messages to its
+    /// `UnsolicitedStatusHandler`, `ExchangeMgr.cpp:319-322`).
+    #[tokio::test]
+    async fn secured_round_trip_treats_a_close_session_on_our_exchange_as_a_response() {
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = matter_transport::SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let (dev_addr, ctrl_addr) = (dev_io.local_addr(), ctrl_io.local_addr());
+        let controller = secured_round_trip(
+            &ctrl_io,
+            &mut ctrl,
+            session,
+            dev_addr,
+            0x08,
+            ProtocolId::INTERACTION_MODEL,
+            b"req",
+        );
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, .. } =
+                dev.decode_inbound(&pkt, Instant::now()).unwrap()
+            else {
+                panic!("expected the request");
+            };
+            let resp = dev
+                .encode_outbound(
+                    session,
+                    Some(exchange_id),
+                    0x40,
+                    ProtocolId::SECURE_CHANNEL,
+                    &matter_transport::secure_channel::CLOSE_SESSION_PAYLOAD,
+                    MrpFlags { reliable: false },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev_io.send_to(&resp.wire_bytes, ctrl_addr).await.unwrap();
+        };
+        let (got, ()) = tokio::join!(controller, device);
+        assert_eq!(
+            got.unwrap().payload,
+            matter_transport::secure_channel::CLOSE_SESSION_PAYLOAD
+        );
+        assert!(ctrl.get(session).is_some());
     }
 }

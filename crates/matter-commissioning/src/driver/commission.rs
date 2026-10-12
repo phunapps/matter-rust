@@ -692,6 +692,8 @@ pub struct BleDriverConfig<'a> {
 /// - [`DriverError::Aborted`] if the state machine emits `Action::Abort` (device
 ///   returned a non-OK commissioning result, attestation failure, etc.).
 /// - [`DriverError::Handshake`] if `Action::EvictCase` is unexpectedly emitted.
+/// - [`DriverError::SessionClosed`] if the device closes the PASE or CASE
+///   session with a `CloseSession` while a secured exchange waits on it.
 pub async fn commission<T, D>(
     transport: &T,
     discovery: &mut D,
@@ -757,7 +759,8 @@ where
 ///
 /// # Errors
 ///
-/// Same error set as [`commission`], plus a [`DriverError::Timeout`] if a
+/// Same error set as [`commission`] (including
+/// [`DriverError::SessionClosed`]), plus a [`DriverError::Timeout`] if a
 /// pre-operational secured dispatch exceeds its BLE-path response deadline.
 pub async fn commission_ble<B, U, D>(
     btp: &B,
