@@ -27,6 +27,9 @@
 //! - `capture-commissioning` — drive matter.js through a full
 //!   commissioning and capture per-stage Invoke / `ReadAttribute`
 //!   payloads for byte-parity (Milestone 6.4.6).
+//! - `capture-close-session` — drive matter.js 0.17.1's
+//!   `SecureChannelMessenger.sendCloseSession` and capture the Secure Channel
+//!   `CloseSession` payload header and payload.
 //! - `dump-model` — walk the pinned `@matter/model` standard data model and
 //!   emit `xtask/model/clusters.json`, the frozen codegen input (Milestone 7).
 //! - `capture-clusters` — encode curated cluster attribute/command TLV with
@@ -155,6 +158,13 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("capture-close-session") => match run_capture_close_session() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("xtask capture-close-session: {err}");
+                ExitCode::FAILURE
+            }
+        },
         Some("integration") => {
             let app = args.next();
             match integration::run(app.as_deref()) {
@@ -232,6 +242,7 @@ fn print_help() {
              capture-noc              Capture Matter NOC + OpCreds command fixtures from matter.js.\n  \
              capture-cd               Generate a synthetic CSA-test CD signing root + CD fixtures.\n  \
              capture-commissioning    Capture a full matter.js commissioning trace for byte-parity (M6.4.6).\n  \
+             capture-close-session    Capture matter.js 0.17.1's Secure Channel CloseSession message.\n  \
              integration              Build/launch all-clusters-app DUT and run the integration sweep.\n  \
              dump-model               Dump the @matter/model data model to xtask/model/clusters.json (M7.2).\n  \
              capture-clusters         Capture cluster attribute/command byte-parity vectors from matter.js (M7.4a).\n  \
@@ -637,6 +648,30 @@ fn run_capture_protocol_header() -> Result<(), String> {
 
     if !status.success() {
         return Err(format!("node index.js exited with status {status}"));
+    }
+    Ok(())
+}
+
+/// Run `xtask/scripts/capture-commissioning/close-session.js`, which writes
+/// `test-vectors/transport/close-session.json`. It lives in the
+/// `capture-commissioning` directory because that directory's `node_modules`
+/// pins matter.js 0.17.1.
+fn run_capture_close_session() -> Result<(), String> {
+    let workspace_root = workspace_root()?;
+    let script_dir = workspace_root.join("xtask/scripts/capture-commissioning");
+    if !script_dir.join("node_modules").exists() {
+        return Err(format!(
+            "node_modules not found in {}; run `npm ci` there first",
+            script_dir.display()
+        ));
+    }
+    let status = Command::new("node")
+        .arg("close-session.js")
+        .current_dir(&script_dir)
+        .status()
+        .map_err(|err| format!("failed to spawn node: {err}"))?;
+    if !status.success() {
+        return Err(format!("node close-session.js exited with status {status}"));
     }
     Ok(())
 }
