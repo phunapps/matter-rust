@@ -107,7 +107,10 @@ struct QueryImageRequest {
 ///
 /// Returns [`OtaError`] if `request_fields_tlv` is not a well-formed `QueryImage`
 /// command-fields struct (not an anonymous struct, a field of the wrong type, or
-/// a required field absent).
+/// a required field absent). The struct must be complete: end of input before
+/// its end-of-container is [`OtaError::Tlv`] wrapping
+/// [`matter_codec::Error::UnclosedContainer`], and bytes after it are
+/// [`matter_codec::Error::TrailingData`].
 pub fn handle_query_image(
     request_fields_tlv: &[u8],
     offer: Option<&ImageOffer>,
@@ -139,7 +142,8 @@ pub fn handle_query_image(
 /// # Errors
 ///
 /// Returns [`OtaError`] if `request_fields_tlv` is not a well-formed
-/// `ApplyUpdateRequest` command-fields struct.
+/// `ApplyUpdateRequest` command-fields struct. As for [`handle_query_image`],
+/// a truncated struct or trailing bytes are rejected.
 pub fn handle_apply_update_request(request_fields_tlv: &[u8]) -> Result<Vec<u8>, OtaError> {
     let (_token, _new_version) =
         decode_token_and_version(request_fields_tlv, "ApplyUpdateRequest")?;
@@ -157,7 +161,8 @@ pub fn handle_apply_update_request(request_fields_tlv: &[u8]) -> Result<Vec<u8>,
 /// # Errors
 ///
 /// Returns [`OtaError`] if `request_fields_tlv` is not a well-formed
-/// `NotifyUpdateApplied` command-fields struct.
+/// `NotifyUpdateApplied` command-fields struct. As for [`handle_query_image`],
+/// a truncated struct or trailing bytes are rejected.
 pub fn parse_notify_update_applied(request_fields_tlv: &[u8]) -> Result<(Vec<u8>, u32), OtaError> {
     decode_token_and_version(request_fields_tlv, "NotifyUpdateApplied")
 }
@@ -188,7 +193,8 @@ fn decode_query_image(fields_tlv: &[u8]) -> Result<QueryImageRequest, OtaError> 
 
     loop {
         match r.next()? {
-            None | Some(Element::ContainerEnd) => break,
+            None => return Err(OtaError::Tlv(matter_codec::Error::UnclosedContainer)),
+            Some(Element::ContainerEnd) => break,
             Some(Element::Scalar {
                 tag: Tag::Context(0),
                 value: Value::Uint(v),
@@ -227,6 +233,7 @@ fn decode_query_image(fields_tlv: &[u8]) -> Result<QueryImageRequest, OtaError> 
             Some(_) => {}
         }
     }
+    r.finish()?;
 
     Ok(QueryImageRequest {
         vendor_id: vendor_id.ok_or(OtaError::MissingField("QueryImage.VendorID"))?,
@@ -238,14 +245,16 @@ fn decode_query_image(fields_tlv: &[u8]) -> Result<QueryImageRequest, OtaError> 
 }
 
 /// Read the `ProtocolsSupported` array body (reader positioned after its start)
-/// as `DownloadProtocolEnum` discriminants, until the array's end.
+/// as `DownloadProtocolEnum` discriminants, until the array's end. End of input
+/// first is `UnclosedContainer`.
 fn decode_protocols_supported(
     r: &mut TlvReader<'_>,
     out: &mut Vec<DownloadProtocolEnum>,
 ) -> Result<(), OtaError> {
     loop {
         match r.next()? {
-            None | Some(Element::ContainerEnd) => return Ok(()),
+            None => return Err(OtaError::Tlv(matter_codec::Error::UnclosedContainer)),
+            Some(Element::ContainerEnd) => return Ok(()),
             Some(Element::Scalar {
                 value: Value::Uint(v),
                 ..
@@ -275,7 +284,8 @@ fn decode_token_and_version(
 
     loop {
         match r.next()? {
-            None | Some(Element::ContainerEnd) => break,
+            None => return Err(OtaError::Tlv(matter_codec::Error::UnclosedContainer)),
+            Some(Element::ContainerEnd) => break,
             Some(Element::Scalar {
                 tag: Tag::Context(0),
                 value: Value::Bytes(v),
@@ -290,6 +300,7 @@ fn decode_token_and_version(
             Some(_) => {}
         }
     }
+    r.finish()?;
 
     Ok((
         token.ok_or(OtaError::MissingField("UpdateToken"))?,
