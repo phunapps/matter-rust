@@ -58,6 +58,17 @@ only additively, so each affected crate needs only a patch release:
 three need it. `matter-ota` 0.5.2 changes only how its Provider decoders treat
 malformed input.
 
+Publish order. `matter-interaction`, `matter-ota` and `matter-commissioning`
+do not build against `matter-codec` 0.3.1, so the codec goes first. Then
+publish the rest in dependency order:
+
+1. `matter-codec` 0.3.2.
+2. `matter-crypto` 0.5.1, if it is published at all (optional, see above).
+3. `matter-interaction` 0.4.3 and `matter-transport` 0.7.4.
+4. `matter-ota` 0.5.2, which depends on interaction.
+5. `matter-commissioning` 0.10.1, which depends on interaction and transport.
+6. `matter-controller` 0.18.2, which depends on all of them.
+
 None of these crates' public APIs uses a `matter-clusters` 0.6.0-only type, so
 they can ship ahead of the 0.6.0 release below. `matter-transport`,
 `matter-interaction` and `matter-crypto` do not depend on `matter-clusters` at
@@ -492,9 +503,12 @@ published release, `0.1.0` through `0.18.1`.
   whole, as chip's `TLVReader::Next` skips them.
 - The same decoders now also reject bytes after the struct's
   end-of-container. End of input inside the struct was already an error.
-  During commissioning their input comes from `parse_invoke_response`, which
-  re-encodes it from a closed container, so this only hardens the public
-  `decode_*` functions against direct calls.
+  During commissioning their input is re-encoded before it reaches them. The
+  command responses come from `parse_invoke_response`, which re-encodes the
+  fields from a closed container. BasicCommissioningInfo and the
+  well-formedness check below get an attribute value that the driver
+  re-encodes from the ReportData. So this only hardens the public `decode_*`
+  functions against direct calls.
 - The commissioner's check that a commissioning-info payload is
   well-formed stopped at the first end-of-container, nested or not, so a
   payload cut off after a closed nested container passed. It now requires
@@ -591,6 +605,15 @@ published release, `0.1.0` through `0.18.1`.
 - Additive only. `Error` is `#[non_exhaustive]`, so the new variant breaks no
   match, and no existing method changes behaviour. A proptest and the
   `fuzz_decode` target cover it.
+- Depth limit. The members `finish` skips get the reader's usual structural
+  checks, including the 32-level nesting limit (`MAX_DEPTH`,
+  `Error::ContainerTooDeep`). For the parsers above, that limit now also
+  applies to parts of a message they used to stop before reading. Examples
+  are the `InvokeResponseIB`s after the first in `parse_invoke_response`, and
+  whatever follows a stopping point. chip's `TLVReader::SkipToEndOfContainer`
+  has no depth bound, so a message nested more than 32 levels deep in a part
+  we ignore is rejected here and accepted by chip. No Interaction Model
+  message comes near that depth.
 
 ## Unreleased — matter-clusters 0.6.0 (in progress, M9-A3)
 

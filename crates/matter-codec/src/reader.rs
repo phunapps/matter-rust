@@ -467,6 +467,13 @@ impl<'a> TlvReader<'a> {
     /// has read a single complete scalar, and fails on a fresh reader over
     /// non-empty input. [`Self::element_span`] is not updated.
     ///
+    /// The skipped members are subject to the [`MAX_DEPTH`] nesting limit, so
+    /// a subtree nested deeper than that fails with
+    /// [`Error::ContainerTooDeep`], even in a part of the message the caller
+    /// never reads. chip's `TLVReader::SkipToEndOfContainer` has no depth
+    /// bound, so it would accept such a message. No Interaction Model message
+    /// comes near that depth.
+    ///
     /// # Errors
     ///
     /// - [`Error::UnclosedContainer`] — end of input before the end-of-container
