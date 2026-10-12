@@ -74,7 +74,7 @@ network commissioning, OTA/BDX transfer, ICD, BLE/Thread transport.
 |---|---|---|
 | Commission (PASE → dev-cert attestation → NOC → CASE) | `fixture::connect` (first call) + `integration.rs` | ✓-live |
 | Reconnect / lazy CASE re-establish | `fixture::connect` (later calls) | ✓-live |
-| Commissioning closes its CASE session (CloseSession after the CommissioningComplete ACK; chip evicts it) | `ota_flow::serve_ota_to_requestor` (log check) | ✓-live (local master 5cd2917a; Pi v1.4.2.0) |
+| Commissioning closes its CASE session (CloseSession after the CommissioningComplete ACK; chip evicts it) | `ota_flow::serve_ota_to_requestor` (log check) | ✓-live (local master 5cd2917a; Pi v1.4.2.0); ✓-nightly (v1.4.2.0 linux-x64: nightly 38276862050 on f4cf058) |
 
 ### Interaction Model (`im_ops.rs`)
 
