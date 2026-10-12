@@ -37,6 +37,35 @@
 //! change, or a test watching the wrong session, fails loudly instead of
 //! passing vacuously.
 //!
+//! Both counts take only exchanges the device is responding on. chip logs
+//! the exchange as `E:<id><r|i>`: `ChipLogValueExchange` appends `i` when
+//! `ExchangeContext::IsInitiator()` and `r` otherwise
+//! (src/lib/support/logging/TextOnlyLogging.h:299-309 at master 5cd2917a,
+//! :278-288 at v1.4.2.0), and every `??N`/`<<N` line above formats its
+//! exchange with it. Every message these tests ACK is a response, so it sits
+//! on an `r` exchange. A device-initiated (`i`) exchange on a test's session
+//! is not ours to ACK: chip's ReadHandler keeps its session in a plain
+//! `SessionHolder` (src/app/ReadHandler.h:624 master, :604 v1.4.2.0), and
+//! each new CASE session shifts every holder on an older CASE session with
+//! the same peer node and CATs to the new one
+//! (`SecureSession::Activate` → `SecureSessionTable::NewerSessionAvailable`
+//! → `SessionHolder::ShiftToSession`: src/transport/SecureSession.cpp:55,
+//! src/transport/SecureSessionTable.h:100-116, src/transport/Session.h:129,
+//! at both refs; only `ExchangeContext` and `PairingSession` opt out with
+//! `kStayAtOldSession`). Each subscription report opens a fresh exchange on
+//! that holder's session (`ReadHandler::AcquireExchangeForSend`,
+//! src/app/ReadHandler.cpp:285-312 master; `SendReportData`, :306-325
+//! v1.4.2.0). Every test binary's controller is node 1 on the same fabric,
+//! so a subscription an earlier binary left behind follows each of these
+//! tests' sessions in turn, and its next report goes out, unACKed, on
+//! whichever one is newest when it comes due. Nightly 38265577415 (v1.4.2.0)
+//! failed exactly so: the subscription `im_ops`'s `subscribe_onoff_attribute`
+//! made on S:26722 (max interval 10 s) sent its next report, 10 s after the
+//! last, as `E:25315i` on S:26728, one of the drop-after-read test's 40
+//! sessions, 1.2 s after that session's own read (`E:38184r`, ACKed), and
+//! retransmitted it `<<1`..`<<5`. Those reports answer none of our
+//! requests, so they are out of these tests' scope.
+//!
 //! Runs in the all-clusters arm (every binary no other arm lists): locally
 //! (`just integration`, chip master) and in the nightly at v1.4.2.0.
 
@@ -110,9 +139,21 @@ fn activations(log: &str) -> Vec<(bool, String)> {
         .collect()
 }
 
-/// `(reliable sends, retransmission lines)` on the sessions `lsids`.
+/// Whether a chip MRP log line names an exchange the device is responding
+/// on: the id after `[E:` is followed by `r`, not `i` (see the module docs).
+fn on_responder_exchange(line: &str) -> bool {
+    line.split("[E:").nth(1).is_some_and(|rest| {
+        let after_id = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+        after_id.len() < rest.len() && after_id.starts_with('r')
+    })
+}
+
+/// `(reliable sends, retransmission lines)` on the sessions `lsids`, on
+/// exchanges the device is responding on.
 fn mrp_lines_on<'a>(log: &'a str, lsids: &[String]) -> (usize, Vec<&'a str>) {
-    let on = |l: &&str| lsid_of(l).is_some_and(|s| lsids.iter().any(|x| x == s));
+    let on = |l: &&str| {
+        on_responder_exchange(l) && lsid_of(l).is_some_and(|s| lsids.iter().any(|x| x == s))
+    };
     let sends = log
         .lines()
         .filter(|l| is_reliable_send(l))
@@ -133,6 +174,16 @@ fn mrp_lines_on<'a>(log: &'a str, lsids: &[String]) -> (usize, Vec<&'a str>) {
 /// one on the PASE session is a response whose ACK came too late (the Tapo
 /// P110M straggler of M6.6.5, on chip). Reads the whole log: the fixture
 /// commissions once per run, in whichever test binary runs first.
+///
+/// The responder-exchange filter applies here too, and costs nothing: every
+/// message chip sends reliably during commissioning answers a commissioner
+/// request (nightly 38265577415: ten `??1` sends on the PASE session, one on
+/// the CASE session, all on `r` exchanges), so both positive controls and
+/// the retransmission check still see every commissioning response. What it
+/// drops is a report from a subscription that lands on the commissioning
+/// CASE session (one the first binary's test makes over the commissioner's
+/// controller, before a newer session takes it over), which is not a
+/// commissioning response.
 #[tokio::test]
 async fn commissioning_leaves_no_retransmission() {
     let cfg = integration_tests::dut_or_skip!();
@@ -232,4 +283,43 @@ async fn controllers_dropped_right_after_a_read_leave_no_retransmission() {
         Vec::<&str>::new(),
         "the device retransmitted responses on the test's sessions"
     );
+}
+
+/// The matcher over lines captured from nightly 38265577415's app.log (chip
+/// v1.4.2.0, linux-x64, lines 38180-38557), colour codes included. On
+/// S:26728, one of that run's 40 drop-after-read sessions, `E:38184r` is the
+/// test's own read (ReportData, ACKed) and `E:25315i` is a subscription
+/// report chip started itself and never got ACKed. Only the responder
+/// exchange may count: the `??1` send on `E:38184r`, and the synthetic `<<1`
+/// on it (made from the real `<<1` line by swapping the exchange).
+#[test]
+fn only_exchanges_the_device_responds_on_are_counted() {
+    const RESPONSE_SEND: &str = "\x1b[0;32m[1791817321.232] [10080:10080] [EM] ??1 [E:38184r S:26728 M:133938514] (S) Msg Retransmission to 1:0000000000000001 scheduled for 395ms from now [State:Active II:500 AI:300 AT:4000]\x1b[0m";
+    const RESPONSE_RETRANSMIT: &str = "\x1b[0;32m[1791817322.778] [10080:10080] [EM] <<1 [E:38184r S:26728 M:133938514] (S) Msg Retransmission to 1:0000000000000001\x1b[0m";
+    const STALE_REPORT: [&str; 10] = [
+        "\x1b[0;32m[1791817322.429] [10080:10080] [EM] ??1 [E:25315i S:26728 M:133938515] (S) Msg Retransmission to 1:0000000000000001 scheduled for 349ms from now [State:Active II:500 AI:300 AT:4000]\x1b[0m",
+        "\x1b[0;32m[1791817322.778] [10080:10080] [EM] <<1 [E:25315i S:26728 M:133938515] (S) Msg Retransmission to 1:0000000000000001\x1b[0m",
+        "\x1b[0;32m[1791817322.778] [10080:10080] [EM] ??2 [E:25315i S:26728 M:133938515] (S) Msg Retransmission to 1:0000000000000001 scheduled for 385ms from now [State:Active II:500 AI:300 AT:4000]\x1b[0m",
+        "\x1b[0;32m[1791817323.164] [10080:10080] [EM] <<2 [E:25315i S:26728 M:133938515] (S) Msg Retransmission to 1:0000000000000001\x1b[0m",
+        "\x1b[0;32m[1791817323.164] [10080:10080] [EM] ??3 [E:25315i S:26728 M:133938515] (S) Msg Retransmission to 1:0000000000000001 scheduled for 565ms from now [State:Active II:500 AI:300 AT:4000]\x1b[0m",
+        "\x1b[0;32m[1791817323.729] [10080:10080] [EM] <<3 [E:25315i S:26728 M:133938515] (S) Msg Retransmission to 1:0000000000000001\x1b[0m",
+        "\x1b[0;32m[1791817323.729] [10080:10080] [EM] ??4 [E:25315i S:26728 M:133938515] (S) Msg Retransmission to 1:0000000000000001 scheduled for 1038ms from now [State:Active II:500 AI:300 AT:4000]\x1b[0m",
+        "\x1b[0;32m[1791817324.769] [10080:10080] [EM] <<4 [E:25315i S:26728 M:133938515] (S) Msg Retransmission to 1:0000000000000001\x1b[0m",
+        "\x1b[0;32m[1791817324.769] [10080:10080] [EM] ??5 [E:25315i S:26728 M:133938515] (S) Msg Retransmission to 1:0000000000000001 scheduled for 1428ms from now [State:Active II:500 AI:300 AT:4000]\x1b[0m",
+        "\x1b[1;31m[1791817326.197] [10080:10080] [EM] <<5 [E:25315i S:26728 M:133938515] (S) Msg Retransmission to 1:0000000000000001 failure (max retries:4)\x1b[0m",
+    ];
+    let log = [RESPONSE_SEND, RESPONSE_RETRANSMIT]
+        .into_iter()
+        .chain(STALE_REPORT)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let lsids = ["26728".to_string()];
+    // The lines are the right shape: without the role filter every one of
+    // them is a send or a retransmission on S:26728.
+    assert_eq!(log.lines().filter(|l| is_reliable_send(l)).count(), 6);
+    assert_eq!(log.lines().filter(|l| is_retransmission(l)).count(), 6);
+
+    let (sends, retransmitted) = mrp_lines_on(&log, &lsids);
+    assert_eq!(sends, 1, "only the `??1` on E:38184r");
+    assert_eq!(retransmitted, vec![RESPONSE_RETRANSMIT]);
 }
