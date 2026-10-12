@@ -75,6 +75,10 @@ const IDLE_SLEEP: Duration = Duration::from_secs(3600);
 /// - [`DriverError::Transport`] if framing/session/MRP rejects a frame.
 /// - [`DriverError::Io`] if the datagram send/recv fails.
 /// - [`DriverError::Timeout`] if MRP exhausts its retransmit budget.
+/// - [`DriverError::SessionClosed`] if the device closes `session_id` with a
+///   `CloseSession` before answering (the session is removed). A
+///   `CloseSession` for another session removes that session and the wait
+///   continues.
 pub async fn secured_round_trip<T: AsyncDatagram>(
     transport: &T,
     sessions: &mut SessionManager,
@@ -143,6 +147,13 @@ pub async fn secured_round_trip<T: AsyncDatagram>(
                     ) => continue,
                     Err(e) => return Err(e.into()),
                 };
+                if let Some(closed) = take_close_session(sessions, &decoded) {
+                    if closed == session_id {
+                        return Err(DriverError::SessionClosed { session_id: closed.0 });
+                    }
+                    // Another of our sessions: it is gone, keep waiting here.
+                    continue;
+                }
                 match decoded {
                     DecodeInboundOutput::AppMessage {
                         exchange_id,
@@ -291,6 +302,10 @@ fn check_chunk(
 /// - [`DriverError::Im`] if a chunk is not a parseable `ReportData`.
 /// - [`DriverError::Transport`] / [`DriverError::Io`] / [`DriverError::Timeout`]
 ///   as for [`secured_round_trip`].
+/// - [`DriverError::SessionClosed`] if the device closes `session_id` with a
+///   `CloseSession` before answering (the session is removed). A
+///   `CloseSession` for another session removes that session and the wait
+///   continues.
 pub async fn secured_read<T: AsyncDatagram>(
     transport: &T,
     sessions: &mut SessionManager,
@@ -339,6 +354,13 @@ pub async fn secured_read<T: AsyncDatagram>(
                     ) => continue,
                     Err(e) => return Err(e.into()),
                 };
+                if let Some(closed) = take_close_session(sessions, &decoded) {
+                    if closed == session_id {
+                        return Err(DriverError::SessionClosed { session_id: closed.0 });
+                    }
+                    // Another of our sessions: it is gone, keep waiting here.
+                    continue;
+                }
                 match decoded {
                     DecodeInboundOutput::AppMessage { exchange_id, payload, .. }
                         if exchange_id == our_exchange =>
@@ -473,6 +495,41 @@ async fn flush_exchange_ack<T: AsyncDatagram>(
             _ => {}
         }
     }
+}
+
+/// Honour a `CloseSession` from the device (Matter 1.4 Core §4.11.1.4) if
+/// `decoded` is one. That means an application message `decode_inbound`
+/// authenticated on one of `sessions`' secure sessions, that starts an
+/// exchange the device opened, and that
+/// `matter_transport::secure_channel::is_close_session` recognises. If so,
+/// remove that session and return its id.
+///
+/// A node that receives a `CloseSession` SHALL remove the session's state.
+/// Its owed ACKs and our retransmits on it go too: the device has dropped
+/// the session and could not decrypt them. A `CloseSession` on an exchange we
+/// started (I clear from the device) is not one, as in chip, which honours
+/// only a status report that starts an exchange
+/// (`UnsolicitedStatusHandler.cpp:28-56`).
+fn take_close_session(
+    sessions: &mut SessionManager,
+    decoded: &DecodeInboundOutput,
+) -> Option<SessionId> {
+    let DecodeInboundOutput::AppMessage {
+        session_id,
+        is_initiator: true,
+        protocol_id,
+        opcode,
+        payload,
+        ..
+    } = decoded
+    else {
+        return None;
+    };
+    if !matter_transport::secure_channel::is_close_session(*protocol_id, *opcode, payload) {
+        return None;
+    }
+    sessions.remove(*session_id);
+    Some(*session_id)
 }
 
 #[cfg(test)]
@@ -1178,5 +1235,265 @@ mod tests {
         assert_eq!(attrs.len(), 2);
         assert_eq!(attrs[0].0.endpoint, 0);
         assert_eq!(attrs[1].0.endpoint, 1);
+    }
+
+    /// Two session pairs with distinct keys: controller ids 1 and 2, device
+    /// ids 1 and 2, cross-registered (stand-ins for PASE and CASE).
+    fn two_paired_sessions() -> (SessionManager, SessionManager) {
+        let k = |a: u8| PaseSessionKeys {
+            ke: [a; 16],
+            i2r_key: [a.wrapping_add(1); 16],
+            r2i_key: [a.wrapping_add(2); 16],
+            attestation_key: [a.wrapping_add(3); 16],
+        };
+        let mut ctrl = SessionManager::new();
+        let mut dev = SessionManager::new();
+        ctrl.register_pase(k(0x10), SessionRole::Initiator, 1, PeerHint::default());
+        ctrl.register_pase(k(0x20), SessionRole::Initiator, 2, PeerHint::default());
+        dev.register_pase(k(0x10), SessionRole::Responder, 1, PeerHint::default());
+        dev.register_pase(k(0x20), SessionRole::Responder, 2, PeerHint::default());
+        (ctrl, dev)
+    }
+
+    /// The device closes the session instead of answering: the helper
+    /// removes it and fails at once with `SessionClosed`. Before, it waited
+    /// for a response that could never come.
+    #[tokio::test]
+    async fn secured_round_trip_fails_at_once_when_the_device_closes_its_session() {
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = matter_transport::SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let (dev_addr, ctrl_addr) = (dev_io.local_addr(), ctrl_io.local_addr());
+        let controller = secured_round_trip(
+            &ctrl_io,
+            &mut ctrl,
+            session,
+            dev_addr,
+            0x08,
+            ProtocolId::INTERACTION_MODEL,
+            b"req",
+        );
+        let device = async {
+            let _ = dev_io.recv_from().await.unwrap(); // the request
+            let close = matter_transport::secure_channel::encode_close_session(
+                &mut dev,
+                session,
+                Instant::now(),
+            )
+            .unwrap();
+            dev_io.send_to(&close.wire_bytes, ctrl_addr).await.unwrap();
+        };
+        let (got, ()) = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            tokio::join!(controller, device)
+        })
+        .await
+        .expect("fails at once, without waiting on MRP");
+        assert!(
+            matches!(got, Err(DriverError::SessionClosed { session_id: 1 })),
+            "{got:?}"
+        );
+        assert!(ctrl.get(session).is_none(), "the closed session is removed");
+    }
+
+    /// The device closes ANOTHER session while we wait on this one: that
+    /// session is removed and the round trip still completes.
+    #[tokio::test]
+    async fn secured_round_trip_forgets_another_closed_session_and_keeps_waiting() {
+        let (mut ctrl, mut dev) = two_paired_sessions();
+        let (waiting, other) = (
+            matter_transport::SessionId(1),
+            matter_transport::SessionId(2),
+        );
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let (dev_addr, ctrl_addr) = (dev_io.local_addr(), ctrl_io.local_addr());
+        let controller = secured_round_trip(
+            &ctrl_io,
+            &mut ctrl,
+            waiting,
+            dev_addr,
+            0x08,
+            ProtocolId::INTERACTION_MODEL,
+            b"req",
+        );
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, .. } =
+                dev.decode_inbound(&pkt, Instant::now()).unwrap()
+            else {
+                panic!("expected the request");
+            };
+            let close = matter_transport::secure_channel::encode_close_session(
+                &mut dev,
+                other,
+                Instant::now(),
+            )
+            .unwrap();
+            dev_io.send_to(&close.wire_bytes, ctrl_addr).await.unwrap();
+            let resp = dev
+                .encode_outbound(
+                    waiting,
+                    Some(exchange_id),
+                    0x09,
+                    ProtocolId::INTERACTION_MODEL,
+                    b"resp",
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev_io.send_to(&resp.wire_bytes, ctrl_addr).await.unwrap();
+        };
+        let (got, ()) = tokio::join!(controller, device);
+        assert_eq!(got.unwrap().payload, b"resp");
+        assert!(ctrl.get(other).is_none(), "the other session is removed");
+        assert!(ctrl.get(waiting).is_some(), "the waiting session is kept");
+    }
+
+    /// Guard: a Secure Channel `StatusReport` that is not a `CloseSession`, on a
+    /// new exchange, closes nothing.
+    #[tokio::test]
+    async fn secured_round_trip_ignores_a_status_report_that_is_not_close_session() {
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = matter_transport::SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let (dev_addr, ctrl_addr) = (dev_io.local_addr(), ctrl_io.local_addr());
+        let controller = secured_round_trip(
+            &ctrl_io,
+            &mut ctrl,
+            session,
+            dev_addr,
+            0x08,
+            ProtocolId::INTERACTION_MODEL,
+            b"req",
+        );
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, .. } =
+                dev.decode_inbound(&pkt, Instant::now()).unwrap()
+            else {
+                panic!("expected the request");
+            };
+            let not_close = dev
+                .encode_outbound(
+                    session,
+                    None,
+                    0x40,
+                    ProtocolId::SECURE_CHANNEL,
+                    &[0, 0, 0, 0, 0, 0, 0, 0],
+                    MrpFlags { reliable: false },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev_io
+                .send_to(&not_close.wire_bytes, ctrl_addr)
+                .await
+                .unwrap();
+            let resp = dev
+                .encode_outbound(
+                    session,
+                    Some(exchange_id),
+                    0x09,
+                    ProtocolId::INTERACTION_MODEL,
+                    b"resp",
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev_io.send_to(&resp.wire_bytes, ctrl_addr).await.unwrap();
+        };
+        let (got, ()) = tokio::join!(controller, device);
+        assert_eq!(got.unwrap().payload, b"resp");
+        assert!(ctrl.get(session).is_some());
+    }
+
+    /// Guard (spoofing): an UNSECURED frame carrying the `CloseSession` payload
+    /// closes nothing; only an encrypted one counts.
+    #[tokio::test]
+    async fn secured_round_trip_ignores_an_unsecured_close_session() {
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = matter_transport::SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let (dev_addr, ctrl_addr) = (dev_io.local_addr(), ctrl_io.local_addr());
+        let controller = secured_round_trip(
+            &ctrl_io,
+            &mut ctrl,
+            session,
+            dev_addr,
+            0x08,
+            ProtocolId::INTERACTION_MODEL,
+            b"req",
+        );
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, .. } =
+                dev.decode_inbound(&pkt, Instant::now()).unwrap()
+            else {
+                panic!("expected the request");
+            };
+            let spoof = crate::driver::encode_unsecured(
+                1,
+                0x1234,
+                0x40,
+                ProtocolId::SECURE_CHANNEL,
+                true,
+                false,
+                None,
+                None,
+                &matter_transport::secure_channel::CLOSE_SESSION_PAYLOAD,
+            );
+            dev_io.send_to(&spoof, ctrl_addr).await.unwrap();
+            let resp = dev
+                .encode_outbound(
+                    session,
+                    Some(exchange_id),
+                    0x09,
+                    ProtocolId::INTERACTION_MODEL,
+                    b"resp",
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev_io.send_to(&resp.wire_bytes, ctrl_addr).await.unwrap();
+        };
+        let (got, ()) = tokio::join!(controller, device);
+        assert_eq!(got.unwrap().payload, b"resp");
+        assert!(ctrl.get(session).is_some());
+    }
+
+    /// `secured_read` honours it the same way.
+    #[tokio::test]
+    async fn secured_read_fails_at_once_when_the_device_closes_its_session() {
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = matter_transport::SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let (dev_addr, ctrl_addr) = (dev_io.local_addr(), ctrl_io.local_addr());
+        let controller = secured_read(
+            &ctrl_io,
+            &mut ctrl,
+            session,
+            dev_addr,
+            0x02,
+            ProtocolId::INTERACTION_MODEL,
+            b"read",
+        );
+        let device = async {
+            let _ = dev_io.recv_from().await.unwrap();
+            let close = matter_transport::secure_channel::encode_close_session(
+                &mut dev,
+                session,
+                Instant::now(),
+            )
+            .unwrap();
+            dev_io.send_to(&close.wire_bytes, ctrl_addr).await.unwrap();
+        };
+        let (got, ()) = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            tokio::join!(controller, device)
+        })
+        .await
+        .expect("fails at once");
+        assert!(
+            matches!(got, Err(DriverError::SessionClosed { session_id: 1 })),
+            "{got:?}"
+        );
+        assert!(ctrl.get(session).is_none());
     }
 }

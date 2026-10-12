@@ -1033,10 +1033,14 @@ async fn flush_owed_acks<P: AsyncDatagram, O: AsyncDatagram>(
 /// if `CommissioningComplete` had already succeeded on the device. It waits for
 /// nothing (the message asks for no ACK) and is best effort: a failed encode
 /// or send leaves the device as it was, and the session is removed either
-/// way. If the session is no longer in `sessions`, the encode fails with
-/// `UnknownSession` and nothing is sent. The PASE session is never closed
-/// here: the device clears it on `CommissioningComplete`, and a
-/// `CloseSession` on it would expire the fail-safe (spec §5.5).
+/// way. If the session is no longer in `sessions` (the device closed it
+/// first, and [`secured_round_trip`] or
+/// [`secured_read`](crate::driver::secured_read) removed it), the encode
+/// fails with `UnknownSession` and nothing is sent back, as matter.js skips
+/// its graceful close for a peer-closed session (`NodeSession.ts:340-345`).
+/// The PASE session is never closed here: the device clears it on
+/// `CommissioningComplete`, and a `CloseSession` on it would expire the
+/// fail-safe (spec §5.5).
 async fn close_case_session<O: AsyncDatagram>(
     op_transport: &O,
     case_slot: Option<(SessionId, SocketAddr)>,

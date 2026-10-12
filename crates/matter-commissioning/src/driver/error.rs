@@ -86,4 +86,14 @@ pub enum DriverError {
         /// `"MAX_READ_CHUNK_BYTES"`).
         limit: &'static str,
     },
+    /// The device closed the secure session the exchange was waiting on, with
+    /// a Secure Channel `CloseSession` (Matter 1.4 Core §4.11.1.4), before it
+    /// answered. The driver has removed the session, as the spec requires of
+    /// a node that receives one. The request may or may not have been
+    /// executed.
+    #[error("the device closed secure session {session_id} (CloseSession) before answering")]
+    SessionClosed {
+        /// Local id of the session the device closed.
+        session_id: u16,
+    },
 }
