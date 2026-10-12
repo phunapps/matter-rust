@@ -64,9 +64,11 @@ const IDLE_SLEEP: Duration = Duration::from_secs(3600);
 /// could send it: the next exchange uses a fresh id, so the ACK cannot
 /// piggyback, and once this returns nothing pumps the MRP timer until the
 /// next call — after `commission()`'s last exchange, never. The send is best
-/// effort: a failure leaves the device to retransmit, which a later
-/// exchange's duplicate path ACKs, and never fails a round-trip whose
-/// response arrived.
+/// effort and never fails a round-trip whose response arrived. If the ACK is
+/// lost, the device retransmits the response: while a later exchange runs on
+/// this session, its duplicate path ACKs the retransmit; after the last
+/// exchange nothing does, and the device retransmits until it gives up (chip
+/// ignores a failed `FlushAcks` the same way).
 ///
 /// # Errors
 ///
@@ -180,23 +182,7 @@ pub async fn secured_round_trip<T: AsyncDatagram>(
                 }
             }
             () = tokio::time::sleep(sleep_for) => {
-                for event in sessions.handle_timeout(Instant::now()) {
-                    match event {
-                        MrpEvent::Retransmit { packet, .. }
-                        | MrpEvent::SendStandaloneAck { packet, .. } => {
-                            transport.send_to(&packet, peer).await?;
-                        }
-                        MrpEvent::Expired { exchange_id, .. } => {
-                            // The exchange is over; send anything it still owes.
-                            flush_exchange_ack(transport, sessions, session_id, our_exchange, peer)
-                                .await;
-                            return Err(DriverError::Timeout { exchange_id });
-                        }
-                        // `MrpEvent` is `#[non_exhaustive]`; ignore future
-                        // timer events here.
-                        _ => {}
-                    }
-                }
+                drive_timer_tick(transport, sessions, session_id, our_exchange, peer).await?;
             }
         }
     }
@@ -264,6 +250,25 @@ fn enforce_read_caps(
         });
     }
     Ok(total)
+}
+
+/// Check one inbound `ReportData` chunk: the three read caps
+/// ([`enforce_read_caps`]) first, so an oversized chunk is never parsed, then
+/// the parse. Returns the updated cumulative byte total and the chunk's
+/// `MoreChunkedMessages` flag.
+///
+/// # Errors
+///
+/// - [`DriverError::ReadTooLarge`] if a cap is exceeded.
+/// - [`DriverError::Im`] if the chunk is not a parseable `ReportData`.
+fn check_chunk(
+    existing_chunks: usize,
+    payload: &[u8],
+    total_bytes: usize,
+) -> Result<(usize, bool), DriverError> {
+    let total = enforce_read_caps(existing_chunks, payload.len(), total_bytes)?;
+    let more = crate::im::parse_report_data(payload)?.more_chunked_messages;
+    Ok((total, more))
 }
 
 /// Send a `ReadRequest` (`app_payload`) as a reliable secured message, then
@@ -341,18 +346,19 @@ pub async fn secured_read<T: AsyncDatagram>(
                         // Enforce all three read caps BEFORE parsing the chunk —
                         // in particular the per-chunk cap bounds a lone oversized
                         // blob up front rather than parsing it first.
-                        let checked = enforce_read_caps(chunks.len(), payload.len(), total_bytes)
-                            .and_then(|total| {
-                                let rd = crate::im::parse_report_data(&payload)?;
-                                Ok((total, rd.more_chunked_messages))
-                            });
-                        let (total, more) = match checked {
+                        let (total, more) = match check_chunk(chunks.len(), &payload, total_bytes) {
                             Ok(checked) => checked,
                             Err(e) => {
                                 // The read is over: chip closes an exchange on
                                 // error, and the close flushes its ACK.
-                                flush_exchange_ack(transport, sessions, session_id, our_exchange, peer)
-                                    .await;
+                                flush_exchange_ack(
+                                    transport,
+                                    sessions,
+                                    session_id,
+                                    our_exchange,
+                                    peer,
+                                )
+                                .await;
                                 return Err(e);
                             }
                         };
@@ -388,26 +394,53 @@ pub async fn secured_read<T: AsyncDatagram>(
                 }
             }
             () = tokio::time::sleep(sleep_for) => {
-                for event in sessions.handle_timeout(Instant::now()) {
-                    match event {
-                        MrpEvent::Retransmit { packet, .. }
-                        | MrpEvent::SendStandaloneAck { packet, .. } => {
-                            transport.send_to(&packet, peer).await?;
-                        }
-                        MrpEvent::Expired { exchange_id, .. } => {
-                            // The exchange is over; send anything it still owes.
-                            flush_exchange_ack(transport, sessions, session_id, our_exchange, peer)
-                                .await;
-                            return Err(DriverError::Timeout { exchange_id });
-                        }
-                        // `MrpEvent` is `#[non_exhaustive]`; ignore future
-                        // timer events here.
-                        _ => {}
-                    }
-                }
+                drive_timer_tick(transport, sessions, session_id, our_exchange, peer).await?;
             }
         }
     }
+}
+
+/// Run one MRP timer tick for a helper waiting on `our_exchange`: send every
+/// retransmit and standalone ACK the tick produced, then, if a retransmit
+/// budget ran out, end the exchange ([`flush_exchange_ack`]) and fail with
+/// [`DriverError::Timeout`].
+///
+/// The whole batch is sent before returning on `Expired`:
+/// `MrpState::handle_timeout` emits `Expired` ahead of the ACKs that fell due
+/// on the same tick, and it has already drained those ACKs, so stopping at
+/// `Expired` would lose them for good.
+///
+/// # Errors
+///
+/// - [`DriverError::Io`] if a send fails.
+/// - [`DriverError::Timeout`] naming the first exchange whose retransmit
+///   budget ran out.
+async fn drive_timer_tick<T: AsyncDatagram>(
+    transport: &T,
+    sessions: &mut SessionManager,
+    session_id: SessionId,
+    our_exchange: u16,
+    peer: SocketAddr,
+) -> Result<(), DriverError> {
+    let mut expired = None;
+    for event in sessions.handle_timeout(Instant::now()) {
+        match event {
+            MrpEvent::Retransmit { packet, .. } | MrpEvent::SendStandaloneAck { packet, .. } => {
+                transport.send_to(&packet, peer).await?;
+            }
+            MrpEvent::Expired { exchange_id, .. } => {
+                expired.get_or_insert(exchange_id);
+            }
+            // `MrpEvent` is `#[non_exhaustive]`; ignore future timer events.
+            _ => {}
+        }
+    }
+    if let Some(exchange_id) = expired {
+        // The exchange is over; send anything it still owes.
+        flush_exchange_ack(transport, sessions, session_id, our_exchange, peer).await;
+        return Err(DriverError::Timeout { exchange_id });
+    }
+    Ok(())
 }
 
 /// Send the standalone ACK still owed on `exchange_id` now that the exchange
@@ -787,6 +820,108 @@ mod tests {
             Some(response_counter)
         );
         assert_eq!(ctrl.poll_timeout(), None, "no ACK left buffered");
+    }
+
+    /// A controller session whose request expires on the first timer tick
+    /// (one transmission, zero backoff, no jitter) and whose standalone-ACK
+    /// deadline is immediate, already owing an ACK for a device-initiated
+    /// reliable message on another exchange (0x30). The helper's first tick
+    /// therefore yields `Expired` for its request and that ACK in ONE batch,
+    /// with `Expired` first (`MrpState::handle_timeout` emits retransmit
+    /// events before ACK events). Returns the owed message's counter.
+    fn expiring_ctrl_owing_an_ack() -> (
+        SessionManager,
+        SessionManager,
+        matter_transport::MessageCounter,
+    ) {
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = matter_transport::SessionId(1);
+        let mut cfg = matter_transport::MrpConfig::default();
+        cfg.max_transmissions = 1;
+        cfg.initial_active = Duration::ZERO;
+        cfg.initial_idle = Duration::ZERO;
+        cfg.backoff_jitter = 0.0;
+        cfg.standalone_ack_deadline = Duration::ZERO;
+        ctrl.get_mut(session).unwrap().mrp = matter_transport::MrpState::new(cfg);
+        let owed = dev
+            .encode_outbound(
+                session,
+                Some(0x30),
+                0x05,
+                ProtocolId::INTERACTION_MODEL,
+                b"x",
+                MrpFlags { reliable: true },
+                Instant::now(),
+            )
+            .unwrap();
+        ctrl.decode_inbound(&owed.wire_bytes, Instant::now())
+            .unwrap();
+        (ctrl, dev, owed.message_counter)
+    }
+
+    /// The device receives the helper's request, then waits up to 1 s for the
+    /// next standalone ACK and returns its counter.
+    async fn request_then_ack(
+        dev_io: &InMemoryDatagram,
+        dev: &mut SessionManager,
+    ) -> Option<matter_transport::MessageCounter> {
+        let (req, _) = dev_io.recv_from().await.unwrap();
+        assert!(
+            matches!(
+                dev.decode_inbound(&req, Instant::now()).unwrap(),
+                DecodeInboundOutput::AppMessage { .. }
+            ),
+            "the first datagram must be the request"
+        );
+        next_ack(dev_io, dev, std::time::Duration::from_secs(1)).await
+    }
+
+    /// An `Expired` in a timer batch must not cut the batch short: a
+    /// standalone ACK that fell due on the same tick (here for another
+    /// exchange) was already drained from MRP, so if the helper returned at
+    /// `Expired` nothing would ever send it.
+    #[tokio::test]
+    async fn secured_round_trip_sends_an_ack_due_in_its_expiry_batch() {
+        let (mut ctrl, mut dev, owed) = expiring_ctrl_owing_an_ack();
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let got = secured_round_trip(
+            &ctrl_io,
+            &mut ctrl,
+            matter_transport::SessionId(1),
+            dev_io.local_addr(),
+            0x08,
+            ProtocolId::INTERACTION_MODEL,
+            b"req",
+        )
+        .await;
+        assert!(
+            matches!(got, Err(DriverError::Timeout { .. })),
+            "got {got:?}"
+        );
+        assert_eq!(request_then_ack(&dev_io, &mut dev).await, Some(owed));
+        assert_eq!(ctrl.poll_timeout(), None);
+    }
+
+    #[tokio::test]
+    async fn secured_read_sends_an_ack_due_in_its_expiry_batch() {
+        let (mut ctrl, mut dev, owed) = expiring_ctrl_owing_an_ack();
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let got = secured_read(
+            &ctrl_io,
+            &mut ctrl,
+            matter_transport::SessionId(1),
+            dev_io.local_addr(),
+            0x02,
+            ProtocolId::INTERACTION_MODEL,
+            b"read",
+        )
+        .await;
+        assert!(
+            matches!(got, Err(DriverError::Timeout { .. })),
+            "got {got:?}"
+        );
+        assert_eq!(request_then_ack(&dev_io, &mut dev).await, Some(owed));
+        assert_eq!(ctrl.poll_timeout(), None);
     }
 
     #[tokio::test]

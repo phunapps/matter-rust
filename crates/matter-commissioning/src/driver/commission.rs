@@ -960,7 +960,7 @@ where
 /// `pase_peer`, the CASE session's over `op_transport` to its operational
 /// address (they differ in [`commission_ble`]). Best effort, like every ACK
 /// flush; an ACK for any other session (there is none in this flow) is
-/// dropped.
+/// dropped, and an exhausted counter is logged under the `tracing` feature.
 async fn flush_owed_acks<P: AsyncDatagram, O: AsyncDatagram>(
     pase_transport: &P,
     pase_sid: SessionId,
@@ -970,18 +970,32 @@ async fn flush_owed_acks<P: AsyncDatagram, O: AsyncDatagram>(
     sessions: &mut SessionManager,
 ) {
     for event in sessions.flush_pending_acks() {
-        let MrpEvent::SendStandaloneAck {
-            session_id, packet, ..
-        } = event
-        else {
-            continue;
-        };
-        if session_id == pase_sid {
-            let _ = pase_transport.send_to(&packet, pase_peer).await;
-        } else if let Some((case_sid, case_addr)) = case_slot {
-            if session_id == case_sid {
-                let _ = op_transport.send_to(&packet, case_addr).await;
+        match event {
+            MrpEvent::SendStandaloneAck {
+                session_id, packet, ..
+            } => {
+                if session_id == pase_sid {
+                    let _ = pase_transport.send_to(&packet, pase_peer).await;
+                } else if let Some((case_sid, case_addr)) = case_slot {
+                    if session_id == case_sid {
+                        let _ = op_transport.send_to(&packet, case_addr).await;
+                    }
+                }
             }
+            #[cfg(feature = "tracing")]
+            MrpEvent::SessionCounterExhausted {
+                session_id,
+                exchange_id,
+                ..
+            } => {
+                tracing::debug!(
+                    session_id = u64::from(session_id.0),
+                    exchange_id = u64::from(exchange_id),
+                    "standalone ACK not sent: the session's message counter is exhausted"
+                );
+            }
+            // `MrpEvent` is `#[non_exhaustive]`.
+            _ => {}
         }
     }
 }
