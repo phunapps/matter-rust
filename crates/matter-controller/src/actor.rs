@@ -2469,11 +2469,12 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 maybe = rx.recv() => {
                     let Some(cmd) = maybe else {
                         // Every controller handle is gone: send any ACK still
-                        // owed, then shut down. chip needs no such flush
-                        // because every close already flushed
-                        // (`ExchangeMgr.cpp:90-103`); here it covers a
-                        // release's queued ACK or a displaced ACK not yet
-                        // pumped. Best effort: it does not run if the runtime
+                        // owed, then shut down. chip's shutdown has no such
+                        // flush (`ExchangeMgr.cpp:90-103`) because every close
+                        // already flushed (`DoClose` → `FlushAcks`,
+                        // `ExchangeContext.cpp:239` at master 5cd2917a, `:237`
+                        // at v1.4.2.0); here it covers a release's queued ACK
+                        // or a displaced ACK not yet pumped. Best effort: it does not run if the runtime
                         // is being dropped, which is why every terminal branch
                         // flushes before answering its caller.
                         self.send_queued_acks().await;
@@ -5416,6 +5417,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         // Evict any prior session for this node from the SessionManager so its
         // dead MRP retransmits stop; we keep only the freshly-established one.
         let old_session = self.cache.get(&(fabric_id, node_id)).map(|c| c.session_id);
+        // Defensive: `session_for` calls `connect` only on a cache miss, so this never fires today.
         if let Some(old) = old_session {
             self.release_session(old);
         }
@@ -7251,10 +7253,28 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// `peer_addr`, set at CASE registration), and sent on the next loop turn.
     fn release_session(&mut self, sid: SessionId) -> bool {
         for event in self.sessions.flush_session_acks(sid) {
-            if let MrpEvent::SendStandaloneAck { packet, .. } = event {
-                if let Some(to) = self.peer_for_session(sid) {
-                    self.queued_acks.push((to, packet));
+            match event {
+                MrpEvent::SendStandaloneAck { packet, .. } => {
+                    if let Some(to) = self.peer_for_session(sid) {
+                        self.queued_acks.push((to, packet));
+                    }
                 }
+                // As in `send_ack_event`: an exhausted session sends nothing.
+                MrpEvent::SessionCounterExhausted {
+                    session_id,
+                    exchange_id,
+                    ..
+                } => {
+                    tracing::debug!(
+                        target: "matter_controller::actor",
+                        session_id = session_id.0,
+                        exchange_id,
+                        "standalone ACK not sent: the session's message counter is exhausted"
+                    );
+                }
+                // `MrpEvent` is `#[non_exhaustive]`; a session flush yields
+                // only the two above.
+                _ => {}
             }
         }
         self.sessions.remove(sid).is_some()
@@ -7307,7 +7327,27 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// session if the cached one was stale (preserves the original
     /// reconnect-once policy).
     async fn drive_mrp(&mut self) {
-        for event in self.sessions.handle_timeout(Instant::now()) {
+        // Address each standalone ACK now, while its session still exists. A
+        // session's `Expired` comes before its ACKs in the batch, and its
+        // `on_pending_timeout` can orphan and release the session
+        // (`remove_session_if_orphaned`). The ACK has already left the
+        // session's MRP state, so the release's flush cannot see it, and a
+        // lookup after the release would find no address.
+        let events: Vec<(MrpEvent, Option<SocketAddr>)> = self
+            .sessions
+            .handle_timeout(Instant::now())
+            .into_iter()
+            .map(|event| {
+                let ack_peer = match &event {
+                    MrpEvent::SendStandaloneAck { session_id, .. } => {
+                        self.peer_for_session(*session_id)
+                    }
+                    _ => None,
+                };
+                (event, ack_peer)
+            })
+            .collect();
+        for (event, ack_peer) in events {
             match event {
                 MrpEvent::Retransmit {
                     session_id, packet, ..
@@ -7327,7 +7367,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 // Standalone ACKs and an exhausted counter take the same path
                 // as a close's flush. `MrpEvent` is `#[non_exhaustive]`;
                 // `send_ack_event` ignores what it does not know.
-                other => self.send_ack_event(other, None).await,
+                other => self.send_ack_event(other, ack_peer).await,
             }
         }
     }
@@ -23385,6 +23425,69 @@ mod tests {
             w.next_frame(Duration::from_millis(50)).await,
             Some(Sent::Ack {
                 exchange: 0x7C,
+                counter
+            })
+        );
+    }
+
+    /// One MRP batch can hold a session's `Expired` and, later in the same
+    /// batch, a standalone ACK its 200 ms timer fired on another exchange.
+    /// When the expiry orphans the session and releases it, that ACK, already
+    /// taken out of the session's MRP state, must still go out to the
+    /// session's address. It used to be dropped: its address was looked up
+    /// only after the release had removed the session.
+    ///
+    /// Intervals are shrunk to 1 ms (one transmission, no jitter) so both
+    /// deadlines are due after the 50 ms sleep: tokio sleeps never end early.
+    #[tokio::test]
+    async fn a_timer_ack_in_the_batch_of_an_expiry_that_releases_its_session_still_goes_out() {
+        let mut w = wired_actor();
+        let dev_addr = w.dev.local_addr();
+        {
+            let session = w.actor.sessions.get_mut(w.sid).unwrap();
+            session.peer_addr = Some(dev_addr);
+            let mut config = matter_transport::MrpConfig::default();
+            config.initial_active = Duration::from_millis(1);
+            config.initial_idle = Duration::from_millis(1);
+            config.max_transmissions = 1;
+            config.backoff_jitter = 0.0;
+            config.standalone_ack_deadline = Duration::from_millis(1);
+            session.mrp = matter_transport::MrpState::with_jitter_seed(config, 1);
+        }
+        // A resubscribe attempt on the wire that the device never ACKs.
+        let exchange = w
+            .actor
+            .send_request(
+                w.sid,
+                dev_addr,
+                OP_SUBSCRIBE_REQUEST,
+                ProtocolId::INTERACTION_MODEL,
+                &[],
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            w.next_frame(SENT_WITHIN).await,
+            Some(Sent::App {
+                opcode: OP_SUBSCRIBE_REQUEST,
+                ..
+            })
+        ));
+        let (pr, _reports, _ctrl) = test_pending_resubscribe(1, 0x42, 0, Instant::now());
+        seed_inflight_resubscribe(&mut w.actor, (w.sid, exchange), pr, far_future());
+        // A device message on another exchange whose ACK is still buffered.
+        let counter = w.buffer_device_message(0x7E);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        w.actor.drive_mrp().await;
+        assert!(
+            w.actor.sessions.get(w.sid).is_none(),
+            "the expiry orphaned the session and released it"
+        );
+        assert_eq!(w.actor.resubscribes.len(), 1, "the attempt was rescheduled");
+        assert_eq!(
+            w.next_frame(Duration::from_millis(50)).await,
+            Some(Sent::Ack {
+                exchange: 0x7E,
                 counter
             })
         );
