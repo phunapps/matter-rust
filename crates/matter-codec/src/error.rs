@@ -78,6 +78,14 @@ pub enum Error {
     /// mislabeled as a different failure mode.
     #[error("internal fixed-width conversion failure")]
     InternalSliceConversion,
+
+    /// Input remained after the end of a complete top-level TLV element,
+    /// reported by [`TlvReader::finish`](crate::TlvReader::finish). A Matter
+    /// message is exactly one anonymous structure; chip rejects anything
+    /// after its end-of-container (`MessageParser::ExitContainer`, which
+    /// returns `CHIP_ERROR_INVALID_TLV_TAG`).
+    #[error("trailing data after the top-level TLV element")]
+    TrailingData,
 }
 
 /// `Result<T, Error>` for convenience.

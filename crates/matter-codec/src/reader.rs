@@ -441,6 +441,80 @@ impl<'a> TlvReader<'a> {
         Ok(span)
     }
 
+    /// Finish a top-level decode: close every container still open, then
+    /// require that no input remains.
+    ///
+    /// A Matter message (and a command-fields blob) is exactly one TLV
+    /// element, normally an anonymous structure. Call this once the parser
+    /// has what it needs. Any members the caller did not read, nested
+    /// containers included, are skipped through the top-level
+    /// end-of-container, and then the input must be exhausted. This is the
+    /// same check chip's `MessageParser::ExitContainer` makes on every
+    /// Interaction Model message (`src/app/MessageDef/MessageParser.cpp`):
+    /// `TLVReader::ExitContainer` fails if end of input comes before the
+    /// container's end, and a following `Next()` must return
+    /// `CHIP_END_OF_TLV`.
+    ///
+    /// Without it, a parser that loops until `next()` returns `Ok(None)`
+    /// treats end of input as the structure's close, so a truncated message
+    /// decodes as if it were complete, and bytes after the close are ignored.
+    ///
+    /// Skipped members get the structural validation of
+    /// [`Self::skip_container`] (tag forms, element types, bounds, nesting
+    /// depth) but are not materialised, and their strings are not UTF-8
+    /// validated. Calling `finish` with no container open checks only that
+    /// the input is exhausted: it succeeds on an empty reader and on one that
+    /// has read a single complete scalar, and fails on a fresh reader over
+    /// non-empty input. [`Self::element_span`] is not updated.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::UnclosedContainer`] — end of input before the end-of-container
+    ///   of an open container (the message was truncated).
+    /// - [`Error::TrailingData`] — input remains after the top-level element.
+    /// - [`Error::UnexpectedEof`], [`Error::InvalidTagControl`],
+    ///   [`Error::InvalidElementType`], [`Error::ContainerTooDeep`] — the
+    ///   unread remainder is malformed, as for [`Self::skip_container`].
+    ///
+    /// After an `Err`, the reader's position and depth are unspecified —
+    /// discard the reader.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use matter_codec::{Error, TlvReader};
+    /// // { ctx0: 1 } — read only the struct start, let finish do the rest.
+    /// let mut r = TlvReader::new(&[0x15, 0x24, 0x00, 0x01, 0x18]);
+    /// r.next()?;
+    /// r.finish()?;
+    ///
+    /// // Truncated: the end-of-container is missing.
+    /// let mut r = TlvReader::new(&[0x15, 0x24, 0x00, 0x01]);
+    /// r.next()?;
+    /// assert!(matches!(r.finish(), Err(Error::UnclosedContainer)));
+    ///
+    /// // A byte after the end-of-container.
+    /// let mut r = TlvReader::new(&[0x15, 0x18, 0x00]);
+    /// r.next()?;
+    /// assert!(matches!(r.finish(), Err(Error::TrailingData)));
+    /// # Ok::<(), matter_codec::Error>(())
+    /// ```
+    pub fn finish(&mut self) -> Result<()> {
+        // Each successful skip consumes one open container through its
+        // end-of-container and decrements `self.depth` by exactly one, so
+        // this loop runs at most `MAX_DEPTH` times. A truncated body fails
+        // inside the skip with `UnclosedContainer`.
+        while self.depth > 0 {
+            self.skip_container_body()?;
+            self.last_was_container_start = false;
+        }
+        if self.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::TrailingData)
+        }
+    }
+
     /// Span of the element most recently returned by [`Self::next`] /
     /// [`Self::next_ref`] (or the whole container after a
     /// `skip_container*` call). `None` before the first element; unchanged
@@ -2211,5 +2285,127 @@ mod tests {
         r.skip_container().unwrap(); // must leave depth == 1
         assert!(matches!(r.next(), Ok(Some(Element::ContainerEnd)))); // outer close
         assert!(matches!(r.next(), Err(Error::UnexpectedEndOfContainer)));
+    }
+
+    // ---- finish(): strict top-level close (chip MessageParser::ExitContainer) ----
+
+    /// The happy path: every element read through the top-level close, no
+    /// input left — `finish` accepts.
+    #[test]
+    fn finish_accepts_a_fully_read_struct() {
+        // { ctx0: 1 }
+        let bytes = [0x15, 0x24, 0x00, 0x01, 0x18];
+        let mut r = TlvReader::new(&bytes);
+        r.next().unwrap(); // open
+        r.next().unwrap(); // ctx0
+        assert!(matches!(r.next(), Ok(Some(Element::ContainerEnd))));
+        assert!(r.finish().is_ok());
+    }
+
+    /// A parser that stops early (it found what it wanted) may hand the
+    /// reader to `finish` with containers still open: `finish` walks the
+    /// unread members, nested containers included, through the top-level
+    /// close.
+    #[test]
+    fn finish_drains_unread_members_through_the_top_level_close() {
+        // { ctx0: 1, ctx1: { ctx0: 2 }, ctx2: [3] }
+        let bytes = [
+            0x15, 0x24, 0x00, 0x01, 0x35, 0x01, 0x24, 0x00, 0x02, 0x18, 0x36, 0x02, 0x04, 0x03,
+            0x18, 0x18,
+        ];
+        // Stopped right after opening the outer struct.
+        let mut r = TlvReader::new(&bytes);
+        r.next().unwrap();
+        assert!(r.finish().is_ok());
+        // Stopped inside the nested struct (two containers open).
+        let mut r = TlvReader::new(&bytes);
+        r.next().unwrap(); // outer open
+        r.next().unwrap(); // ctx0
+        r.next().unwrap(); // ctx1 open
+        assert!(r.finish().is_ok());
+    }
+
+    /// Truncation: the top-level end-of-container never arrives. `finish`
+    /// must not treat end of input as the close.
+    #[test]
+    fn finish_rejects_a_missing_top_level_end_of_container() {
+        // { ctx0: 1   <- no 0x18
+        let bytes = [0x15, 0x24, 0x00, 0x01];
+        // A caller that read until `None`, the pattern this guards against.
+        let mut r = TlvReader::new(&bytes);
+        while r.next().unwrap().is_some() {}
+        assert!(matches!(r.finish(), Err(Error::UnclosedContainer)));
+        // A caller that stopped early.
+        let mut r = TlvReader::new(&bytes);
+        r.next().unwrap();
+        assert!(matches!(r.finish(), Err(Error::UnclosedContainer)));
+        // The bare struct header alone (`[0x15]`, the review's example).
+        let mut r = TlvReader::new(&bytes[..1]);
+        r.next().unwrap();
+        assert!(matches!(r.finish(), Err(Error::UnclosedContainer)));
+    }
+
+    /// Truncation inside a nested container is caught too, whether or not
+    /// the caller ever opened that container.
+    #[test]
+    fn finish_rejects_a_missing_nested_end_of_container() {
+        // { ctx1: { ctx0: 2 }   <- nested closed, outer not
+        let outer_open = [0x15, 0x35, 0x01, 0x24, 0x00, 0x02, 0x18];
+        let mut r = TlvReader::new(&outer_open);
+        r.next().unwrap();
+        assert!(matches!(r.finish(), Err(Error::UnclosedContainer)));
+        // { ctx1: { ctx0: 2   <- neither closed
+        let both_open = [0x15, 0x35, 0x01, 0x24, 0x00, 0x02];
+        let mut r = TlvReader::new(&both_open);
+        r.next().unwrap();
+        r.next().unwrap(); // nested open: depth 2
+        assert!(matches!(r.finish(), Err(Error::UnclosedContainer)));
+    }
+
+    /// A truncated scalar payload inside the unread remainder is an error,
+    /// not a silent stop.
+    #[test]
+    fn finish_rejects_a_truncated_scalar_in_the_unread_remainder() {
+        // { ctx0: u16 with one of its two payload bytes
+        let bytes = [0x15, 0x25, 0x00, 0x01];
+        let mut r = TlvReader::new(&bytes);
+        r.next().unwrap();
+        assert!(matches!(r.finish(), Err(Error::UnexpectedEof)));
+    }
+
+    /// Bytes after the top-level end-of-container are rejected, whether the
+    /// caller read through the close itself or left it to `finish`.
+    #[test]
+    fn finish_rejects_bytes_after_the_top_level_end_of_container() {
+        // {} then a stray uint8 element
+        let bytes = [0x15, 0x18, 0x04, 0x00];
+        let mut r = TlvReader::new(&bytes);
+        r.next().unwrap(); // open
+        assert!(matches!(r.next(), Ok(Some(Element::ContainerEnd))));
+        assert!(matches!(r.finish(), Err(Error::TrailingData)));
+        let mut r = TlvReader::new(&bytes);
+        r.next().unwrap();
+        assert!(matches!(r.finish(), Err(Error::TrailingData)));
+        // Even a single garbage byte that is not valid TLV.
+        let bytes = [0x15, 0x18, 0xFF];
+        let mut r = TlvReader::new(&bytes);
+        r.next().unwrap();
+        assert!(matches!(r.finish(), Err(Error::TrailingData)));
+    }
+
+    /// Edge cases with no container open: `finish` only asks "is the input
+    /// fully consumed?".
+    #[test]
+    fn finish_with_no_container_open() {
+        assert!(TlvReader::new(&[]).finish().is_ok());
+        // Nothing consumed yet, so the whole input is trailing.
+        assert!(matches!(
+            TlvReader::new(&[0x15, 0x18]).finish(),
+            Err(Error::TrailingData)
+        ));
+        // A single complete scalar read whole.
+        let mut r = TlvReader::new(&[0x04, 0x07]);
+        r.next().unwrap();
+        assert!(r.finish().is_ok());
     }
 }

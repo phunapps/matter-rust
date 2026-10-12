@@ -35,4 +35,16 @@ fuzz_target!(|data: &[u8]| {
             Ok(None) | Err(_) => break,
         }
     }
+    // Whatever state the walk ended in (complete, mid-container, or after an
+    // error), the strict top-level close must not panic.
+    let _ = ir.finish();
+
+    // Strict-close walk, the shape every Interaction Model parser uses: open
+    // the first element, then `finish()` skips the rest through its
+    // end-of-container and rejects trailing bytes. Must never panic; a
+    // success means the input was exactly one complete element.
+    let mut fr = matter_codec::TlvReader::new(data);
+    if let Ok(Some(_)) = fr.next() {
+        let _ = fr.finish();
+    }
 });

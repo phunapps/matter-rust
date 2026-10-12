@@ -161,4 +161,32 @@ proptest! {
             }
         }
     }
+
+    /// `finish` accepts exactly one complete top-level structure: the whole
+    /// encoding passes, every strict prefix (a truncated message) fails, and
+    /// any non-empty suffix (trailing data) fails with `TrailingData`. The
+    /// strict close chip's `MessageParser::ExitContainer` enforces.
+    #[test]
+    fn finish_accepts_exactly_one_complete_struct(
+        members in prop::collection::vec((arb_tag(), arb_value()), 0..=4),
+        suffix in prop::collection::vec(any::<u8>(), 1..=8),
+    ) {
+        let mut buf = Vec::new();
+        TlvWriter::new(&mut buf)
+            .write_value(Tag::Anonymous, &Value::Structure(members))
+            .unwrap();
+        // Open the struct, then let `finish` walk the rest.
+        let strict = |bytes: &[u8]| -> Result<(), matter_codec::Error> {
+            let mut r = TlvReader::new(bytes);
+            r.next()?;
+            r.finish()
+        };
+        prop_assert!(strict(&buf).is_ok());
+        for n in 1..buf.len() {
+            prop_assert!(strict(&buf[..n]).is_err(), "prefix of {} / {} bytes accepted", n, buf.len());
+        }
+        let mut tailed = buf.clone();
+        tailed.extend_from_slice(&suffix);
+        prop_assert!(matches!(strict(&tailed), Err(matter_codec::Error::TrailingData)));
+    }
 }
