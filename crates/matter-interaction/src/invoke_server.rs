@@ -75,6 +75,12 @@ pub struct ParsedInvokeRequest {
 ///
 /// Returns [`crate::ImError`] if the message is not a struct or lacks the
 /// `InvokeRequests` array, or a `CommandDataIB` lacks a `CommandPath`.
+///
+/// The message must be complete: end of input before the end-of-container of
+/// the message or of any container in it fails with [`crate::ImError::Codec`]
+/// wrapping [`matter_codec::Error::UnclosedContainer`], and bytes after the
+/// message fail with [`matter_codec::Error::TrailingData`] (chip's
+/// `MessageParser::ExitContainer` rejects both).
 pub fn parse_invoke_request(bytes: &[u8]) -> Result<ParsedInvokeRequest, crate::ImError> {
     let mut r = TlvReader::new(bytes);
     expect_message_struct(&mut r)?;
@@ -85,7 +91,12 @@ pub fn parse_invoke_request(bytes: &[u8]) -> Result<ParsedInvokeRequest, crate::
 
     loop {
         match r.next()? {
-            None | Some(Element::ContainerEnd) => break,
+            None => {
+                return Err(crate::ImError::Codec(
+                    matter_codec::Error::UnclosedContainer,
+                ))
+            }
+            Some(Element::ContainerEnd) => break,
             Some(Element::Scalar {
                 tag: Tag::Context(0),
                 value: Value::Bool(b),
@@ -104,6 +115,7 @@ pub fn parse_invoke_request(bytes: &[u8]) -> Result<ParsedInvokeRequest, crate::
             Some(_) => {}
         }
     }
+    r.finish()?;
 
     Ok(ParsedInvokeRequest {
         suppress_response,
@@ -113,14 +125,19 @@ pub fn parse_invoke_request(bytes: &[u8]) -> Result<ParsedInvokeRequest, crate::
 }
 
 /// Read the `InvokeRequests` array body: a sequence of `CommandDataIB` structs,
-/// until the array's `ContainerEnd`.
+/// until the array's `ContainerEnd`. End of input first is `UnclosedContainer`.
 fn read_invoke_requests(
     r: &mut TlvReader<'_>,
     out: &mut Vec<InvokedCommand>,
 ) -> Result<(), crate::ImError> {
     loop {
         match r.next()? {
-            None | Some(Element::ContainerEnd) => return Ok(()),
+            None => {
+                return Err(crate::ImError::Codec(
+                    matter_codec::Error::UnclosedContainer,
+                ))
+            }
+            Some(Element::ContainerEnd) => return Ok(()),
             Some(Element::ContainerStart {
                 kind: ContainerKind::Structure,
                 ..
@@ -133,6 +150,7 @@ fn read_invoke_requests(
 
 /// Read one `CommandDataIB` body (reader positioned just after its struct start):
 /// ctx0 `CommandPath` (list), ctx1 `CommandFields` (struct), opt ctx2 `CommandRef`.
+/// End of input before the IB's `ContainerEnd` is `UnclosedContainer`.
 fn read_command_data(r: &mut TlvReader<'_>) -> Result<InvokedCommand, crate::ImError> {
     let mut path = None;
     let mut fields_tlv = None;
@@ -140,7 +158,12 @@ fn read_command_data(r: &mut TlvReader<'_>) -> Result<InvokedCommand, crate::ImE
 
     loop {
         match r.next()? {
-            None | Some(Element::ContainerEnd) => break,
+            None => {
+                return Err(crate::ImError::Codec(
+                    matter_codec::Error::UnclosedContainer,
+                ))
+            }
+            Some(Element::ContainerEnd) => break,
             Some(Element::ContainerStart {
                 tag: Tag::Context(0),
                 kind: ContainerKind::List,

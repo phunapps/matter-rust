@@ -20,6 +20,12 @@ use matter_codec::{Element, Tag, TlvReader, Value};
 ///
 /// Returns [`ImError`] if `bytes` is not a valid IM message struct, or the
 /// status value exceeds a single octet ([`ImError::InvalidStatusCode`]).
+///
+/// Both answers require a complete message: end of input before the
+/// top-level end-of-container fails with [`ImError::Codec`] wrapping
+/// [`matter_codec::Error::UnclosedContainer`], and bytes after it fail with
+/// [`matter_codec::Error::TrailingData`] (chip's
+/// `MessageParser::ExitContainer` rejects both).
 pub fn parse_status_response(bytes: &[u8]) -> Result<Option<u8>, ImError> {
     let mut r = TlvReader::new(bytes);
     expect_message_struct(&mut r)?;
@@ -31,12 +37,13 @@ pub fn parse_status_response(bytes: &[u8]) -> Result<Option<u8>, ImError> {
                 value: Value::Uint(n),
             }) => {
                 let code = u8::try_from(n).map_err(|_| ImError::InvalidStatusCode { code: n })?;
+                r.finish()?;
                 return Ok(Some(code));
             }
+            None => return Err(ImError::Codec(matter_codec::Error::UnclosedContainer)),
             // Not a bare status response: end of message, or tag 0 is a bool
             // (InvokeResponse SuppressResponse) / a container (WriteResponse array).
-            None
-            | Some(
+            Some(
                 Element::ContainerEnd
                 | Element::Scalar {
                     tag: Tag::Context(0),
@@ -46,7 +53,10 @@ pub fn parse_status_response(bytes: &[u8]) -> Result<Option<u8>, ImError> {
                     tag: Tag::Context(0),
                     ..
                 },
-            ) => return Ok(None),
+            ) => {
+                r.finish()?;
+                return Ok(None);
+            }
             Some(Element::ContainerStart { .. }) => skip_container(&mut r)?,
             Some(_) => {}
         }

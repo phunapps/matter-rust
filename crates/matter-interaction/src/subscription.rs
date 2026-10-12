@@ -149,6 +149,12 @@ pub fn build_subscribe_request(req: &SubscribeRequest) -> Vec<u8> {
 ///
 /// Returns [`ImError`] if the message is not a struct, or if
 /// `subscriptionId` / `maxInterval` are absent or out of range.
+///
+/// The message must be complete: end of input before the top-level
+/// end-of-container fails with [`ImError::Codec`] wrapping
+/// [`matter_codec::Error::UnclosedContainer`], and bytes after it fail with
+/// [`matter_codec::Error::TrailingData`] (chip's
+/// `MessageParser::ExitContainer` rejects both).
 pub fn parse_subscribe_response(bytes: &[u8]) -> Result<SubscribeResponse, ImError> {
     let mut r = TlvReader::new(bytes);
     expect_message_struct(&mut r)?;
@@ -158,7 +164,8 @@ pub fn parse_subscribe_response(bytes: &[u8]) -> Result<SubscribeResponse, ImErr
 
     loop {
         match r.next()? {
-            None | Some(Element::ContainerEnd) => break,
+            None => return Err(ImError::Codec(matter_codec::Error::UnclosedContainer)),
+            Some(Element::ContainerEnd) => break,
             Some(Element::Scalar {
                 tag: Tag::Context(0),
                 value: matter_codec::Value::Uint(n),
@@ -179,6 +186,7 @@ pub fn parse_subscribe_response(bytes: &[u8]) -> Result<SubscribeResponse, ImErr
             Some(_) => {}
         }
     }
+    r.finish()?;
 
     Ok(SubscribeResponse {
         subscription_id: subscription_id

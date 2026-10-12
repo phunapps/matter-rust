@@ -326,15 +326,21 @@ pub(crate) fn command_path_from_reader(r: &mut TlvReader<'_>) -> Result<CommandP
 ///
 /// Returns [`ImError`] if the message is not a struct, lacks the
 /// `InvokeResponses` array, or the first IB has neither Command nor Status.
+///
+/// The message must be complete: end of input before the top-level
+/// end-of-container fails with [`ImError::Codec`] wrapping
+/// [`matter_codec::Error::UnclosedContainer`], and bytes after it fail with
+/// [`matter_codec::Error::TrailingData`] (chip's
+/// `MessageParser::ExitContainer` rejects both). The IBs after the
+/// first, and the members after the array, are skipped but still checked.
 pub fn parse_invoke_response(bytes: &[u8]) -> Result<InvokeResponse, ImError> {
     let mut r = TlvReader::new(bytes);
     expect_message_struct(&mut r)?;
 
     loop {
         match r.next()? {
-            None | Some(Element::ContainerEnd) => {
-                return Err(ImError::MissingField("InvokeResponses"))
-            }
+            None => return Err(ImError::Codec(matter_codec::Error::UnclosedContainer)),
+            Some(Element::ContainerEnd) => return Err(ImError::MissingField("InvokeResponses")),
             Some(Element::ContainerStart {
                 tag: Tag::Context(1),
                 kind: ContainerKind::Array,
@@ -352,28 +358,32 @@ pub fn parse_invoke_response(bytes: &[u8]) -> Result<InvokeResponse, ImError> {
         _ => return Err(ImError::MissingField("InvokeResponseIB")),
     }
 
-    loop {
+    let response = loop {
         match r.next()? {
-            None | Some(Element::ContainerEnd) => return Err(ImError::EmptyInvokeResponse),
+            None => return Err(ImError::Codec(matter_codec::Error::UnclosedContainer)),
+            Some(Element::ContainerEnd) => return Err(ImError::EmptyInvokeResponse),
             Some(Element::ContainerStart {
                 tag: Tag::Context(0),
                 kind: ContainerKind::Structure,
             }) => {
-                return parse_command_data(&mut r).map(|(path, fields)| InvokeResponse::Command {
+                let (path, fields) = parse_command_data(&mut r)?;
+                break InvokeResponse::Command {
                     path,
                     fields_tlv: fields,
-                });
+                };
             }
             Some(Element::ContainerStart {
                 tag: Tag::Context(1),
                 kind: ContainerKind::Structure,
-            }) => {
-                return parse_command_status(&mut r).map(InvokeResponse::Status);
-            }
+            }) => break InvokeResponse::Status(parse_command_status(&mut r)?),
             Some(Element::ContainerStart { .. }) => skip_container(&mut r)?,
             Some(_) => {}
         }
-    }
+    };
+    // Skip the rest of this IB, any further IBs, and the members after the
+    // array, through the message's end-of-container; nothing may follow it.
+    r.finish()?;
+    Ok(response)
 }
 
 /// Parse a multi-command `InvokeResponseMessage`: every `InvokeResponseIB`, each
@@ -384,15 +394,20 @@ pub fn parse_invoke_response(bytes: &[u8]) -> Result<InvokeResponse, ImError> {
 ///
 /// Returns [`ImError`] if the message is not a struct, lacks the
 /// `InvokeResponses` array, or an IB has neither Command nor Status.
+///
+/// The message must be complete: end of input before the top-level
+/// end-of-container fails with [`ImError::Codec`] wrapping
+/// [`matter_codec::Error::UnclosedContainer`], and bytes after it fail with
+/// [`matter_codec::Error::TrailingData`] (chip's
+/// `MessageParser::ExitContainer` rejects both).
 pub fn parse_invoke_response_batch(bytes: &[u8]) -> Result<Vec<InvokeResponseEntry>, ImError> {
     let mut r = TlvReader::new(bytes);
     expect_message_struct(&mut r)?;
     // Advance to the InvokeResponses array (context tag 1).
     loop {
         match r.next()? {
-            None | Some(Element::ContainerEnd) => {
-                return Err(ImError::MissingField("InvokeResponses"))
-            }
+            None => return Err(ImError::Codec(matter_codec::Error::UnclosedContainer)),
+            Some(Element::ContainerEnd) => return Err(ImError::MissingField("InvokeResponses")),
             Some(Element::ContainerStart {
                 tag: Tag::Context(1),
                 kind: ContainerKind::Array,
@@ -405,7 +420,7 @@ pub fn parse_invoke_response_batch(bytes: &[u8]) -> Result<Vec<InvokeResponseEnt
     loop {
         match r.next()? {
             None => return Err(ImError::Codec(matter_codec::Error::UnclosedContainer)),
-            Some(Element::ContainerEnd) => return Ok(out), // end of array
+            Some(Element::ContainerEnd) => break, // end of array
             Some(Element::ContainerStart {
                 kind: ContainerKind::Structure,
                 ..
@@ -414,6 +429,10 @@ pub fn parse_invoke_response_batch(bytes: &[u8]) -> Result<Vec<InvokeResponseEnt
             Some(_) => {}
         }
     }
+    // The members after the array (MoreChunkedMessages, the IM revision) and
+    // the message's own end-of-container; nothing may follow it.
+    r.finish()?;
+    Ok(out)
 }
 
 /// Parse one `InvokeResponseIB` body into an [`InvokeResponseEntry`] (reader

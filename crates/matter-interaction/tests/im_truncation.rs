@@ -6,6 +6,11 @@
 //! The test harness turns any panic into a failure, so simply calling each
 //! parser on every truncation is the assertion; we additionally require the
 //! full message to parse and every strict prefix to be rejected.
+//!
+//! Rejection is now asserted too: every top-level parser requires the
+//! message's own end-of-container, as chip's `MessageParser::ExitContainer`
+//! does. `im_strict_close.rs` covers every parser against the matter.js
+//! vectors, trailing bytes included.
 
 use matter_interaction::{
     build_invoke_request, build_invoke_response_command, parse_invoke_request,
@@ -16,16 +21,18 @@ use matter_interaction::{
 /// no-argument command (TLV: structure-start 0x15, end 0x18).
 const EMPTY_STRUCT: &[u8] = &[0x15, 0x18];
 
-/// Assert `parse` accepts the full buffer and does not PANIC on any strict
-/// prefix. The property under test is panic-safety (the test harness turns any
-/// panic into a failure) — not rejection: some parsers leniently accept a
-/// prefix that is structurally complete before the truncation point (extract
-/// what-you-can). Tightening those to reject an unterminated outer container is
-/// a separate follow-up.
+/// Assert `parse` accepts the full buffer, and neither panics on nor accepts
+/// any strict prefix (the test harness turns any panic into a failure). A
+/// prefix that is structurally complete up to the cut used to be accepted;
+/// the parsers now require the top-level end-of-container.
 fn assert_truncation_safe(full: &[u8], parse: impl Fn(&[u8]) -> bool) {
     assert!(parse(full), "the full, well-formed message must parse");
     for n in 0..full.len() {
-        let _accepted = parse(&full[..n]); // must not panic
+        assert!(
+            !parse(&full[..n]),
+            "prefix of {n} / {} bytes accepted",
+            full.len()
+        );
     }
 }
 

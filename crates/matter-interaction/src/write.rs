@@ -113,6 +113,12 @@ fn build_write_request_inner(writes: &[AttributeWriteRequest], timed: bool) -> V
 /// Returns [`ImError`] if the message is not a struct, an
 /// `AttributeStatusIB` is missing its path or status, or a path value is
 /// out of range.
+///
+/// The message must be complete: end of input before the top-level
+/// end-of-container fails with [`ImError::Codec`] wrapping
+/// [`matter_codec::Error::UnclosedContainer`], and bytes after it fail with
+/// [`matter_codec::Error::TrailingData`] (chip's
+/// `MessageParser::ExitContainer` rejects both).
 pub fn parse_write_response(bytes: &[u8]) -> Result<Vec<(AttributePath, ImStatus)>, ImError> {
     let mut r = TlvReader::new(bytes);
     expect_message_struct(&mut r)?;
@@ -122,7 +128,11 @@ pub fn parse_write_response(bytes: &[u8]) -> Result<Vec<(AttributePath, ImStatus
     // Find WriteResponses [0] (array). Absent → empty result.
     loop {
         match r.next()? {
-            None | Some(Element::ContainerEnd) => return Ok(out),
+            None => return Err(ImError::Codec(matter_codec::Error::UnclosedContainer)),
+            Some(Element::ContainerEnd) => {
+                r.finish()?;
+                return Ok(out);
+            }
             Some(Element::ContainerStart {
                 tag: Tag::Context(0),
                 kind: ContainerKind::Array,
@@ -145,6 +155,9 @@ pub fn parse_write_response(bytes: &[u8]) -> Result<Vec<(AttributePath, ImStatus
             Some(_) => {}
         }
     }
+    // The members after the array and the message's own end-of-container;
+    // nothing may follow it.
+    r.finish()?;
 
     Ok(out)
 }

@@ -243,6 +243,14 @@ pub enum ReportOp {
 /// Returns [`ImError`] if the message is not a struct, a present
 /// `AttributeData` is missing its path or data, or a path value is out of
 /// range.
+///
+/// The message must be complete: end of input before the top-level
+/// end-of-container fails with [`ImError::Codec`] wrapping
+/// [`matter_codec::Error::UnclosedContainer`], and bytes after it fail with
+/// [`matter_codec::Error::TrailingData`] (chip's
+/// `MessageParser::ExitContainer` rejects both). A truncated
+/// chunk must not decode as a final one (its `MoreChunkedMessages` may be
+/// what was cut off).
 pub fn parse_report_data(bytes: &[u8]) -> Result<ReportData, ImError> {
     let mut r = TlvReader::new(bytes);
     expect_message_struct(&mut r)?;
@@ -259,7 +267,8 @@ pub fn parse_report_data(bytes: &[u8]) -> Result<ReportData, ImError> {
     // (ctx 3) and SuppressResponse (ctx 4), which follow the array on the wire.
     loop {
         match r.next()? {
-            None | Some(Element::ContainerEnd) => break,
+            None => return Err(ImError::Codec(matter_codec::Error::UnclosedContainer)),
+            Some(Element::ContainerEnd) => break,
             // subscriptionId [0]
             Some(Element::Scalar {
                 tag: Tag::Context(0),
@@ -294,6 +303,7 @@ pub fn parse_report_data(bytes: &[u8]) -> Result<ReportData, ImError> {
             Some(_) => {}
         }
     }
+    r.finish()?;
 
     Ok(ReportData {
         items,
