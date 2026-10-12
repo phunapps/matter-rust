@@ -116,8 +116,12 @@ pub fn decode_attestation_response(
                 })?;
                 sig = Some(arr);
             }
-            // Forward-compat: ignore unknown future fields.
-            Some(Element::Scalar { .. } | Element::ContainerStart { .. }) => {}
+            // Forward-compat: skip an unknown container whole. Ignoring only its
+            // start would read its members as top-level fields and end the
+            // struct at its end-of-container.
+            Some(Element::ContainerStart { .. }) => reader.skip_container()?,
+            // Forward-compat: ignore unknown future scalar fields.
+            Some(Element::Scalar { .. }) => {}
             Some(_) => {
                 return Err(NocError::MalformedResponse(
                     "AttestationResponse: unexpected element",
@@ -125,6 +129,8 @@ pub fn decode_attestation_response(
             }
         }
     }
+    // Nothing may follow the struct's end-of-container.
+    reader.finish()?;
     Ok(crate::attestation::AttestationResponse {
         attestation_elements: elements.ok_or(NocError::MalformedResponse(
             "AttestationResponse: missing AttestationElements field",
@@ -208,8 +214,12 @@ pub fn decode_certificate_chain_response(tlv: &[u8]) -> Result<CertificateChainR
                 }
                 cert = Some(b);
             }
-            // Forward-compat: ignore unknown future fields.
-            Some(Element::Scalar { .. } | Element::ContainerStart { .. }) => {}
+            // Forward-compat: skip an unknown container whole. Ignoring only its
+            // start would read its members as top-level fields and end the
+            // struct at its end-of-container.
+            Some(Element::ContainerStart { .. }) => reader.skip_container()?,
+            // Forward-compat: ignore unknown future scalar fields.
+            Some(Element::Scalar { .. }) => {}
             Some(_) => {
                 return Err(NocError::MalformedResponse(
                     "CertificateChainResponse: unexpected element",
@@ -217,6 +227,8 @@ pub fn decode_certificate_chain_response(tlv: &[u8]) -> Result<CertificateChainR
             }
         }
     }
+    // Nothing may follow the struct's end-of-container.
+    reader.finish()?;
     Ok(CertificateChainResponse {
         certificate: cert.ok_or(NocError::MalformedResponse(
             "CertificateChainResponse: missing Certificate field",
@@ -304,8 +316,12 @@ pub fn decode_csr_response(tlv: &[u8]) -> Result<CsrResponse, NocError> {
                 })?;
                 sig = Some(arr);
             }
+            // Forward-compat: skip an unknown container whole. Ignoring only its
+            // start would read its members as top-level fields and end the
+            // struct at its end-of-container.
+            Some(Element::ContainerStart { .. }) => reader.skip_container()?,
             // Forward-compat: future-tag tolerance per the interaction-model rules.
-            Some(Element::Scalar { .. } | Element::ContainerStart { .. }) => {}
+            Some(Element::Scalar { .. }) => {}
             Some(_) => {
                 return Err(NocError::MalformedResponse(
                     "CSRResponse: unexpected element",
@@ -313,6 +329,8 @@ pub fn decode_csr_response(tlv: &[u8]) -> Result<CsrResponse, NocError> {
             }
         }
     }
+    // Nothing may follow the struct's end-of-container.
+    reader.finish()?;
 
     Ok(CsrResponse {
         nocsr_elements: nocsr.ok_or(NocError::MalformedResponse(
@@ -463,10 +481,16 @@ pub fn decode_noc_response(tlv: &[u8]) -> Result<NocResponse, NocError> {
                 // Spec bound (§11.18): DebugText ≤ 512 octets. Device-echoed free text — cap defensively.
                 debug_text = Some(truncate_utf8(s, 512));
             }
-            // Forward-compat: ignore unknown future fields.
+            // Forward-compat: skip an unknown container whole. Ignoring only its
+            // start would read its members as top-level fields and end the
+            // struct at its end-of-container.
+            Some(Element::ContainerStart { .. }) => reader.skip_container()?,
+            // Forward-compat: ignore unknown future scalar fields.
             Some(_) => {}
         }
     }
+    // Nothing may follow the struct's end-of-container.
+    reader.finish()?;
 
     Ok(NocResponse {
         status: status.ok_or(NocError::MalformedResponse(

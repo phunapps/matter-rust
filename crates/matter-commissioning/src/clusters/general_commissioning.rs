@@ -167,11 +167,21 @@ pub(crate) fn decode_commissioning_error_response(
                 // Spec bound (§11.10): DebugText ≤ 512 octets. Device-echoed free text — cap defensively.
                 debug_text = Some(truncate_utf8(s, 512));
             }
-            // Forward-compat: ignore future tags.
-            Some(Element::Scalar { .. } | Element::ContainerStart { .. }) => {}
+            // Forward-compat: skip an unknown container whole. Ignoring only its
+            // start would read its members as top-level fields and end the
+            // struct at its end-of-container.
+            Some(Element::ContainerStart { .. }) => reader
+                .skip_container()
+                .map_err(|_| CommissioningError::MalformedResponse(stage))?,
+            // Forward-compat: ignore future scalar tags.
+            Some(Element::Scalar { .. }) => {}
             Some(_) => return Err(CommissioningError::MalformedResponse(stage)),
         }
     }
+    // Nothing may follow the struct's end-of-container.
+    reader
+        .finish()
+        .map_err(|_| CommissioningError::MalformedResponse(stage))?;
     let error_code = error_code.ok_or(CommissioningError::MalformedResponse(stage))?;
     Ok((error_code, debug_text))
 }
@@ -262,10 +272,15 @@ pub fn decode_basic_commissioning_info(tlv: &[u8]) -> Option<BasicCommissioningI
                     max_cumulative = n;
                 }
             }
-            // Forward-compat: ignore unrecognised tags.
+            // Forward-compat: skip an unknown container whole (see
+            // `decode_commissioning_error_response`).
+            Some(Element::ContainerStart { .. }) => reader.skip_container().ok()?,
+            // Forward-compat: ignore unrecognised scalar tags.
             Some(_) => {}
         }
     }
+    // Nothing may follow the struct's end-of-container.
+    reader.finish().ok()?;
     failsafe.map(|fs| BasicCommissioningInfo {
         failsafe_expiry_length_seconds: fs,
         max_cumulative_failsafe_seconds: max_cumulative,

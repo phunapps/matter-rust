@@ -1343,6 +1343,9 @@ impl Commissioner {
         Ok(())
     }
 
+    /// Require `payload` to be exactly one anonymous structure: closed by its
+    /// own end-of-container, with nothing after it. The members are skipped,
+    /// not decoded.
     fn assert_tlv_well_formed(stage: Stage, payload: &[u8]) -> Result<(), CommissioningError> {
         use matter_codec::{ContainerKind, Element, Tag, TlvReader};
         let mut reader = TlvReader::new(payload);
@@ -1356,17 +1359,13 @@ impl Commissioner {
             }) => {}
             _ => return Err(CommissioningError::MalformedResponse(stage)),
         }
-        // Walk to ContainerEnd; ignore contents for M6.4.1.
-        loop {
-            match reader
-                .next()
-                .map_err(|_| CommissioningError::MalformedResponse(stage))?
-            {
-                None => return Err(CommissioningError::MalformedResponse(stage)),
-                Some(Element::ContainerEnd) => return Ok(()),
-                Some(_) => {}
-            }
-        }
+        // Skip the members (contents are ignored since M6.4.1) through the
+        // struct's own end-of-container. Stopping at the first
+        // `ContainerEnd`, as this used to, accepted a struct truncated after
+        // any closed nested container, and bytes after the close.
+        reader
+            .finish()
+            .map_err(|_| CommissioningError::MalformedResponse(stage))
     }
 }
 
@@ -1474,6 +1473,29 @@ mod tests {
             }
         }
         false
+    }
+
+    /// `assert_tlv_well_formed` requires the struct's own end-of-container and
+    /// nothing after it. It used to stop at the first `ContainerEnd` it saw,
+    /// so a struct cut off after a closed nested container passed.
+    #[test]
+    fn assert_tlv_well_formed_requires_the_top_level_close() {
+        let check =
+            |b: &[u8]| Commissioner::assert_tlv_well_formed(Stage::ReadCommissioningInfo, b);
+        // { ctx1: { ctx0: 7 } }
+        let full = [0x15, 0x35, 0x01, 0x24, 0x00, 0x07, 0x18, 0x18];
+        assert!(check(&full).is_ok());
+        for n in 0..full.len() {
+            assert!(check(&full[..n]).is_err(), "prefix of {n} bytes accepted");
+        }
+        for suffix in [&[0x00][..], &[0x15, 0x18], &[0x18]] {
+            let mut tailed = full.to_vec();
+            tailed.extend_from_slice(suffix);
+            assert!(
+                check(&tailed).is_err(),
+                "accepted with trailing {suffix:02x?}"
+            );
+        }
     }
 
     #[test]

@@ -308,11 +308,21 @@ pub fn decode_network_config_response(
                 debug_text = Some(truncate_utf8(s, 512));
             }
             // Forward-compat: ignore tag 2 (network_index) on NetworkConfigResponse
-            // and all other unknown tags.
-            Some(Element::Scalar { .. } | Element::ContainerStart { .. }) => {}
+            // and all other unknown scalar tags.
+            Some(Element::Scalar { .. }) => {}
+            // Forward-compat: skip an unknown container whole. Ignoring only its
+            // start would read its members as top-level fields and end the
+            // struct at its end-of-container.
+            Some(Element::ContainerStart { .. }) => reader
+                .skip_container()
+                .map_err(|_| CommissioningError::MalformedResponse(stage))?,
             None | Some(_) => return Err(CommissioningError::MalformedResponse(stage)),
         }
     }
+    // Nothing may follow the struct's end-of-container.
+    reader
+        .finish()
+        .map_err(|_| CommissioningError::MalformedResponse(stage))?;
     let networking_status =
         networking_status.ok_or(CommissioningError::MalformedResponse(stage))?;
     Ok(NetworkConfigResponse {
@@ -387,11 +397,21 @@ pub fn decode_connect_network_response(
                     i32::try_from(v).map_err(|_| CommissioningError::MalformedResponse(stage))?,
                 );
             }
-            // Forward-compat: ignore unknown tags.
-            Some(Element::Scalar { .. } | Element::ContainerStart { .. }) => {}
+            // Forward-compat: ignore unknown scalar tags.
+            Some(Element::Scalar { .. }) => {}
+            // Forward-compat: skip an unknown container whole. Ignoring only its
+            // start would read its members as top-level fields and end the
+            // struct at its end-of-container.
+            Some(Element::ContainerStart { .. }) => reader
+                .skip_container()
+                .map_err(|_| CommissioningError::MalformedResponse(stage))?,
             None | Some(_) => return Err(CommissioningError::MalformedResponse(stage)),
         }
     }
+    // Nothing may follow the struct's end-of-container.
+    reader
+        .finish()
+        .map_err(|_| CommissioningError::MalformedResponse(stage))?;
     let networking_status =
         networking_status.ok_or(CommissioningError::MalformedResponse(stage))?;
     Ok(ConnectNetworkResponse {
