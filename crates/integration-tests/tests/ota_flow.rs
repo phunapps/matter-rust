@@ -51,7 +51,8 @@ async fn serve_ota_to_requestor() {
     // node id. The commissioning session would be one, which is why
     // commissioning closes it (checked above); with a second stale session,
     // chip falls back to its 24 h periodic query and no budget helps.
-    // Commissioning latency varies run-to-run and the 64 KiB BDX transfer is
+    // Commissioning latency varies run-to-run and the BDX transfer (a
+    // few-hundred-byte image) is
     // sub-second, so 180 s absorbs the observed worst case with headroom.
     tokio::time::timeout(
         std::time::Duration::from_secs(180),
