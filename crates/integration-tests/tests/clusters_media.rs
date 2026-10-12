@@ -28,15 +28,12 @@
 //! ContentAppObserver's and the ContentControl delegate interface). It ran
 //! live on a Linux arm64 Pi against tv-app built at both refs.
 //!
-//! Pacing (chip master tv-app's 15-buffer PacketBuffer pool): chip commit
-//! c37efec9db's `#ifndef CHIP_DEVICE_LAYER_TARGET_DARWIN` leaves master's
-//! tv-app on the default 15-buffer pool (v1.4.2.0 allocates from the heap).
-//! The device holds every response in a buffer until its ACK arrives, and
-//! matter-rust sends that ACK on its 200 ms standalone-ACK timer rather than
-//! when the exchange closes (chip flushes it at once). A burst of exchanges
-//! therefore runs the pool dry and the device drops a response. Each exchange
-//! here is followed by [`settle_acks`], so at most one response is unACKed at
-//! a time. The pacing changes no assertion.
+//! No pacing between exchanges: chip master's tv-app has only 15 packet
+//! buffers (chip commit c37efec9db's `#ifndef CHIP_DEVICE_LAYER_TARGET_DARWIN`
+//! leaves it on the default pool; v1.4.2.0 allocates from the heap), and it
+//! holds every response until its ACK arrives. The controller sends that ACK
+//! as the exchange closes, so at most one response per exchange is ever
+//! unACKed, and only for the time the exchange is open.
 //!
 //! State left changed: the tests restore MediaInput, AudioOutput,
 //! ActiveTextTrack and CurrentState, but leave ActiveAudioTrack on
@@ -46,7 +43,6 @@
 //! tests still pass in any order.
 
 use integration_tests::dut::DutConfig;
-use integration_tests::fixture::settle_acks;
 use integration_tests::sweep::{
     assert_exact_attribute_ids, attribute_tlv, newer_than_codegen, ok, read_cluster_attributes,
 };
@@ -79,40 +75,32 @@ async fn connect_tv() -> Option<(MatterController, u64)> {
     let (controller, node_id) = integration_tests::fixture::connect(&cfg)
         .await
         .expect("connect/commission DUT");
-    // Commissioning (first test of the run) leaves the CommissioningComplete
-    // response for our ACK timer too.
-    settle_acks().await;
     Some((controller, node_id))
 }
 
-/// Every attribute of `cluster` on [`EP`], decoded by `decode`, then paced.
+/// Every attribute of `cluster` on [`EP`], decoded by `decode`.
 async fn sweep(
     node: &Node,
     cluster: u32,
     decode: impl Fn(u32, &[u8]) -> Result<(), String>,
 ) -> Vec<(u32, Vec<u8>)> {
-    let attrs = integration_tests::sweep::decode_every_attribute(node, EP, cluster, decode).await;
-    settle_acks().await;
-    attrs
+    integration_tests::sweep::decode_every_attribute(node, EP, cluster, decode).await
 }
 
-/// One attribute of `cluster` on [`EP`], read fresh (a cluster read), paced.
+/// One attribute of `cluster` on [`EP`], read fresh (a cluster read).
 async fn read_attr(node: &Node, cluster: u32, attribute: u32) -> Vec<u8> {
     let attrs = read_cluster_attributes(node, EP, cluster).await.unwrap();
-    settle_acks().await;
     attribute_tlv(&attrs, attribute).to_vec()
 }
 
-/// Invoke a command on [`EP`], paced.
+/// Invoke a command on [`EP`].
 async fn invoke(node: &Node, cluster: u32, command: u32, fields: Vec<u8>) -> InvokeResult {
     let path = CommandPath {
         endpoint: EP,
         cluster,
         command,
     };
-    let result = node.invoke_tlv(path, fields).await.unwrap();
-    settle_acks().await;
-    result
+    node.invoke_tlv(path, fields).await.unwrap()
 }
 
 /// Invoke a command answered by a bare status.

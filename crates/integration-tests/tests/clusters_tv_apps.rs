@@ -36,9 +36,6 @@
 //! Every test here ran live on a Linux arm64 Pi against tv-app built at both
 //! refs.
 //!
-//! Each exchange is paced with [`settle_acks`] for chip master tv-app's
-//! 15-buffer pool (see the module docs of clusters_media.rs).
-//!
 //! State left changed: none that another test reads. The Channel test ends on
 //! ABC, where it started; the ApplicationLauncher test leaves the Vendor1
 //! Content App Stopped with no current app, as it found them; tv-app's
@@ -46,7 +43,6 @@
 
 use integration_tests::dut::DutConfig;
 use integration_tests::events::payload_tlv;
-use integration_tests::fixture::settle_acks;
 use integration_tests::sweep::{
     assert_exact_attribute_ids, attribute_tlv, newer_than_codegen, ok, read_cluster_attributes,
 };
@@ -79,33 +75,28 @@ async fn connect_tv() -> Option<(MatterController, u64)> {
     let (controller, node_id) = integration_tests::fixture::connect(&cfg)
         .await
         .expect("connect/commission DUT");
-    settle_acks().await;
     Some((controller, node_id))
 }
 
-/// Every attribute of `cluster` on `endpoint`, decoded by `decode`, paced.
+/// Every attribute of `cluster` on `endpoint`, decoded by `decode`.
 async fn sweep(
     node: &Node,
     endpoint: u16,
     cluster: u32,
     decode: impl Fn(u32, &[u8]) -> Result<(), String>,
 ) -> Vec<(u32, Vec<u8>)> {
-    let attrs =
-        integration_tests::sweep::decode_every_attribute(node, endpoint, cluster, decode).await;
-    settle_acks().await;
-    attrs
+    integration_tests::sweep::decode_every_attribute(node, endpoint, cluster, decode).await
 }
 
-/// One attribute of `cluster` on `endpoint`, read fresh, paced.
+/// One attribute of `cluster` on `endpoint`, read fresh.
 async fn read_attr(node: &Node, endpoint: u16, cluster: u32, attribute: u32) -> Vec<u8> {
     let attrs = read_cluster_attributes(node, endpoint, cluster)
         .await
         .unwrap();
-    settle_acks().await;
     attribute_tlv(&attrs, attribute).to_vec()
 }
 
-/// Invoke a command on `endpoint`, paced.
+/// Invoke a command on `endpoint`.
 async fn invoke(
     node: &Node,
     endpoint: u16,
@@ -118,9 +109,7 @@ async fn invoke(
         cluster,
         command,
     };
-    let result = node.invoke_tlv(path, fields).await.unwrap();
-    settle_acks().await;
-    result
+    node.invoke_tlv(path, fields).await.unwrap()
 }
 
 /// Invoke a command answered by a bare status.
@@ -640,7 +629,6 @@ async fn content_apps_identify_themselves() {
         .into_iter()
         .map(|(p, _)| p.endpoint)
         .collect();
-    settle_acks().await;
     endpoints.sort_unstable();
     assert_eq!(endpoints.len(), 5, "{endpoints:?}");
     let mut apps = Vec::new();
@@ -748,7 +736,6 @@ async fn account_login_issues_and_checks_a_setup_pin() {
         .expect("tv-app installs the Vendor3 Content App (VendorID 9050)")
         .0
         .endpoint;
-    settle_acks().await;
     let account = "AAAABBBBCCCCDDDD".to_string();
     let pin = alog::GetSetupPinResponse::decode(
         &response(

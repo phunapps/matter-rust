@@ -648,13 +648,15 @@ decodes their attributes, and invokes GetTargets once, on v1.4.2.0's
 all-clusters. Messages runs live against chip's tv-app (its only chip host),
 built at master 5cd2917a and at v1.4.2.0 for Linux arm64 and run on a
 Raspberry Pi: both tests, `messages_present_and_cancel_round_trip` and
-`messages_refuse_malformed_requests`, pass at both refs, with each exchange
-paced (`fixture::settle_acks`, added in M9-A3 B7). Unpaced, master's tv-app
-ACKed a request in `messages_refuse_malformed_requests` and never answered it:
-it gets a 15-buffer PacketBuffer pool (its `CHIPProjectAppConfig.h` sets 500
-inside `#ifndef CHIP_DEVICE_LAYER_TARGET_DARWIN`, which is always defined),
-and responses the previous test's controller left unACKed when it was dropped
-exhaust it. At v1.4.2.0 both tests pass unpaced too. With M9-A3 B7 the nightly
+`messages_refuse_malformed_requests`, pass at both refs with no pacing
+between exchanges. Until the controller ACKed each response as its exchange
+closed (matter-transport 0.7.4, matter-controller 0.18.2), master's tv-app
+ACKed a request in `messages_refuse_malformed_requests` and never answered it
+unless every exchange was paced: it gets a 15-buffer PacketBuffer pool (its
+`CHIPProjectAppConfig.h` sets 500 inside `#ifndef
+CHIP_DEVICE_LAYER_TARGET_DARWIN`, which is always defined), and responses the
+previous test's controller left unACKed when it was dropped exhausted it. At
+v1.4.2.0 both tests passed unpaced throughout. With M9-A3 B7 the nightly
 runs them at v1.4.2.0 (linux-x64), and both passed in nightly 38175373715 on
 2245a81; they do not run on the Mac (tv-app needs Rosetta 2 to build on Apple
 silicon). Beyond those runs, Messages is validated by decode tests, two
@@ -854,9 +856,10 @@ How each of these clusters was validated:
   leaves out the FabricIndex, so `LogEvent` refuses it) or any ContentControl
   event. They are covered by decode smoke only.
 
-The live tests pace each exchange: chip master's tv-app has 15 packet
-buffers, and matter-rust ACKs a response only on its 200 ms standalone-ACK
-timer.
+The live tests run without pacing. chip master's tv-app has only 15 packet
+buffers, each held by a response until its ACK arrives; the controller ACKs
+every response as its exchange closes (matter-transport 0.7.4,
+matter-controller 0.18.2).
 
 ### matter-clusters: Fixed (security) — `Debug` output leaves secrets out
 
