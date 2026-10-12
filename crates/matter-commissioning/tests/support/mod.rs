@@ -53,7 +53,8 @@ use matter_commissioning::CsrResponse;
 use matter_crypto::pase::{PasePbkdfParams, PaseVerifier};
 use matter_crypto::{CaseCredentials, CaseResponder, CaseSigner as _, RingSigner, Sigma1Outcome};
 use matter_transport::{
-    DecodeInboundOutput, MrpFlags, PeerHint, ProtocolId, SessionId, SessionManager, SessionRole,
+    DecodeInboundOutput, MessageCounter, MrpFlags, PeerHint, ProtocolId, SessionId, SessionManager,
+    SessionRole,
 };
 use serde::Deserialize;
 
@@ -2236,6 +2237,44 @@ mod op {
 /// commissioning flow is done and the loop returns.
 const CMD_COMMISSIONING_COMPLETE: u32 = 0x04;
 
+/// What the mock device saw after answering `CommissioningComplete`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MockDeviceOutcome {
+    /// Whether the controller sent a standalone ACK for the device's
+    /// `CommissioningCompleteResponse` within [`COMPLETE_ACK_WAIT`]. A real
+    /// device holds that response in a packet buffer and retransmits it until
+    /// the ACK arrives (chip `ReliableMessageMgr`), so `false` is a bug.
+    pub complete_response_acked: bool,
+}
+
+/// How long the mock waits for that ACK. The controller sends it before
+/// `commission()` returns, so it is already queued on the loopback channel;
+/// the margin only absorbs a loaded test machine.
+pub const COMPLETE_ACK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Wait up to [`COMPLETE_ACK_WAIT`] for a standalone ACK naming `counter`,
+/// decoding on the device's `sessions`; other frames are skipped.
+async fn await_ack_for(
+    dev_io: &InMemoryDatagram,
+    sessions: &mut SessionManager,
+    counter: MessageCounter,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + COMPLETE_ACK_WAIT;
+    loop {
+        let Ok(Ok((packet, _))) = tokio::time::timeout_at(deadline, dev_io.recv_from()).await
+        else {
+            return false;
+        };
+        if let Ok(DecodeInboundOutput::AckOnly { acked_counter, .. }) =
+            sessions.decode_inbound(&packet, std::time::Instant::now())
+        {
+            if acked_counter == counter {
+                return true;
+            }
+        }
+    }
+}
+
 /// Close a PASE/CASE handshake the way a real device does: send a reliable
 /// success `StatusReport` on the exchange, then consume the controller's MRP
 /// standalone ack for it (observed: Tapo P110M, M6.6.5 validation).
@@ -2326,8 +2365,10 @@ pub struct MockDeviceCaseSetup {
 ///    [`SessionRole::Responder`].
 /// 4. **Secured IM loop (CASE session).** Same IM loop, now decoding on the
 ///    CASE session, until the device services `CommissioningComplete`
-///    (GeneralCommissioning 0x0030 / 0x04). After replying to that, return
-///    `Ok(())` so the `tokio::join!` in Task 12 completes.
+///    (GeneralCommissioning 0x0030 / 0x04), then waits up to
+///    [`COMPLETE_ACK_WAIT`] for the controller's ACK of that response and
+///    reports it in [`MockDeviceOutcome`], so the `tokio::join!` in Task 12
+///    completes.
 ///
 /// `peer` is the address replies are sent to; with [`InMemoryDatagram`] the
 /// peer arg is ignored (the channel is point-to-point) and the controller's
@@ -2366,7 +2407,7 @@ pub async fn run_mock_device(
     pase_params: PasePbkdfParams,
     pase_responder_session_id: u16,
     case_setup: MockDeviceCaseSetup,
-) -> Result<(), DriverError> {
+) -> Result<MockDeviceOutcome, DriverError> {
     use std::time::Instant;
 
     // The controller registers PASE first against a fresh SessionManager whose
@@ -2649,8 +2690,16 @@ pub async fn run_mock_device(
                 && command == CMD_COMMISSIONING_COMPLETE
             {
                 // Serviced CommissioningComplete on CASE — the controller's
-                // commission() will return Action::Done next; we're finished.
-                return Ok(());
+                // commission() returns Action::Done next. Its response was the
+                // last thing encoded on the CASE session; the controller must
+                // ACK it before commission() returns.
+                let response_counter =
+                    MessageCounter(sessions.get(case_sid).unwrap().outbound_counter - 1);
+                let complete_response_acked =
+                    await_ack_for(dev_io, &mut sessions, response_counter).await;
+                return Ok(MockDeviceOutcome {
+                    complete_response_acked,
+                });
             }
         }
     }
@@ -2803,6 +2852,10 @@ async fn service_secured_im_dual(
 /// wait for an ack. The CASE handshake on `udp_dev` runs under MRP exactly as in
 /// `run_mock_device` (the controller acks the closing report).
 ///
+/// The operational IM loop on `udp_dev` runs until the device services
+/// `CommissioningComplete`, then waits up to [`COMPLETE_ACK_WAIT`] for the
+/// controller's ACK of that response and reports it in [`MockDeviceOutcome`].
+///
 /// # Errors
 ///
 /// - [`DriverError::Io`] if a datagram recv/send fails or a channel closes.
@@ -2826,7 +2879,7 @@ pub async fn run_mock_device_dual(
     case_setup: MockDeviceCaseSetup,
     network: MockNetworkKind,
     command_log: &CommandLog,
-) -> Result<(), DriverError> {
+) -> Result<MockDeviceOutcome, DriverError> {
     const CTRL_PASE_SESSION_ID: u16 = 1;
 
     let mut sessions = SessionManager::new();
@@ -3035,7 +3088,17 @@ pub async fn run_mock_device_dual(
             if cluster == matter_commissioning::clusters::general_commissioning::CLUSTER_ID
                 && command == CMD_COMMISSIONING_COMPLETE
             {
-                return Ok(());
+                // Serviced CommissioningComplete on CASE — the controller's
+                // commission_ble() returns Action::Done next. Its response was
+                // the last thing encoded on the CASE session; the controller
+                // must ACK it, on the UDP leg, before commission_ble() returns.
+                let response_counter =
+                    MessageCounter(sessions.get(case_sid).unwrap().outbound_counter - 1);
+                let complete_response_acked =
+                    await_ack_for(udp_dev, &mut sessions, response_counter).await;
+                return Ok(MockDeviceOutcome {
+                    complete_response_acked,
+                });
             }
         }
     }

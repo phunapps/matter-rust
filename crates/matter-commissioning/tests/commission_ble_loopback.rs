@@ -351,7 +351,11 @@ async fn commission_ble_reaches_done_over_two_transports() {
     let (commission_result, device_result) =
         tokio::join!(commission_ble(&btp, &udp, &mut fake_disc, config), device);
 
-    device_result.expect("mock dual device completed without error");
+    let device_outcome = device_result.expect("mock dual device completed without error");
+    assert!(
+        device_outcome.complete_response_acked,
+        "the controller must ACK the CommissioningCompleteResponse on the UDP leg before commission_ble() returns"
+    );
     let commissioned = commission_result.expect("commission_ble reached Done");
     assert_eq!(commissioned.terminated_at, Stage::Cleanup);
     assert_eq!(commissioned.peer_node_id, ASSIGNED_NODE_ID);
@@ -547,7 +551,11 @@ async fn commission_ble_thread_reaches_done() {
     let (commission_result, device_result) =
         tokio::join!(commission_ble(&btp, &udp, &mut fake_disc, config), device);
 
-    device_result.expect("mock dual Thread device completed without error");
+    let device_outcome = device_result.expect("mock dual Thread device completed without error");
+    assert!(
+        device_outcome.complete_response_acked,
+        "the controller must ACK the CommissioningCompleteResponse on the UDP leg before commission_ble() returns"
+    );
     let commissioned = commission_result.expect("commission_ble reached Done");
     assert_eq!(commissioned.terminated_at, Stage::Cleanup);
     assert_eq!(commissioned.peer_node_id, ASSIGNED_NODE_ID);

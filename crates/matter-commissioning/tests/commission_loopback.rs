@@ -315,7 +315,11 @@ async fn run_loopback_commission() {
         tokio::join!(commission(&ctrl_io, &mut fake_disc, config), device);
 
     // ── 8. Assert the green check. ────────────────────────────────────────────
-    device_result.expect("mock device side completed without error");
+    let device_outcome = device_result.expect("mock device side completed without error");
+    assert!(
+        device_outcome.complete_response_acked,
+        "the controller must ACK the CommissioningCompleteResponse before commission() returns"
+    );
     let commissioned = commission_result.expect("commission() reached Done");
 
     assert_eq!(
@@ -496,7 +500,11 @@ async fn run_loopback_commission_with_icac() {
         tokio::join!(commission(&ctrl_io, &mut fake_disc, config), device);
 
     // ── 8. Assert the same success criteria as the flat gate. ──────────────────
-    device_result.expect("mock device side completed without error");
+    let device_outcome = device_result.expect("mock device side completed without error");
+    assert!(
+        device_outcome.complete_response_acked,
+        "the controller must ACK the CommissioningCompleteResponse before commission() returns"
+    );
     let commissioned = commission_result.expect("commission() reached Done");
 
     assert_eq!(

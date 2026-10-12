@@ -58,15 +58,15 @@ const IDLE_SLEEP: Duration = Duration::from_secs(3600);
 /// that is acceptable under the single-peer assumption but is a place to harden
 /// if this is ever used where unrelated traffic can reach the socket.
 ///
-/// The buffered piggyback-ack for the *received* response is left pending when
-/// this returns. M6.6.4 (the `commission()` orchestrator) MUST account for it:
-/// the next exchange uses a fresh exchange id, so MRP will not piggyback the
-/// ack onto it; instead the 200 ms standalone-ack deadline fires inside the
-/// *next* `secured_round_trip`'s timer arm and emits a `SendStandaloneAck`.
-/// That is spec-correct (the peer still gets its ack), but it means a stray
-/// standalone-ack send can preempt the start of the next exchange. If that
-/// ordering ever matters, M6.6.4 should flush the ack explicitly before
-/// starting the next exchange.
+/// The response ends the exchange, so before returning this sends the
+/// standalone ACK MRP buffered for it ([`SessionManager::finish_exchange`];
+/// chip's `ExchangeContext::DoClose` flushes the same way). Nothing else
+/// could send it: the next exchange uses a fresh id, so the ACK cannot
+/// piggyback, and once this returns nothing pumps the MRP timer until the
+/// next call — after `commission()`'s last exchange, never. The send is best
+/// effort: a failure leaves the device to retransmit, which a later
+/// exchange's duplicate path ACKs, and never fails a round-trip whose
+/// response arrived.
 ///
 /// # Errors
 ///
@@ -163,6 +163,8 @@ pub async fn secured_round_trip<T: AsyncDatagram>(
                         );
                         #[cfg(not(feature = "tracing"))]
                         let _ = (&msg_protocol_id, &msg_opcode);
+                        flush_exchange_ack(transport, sessions, session_id, exchange_id, peer)
+                            .await;
                         return Ok(SecuredResponse { exchange_id, payload });
                     }
                     // Peer re-sent a reliable frame; bounce its standalone ack.
@@ -185,6 +187,9 @@ pub async fn secured_round_trip<T: AsyncDatagram>(
                             transport.send_to(&packet, peer).await?;
                         }
                         MrpEvent::Expired { exchange_id, .. } => {
+                            // The exchange is over; send anything it still owes.
+                            flush_exchange_ack(transport, sessions, session_id, our_exchange, peer)
+                                .await;
                             return Err(DriverError::Timeout { exchange_id });
                         }
                         // `MrpEvent` is `#[non_exhaustive]`; ignore future
@@ -269,11 +274,10 @@ fn enforce_read_caps(
 /// order.
 ///
 /// A non-chunked read returns a single-element `Vec` (the loop runs once). The
-/// final chunk's MRP ack is left pending on return — identical to
-/// [`secured_round_trip`]'s contract; the next exchange or the standalone-ack
-/// timer flushes it. Inbound demultiplexing (exchange match, unsecured-straggler
-/// skip, `UnknownSession`/`DecryptionFailed` skip, duplicate-ack bounce, MRP
-/// timer) is identical to [`secured_round_trip`].
+/// final chunk ends the exchange: its standalone ACK is sent before this
+/// returns, as [`secured_round_trip`] does. Inbound demultiplexing (exchange
+/// match, unsecured-straggler skip, `UnknownSession`/`DecryptionFailed` skip,
+/// duplicate-ack bounce, MRP timer) is identical to [`secured_round_trip`].
 ///
 /// # Errors
 ///
@@ -337,10 +341,26 @@ pub async fn secured_read<T: AsyncDatagram>(
                         // Enforce all three read caps BEFORE parsing the chunk —
                         // in particular the per-chunk cap bounds a lone oversized
                         // blob up front rather than parsing it first.
-                        total_bytes = enforce_read_caps(chunks.len(), payload.len(), total_bytes)?;
-                        let more = crate::im::parse_report_data(&payload)?.more_chunked_messages;
+                        let checked = enforce_read_caps(chunks.len(), payload.len(), total_bytes)
+                            .and_then(|total| {
+                                let rd = crate::im::parse_report_data(&payload)?;
+                                Ok((total, rd.more_chunked_messages))
+                            });
+                        let (total, more) = match checked {
+                            Ok(checked) => checked,
+                            Err(e) => {
+                                // The read is over: chip closes an exchange on
+                                // error, and the close flushes its ACK.
+                                flush_exchange_ack(transport, sessions, session_id, our_exchange, peer)
+                                    .await;
+                                return Err(e);
+                            }
+                        };
+                        total_bytes = total;
                         chunks.push(payload);
                         if !more {
+                            flush_exchange_ack(transport, sessions, session_id, our_exchange, peer)
+                                .await;
                             return Ok(chunks);
                         }
                         // Ack this chunk + solicit the next on the same exchange.
@@ -375,6 +395,9 @@ pub async fn secured_read<T: AsyncDatagram>(
                             transport.send_to(&packet, peer).await?;
                         }
                         MrpEvent::Expired { exchange_id, .. } => {
+                            // The exchange is over; send anything it still owes.
+                            flush_exchange_ack(transport, sessions, session_id, our_exchange, peer)
+                                .await;
                             return Err(DriverError::Timeout { exchange_id });
                         }
                         // `MrpEvent` is `#[non_exhaustive]`; ignore future
@@ -383,6 +406,38 @@ pub async fn secured_read<T: AsyncDatagram>(
                     }
                 }
             }
+        }
+    }
+}
+
+/// Send the standalone ACK still owed on `exchange_id` now that the exchange
+/// is over ([`SessionManager::finish_exchange`]). Best effort: a failed send
+/// or an exhausted counter is not an error for the caller (its response
+/// already arrived, or it is already failing); chip ignores `FlushAcks`
+/// failures the same way (`ExchangeContext::DoClose`). An exhausted counter
+/// is logged under the `tracing` feature. Sends nothing on a
+/// reliable-transport (BTP) session, which never buffers an MRP ACK.
+async fn flush_exchange_ack<T: AsyncDatagram>(
+    transport: &T,
+    sessions: &mut SessionManager,
+    session_id: SessionId,
+    exchange_id: u16,
+    peer: SocketAddr,
+) {
+    for event in sessions.finish_exchange(session_id, exchange_id) {
+        match event {
+            MrpEvent::SendStandaloneAck { packet, .. } => {
+                let _ = transport.send_to(&packet, peer).await;
+            }
+            #[cfg(feature = "tracing")]
+            MrpEvent::SessionCounterExhausted { exchange_id, .. } => {
+                tracing::debug!(
+                    exchange_id = u64::from(exchange_id),
+                    "standalone ACK not sent: the session's message counter is exhausted"
+                );
+            }
+            // `MrpEvent` is `#[non_exhaustive]`.
+            _ => {}
         }
     }
 }
@@ -666,6 +721,170 @@ mod tests {
         let (got, ()) = tokio::join!(controller, device);
         let got = got.unwrap();
         assert_eq!(got.payload, response);
+    }
+
+    /// The next standalone ACK the device receives within `within`, or `None`.
+    async fn next_ack(
+        dev_io: &InMemoryDatagram,
+        dev: &mut SessionManager,
+        within: std::time::Duration,
+    ) -> Option<matter_transport::MessageCounter> {
+        let Ok(Ok((pkt, _))) = tokio::time::timeout(within, dev_io.recv_from()).await else {
+            return None;
+        };
+        match dev.decode_inbound(&pkt, Instant::now()).unwrap() {
+            DecodeInboundOutput::AckOnly { acked_counter, .. } => Some(acked_counter),
+            other => panic!("expected a standalone ACK, got {other:?}"),
+        }
+    }
+
+    /// The response ends the exchange, so its standalone ACK leaves before
+    /// `secured_round_trip` returns (chip `ExchangeContext::DoClose` →
+    /// `FlushAcks`). Before, nothing sent it: once the call returns, nothing
+    /// pumps this manager's MRP timer.
+    #[tokio::test]
+    async fn secured_round_trip_acks_the_response_before_returning() {
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = matter_transport::SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+
+        let controller = secured_round_trip(
+            &ctrl_io,
+            &mut ctrl,
+            session,
+            dev_addr,
+            0x08,
+            ProtocolId::INTERACTION_MODEL,
+            b"req",
+        );
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, .. } =
+                dev.decode_inbound(&pkt, Instant::now()).unwrap()
+            else {
+                panic!("expected the request");
+            };
+            let out = dev
+                .encode_outbound(
+                    session,
+                    Some(exchange_id),
+                    0x09,
+                    ProtocolId::INTERACTION_MODEL,
+                    b"resp",
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+            out.message_counter
+        };
+        let (got, response_counter) = tokio::join!(controller, device);
+        assert_eq!(got.unwrap().payload, b"resp");
+        assert_eq!(
+            next_ack(&dev_io, &mut dev, std::time::Duration::from_secs(1)).await,
+            Some(response_counter)
+        );
+        assert_eq!(ctrl.poll_timeout(), None, "no ACK left buffered");
+    }
+
+    #[tokio::test]
+    async fn secured_read_acks_the_final_chunk_before_returning() {
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = matter_transport::SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+
+        let controller = secured_read(
+            &ctrl_io,
+            &mut ctrl,
+            session,
+            dev_addr,
+            0x02,
+            ProtocolId::INTERACTION_MODEL,
+            b"read",
+        );
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, .. } =
+                dev.decode_inbound(&pkt, Instant::now()).unwrap()
+            else {
+                panic!("expected the ReadRequest");
+            };
+            let out = dev
+                .encode_outbound(
+                    session,
+                    Some(exchange_id),
+                    0x05,
+                    ProtocolId::INTERACTION_MODEL,
+                    &report_data(1, 0x06, 0x0000, 1, false),
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+            out.message_counter
+        };
+        let (got, chunk_counter) = tokio::join!(controller, device);
+        assert_eq!(got.unwrap().len(), 1);
+        assert_eq!(
+            next_ack(&dev_io, &mut dev, std::time::Duration::from_secs(1)).await,
+            Some(chunk_counter)
+        );
+        assert_eq!(ctrl.poll_timeout(), None);
+    }
+
+    /// An error return ends the exchange too: a chunk that is not a
+    /// `ReportData` fails the read with `DriverError::Im`, and its ACK still
+    /// leaves before the error does (chip closes an exchange on error, and
+    /// the close flushes).
+    #[tokio::test]
+    async fn secured_read_acks_a_malformed_chunk_before_failing() {
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = matter_transport::SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+
+        let controller = secured_read(
+            &ctrl_io,
+            &mut ctrl,
+            session,
+            dev_addr,
+            0x02,
+            ProtocolId::INTERACTION_MODEL,
+            b"read",
+        );
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, .. } =
+                dev.decode_inbound(&pkt, Instant::now()).unwrap()
+            else {
+                panic!("expected the ReadRequest");
+            };
+            let out = dev
+                .encode_outbound(
+                    session,
+                    Some(exchange_id),
+                    0x05,
+                    ProtocolId::INTERACTION_MODEL,
+                    &[0x04, 0x2A], // an anonymous uint, not a structure: not a ReportData
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+            out.message_counter
+        };
+        let (got, chunk_counter) = tokio::join!(controller, device);
+        assert!(matches!(got, Err(DriverError::Im(_))), "got {got:?}");
+        assert_eq!(
+            next_ack(&dev_io, &mut dev, std::time::Duration::from_secs(1)).await,
+            Some(chunk_counter)
+        );
+        assert_eq!(ctrl.poll_timeout(), None);
     }
 
     /// Build a `ReportData` carrying one attribute `(ep,cl,at)=val` with the

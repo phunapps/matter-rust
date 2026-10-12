@@ -329,11 +329,16 @@ fn extract_connect_max_time_seconds(report: &crate::im::ReportData) -> Option<u1
     nc::decode_connect_max_time_seconds(&buf).ok()
 }
 
-/// Drive any *imminent* pending MRP deadlines (within ~500 ms — in practice
-/// the 200 ms standalone-ack timer buffered for the most recent secured
-/// response, see `secured_round_trip`'s pending-ack note) and send the
-/// resulting packets, so no ack is left owed to the device before a
-/// non-secured exchange (CASE) starts.
+/// Drive any *imminent* pending MRP deadline (due within ~500 ms) and send
+/// what it produces, so nothing is owed to the device before the unsecured
+/// CASE exchange starts.
+///
+/// A guard for the Tapo P110M straggler of M6.6.5, where the device
+/// retransmitted its last PASE-session response into the Sigma handshake
+/// because the response's ACK was still buffered. Every secured exchange now
+/// sends its response's ACK before returning ([`secured_round_trip`]), so in
+/// the normal flow nothing is due and this returns at once; it stays until
+/// that device is re-validated.
 ///
 /// # Errors
 ///
@@ -801,6 +806,12 @@ where
 /// disarms on explicit error *return* paths — a dropped (cancelled) future runs
 /// no disarm.
 ///
+/// ## ACKs
+///
+/// Before returning, on success and failure alike, it sends every MRP ACK
+/// still owed over its session's transport ([`flush_owed_acks`]): the device
+/// would otherwise retransmit the last response until it gave up.
+///
 /// # Errors
 ///
 /// See [`commission`] / [`commission_ble`].
@@ -902,7 +913,7 @@ where
     )
     .await;
 
-    match outcome {
+    let result = match outcome {
         Ok(fabric) => Ok(fabric),
         Err(exit) => {
             // Best-effort disarm over the PASE transport/peer before surfacing
@@ -926,6 +937,51 @@ where
                 .await;
             }
             Err(exit.into_driver_error())
+        }
+    };
+    // Belt and braces: send any ACK still owed before `sessions`, and every
+    // ACK it buffers, is dropped. The per-exchange flush in
+    // `secured_round_trip` leaves nothing in the normal flow; this covers a
+    // reliable message that arrived on an exchange no helper was waiting for.
+    flush_owed_acks(
+        pase_transport,
+        pase_sid,
+        pase_peer,
+        op_transport,
+        case_slot,
+        &mut sessions,
+    )
+    .await;
+    result
+}
+
+/// Send every standalone ACK `sessions` still owes, each over the transport
+/// its session runs on: the PASE session's over `pase_transport` to
+/// `pase_peer`, the CASE session's over `op_transport` to its operational
+/// address (they differ in [`commission_ble`]). Best effort, like every ACK
+/// flush; an ACK for any other session (there is none in this flow) is
+/// dropped.
+async fn flush_owed_acks<P: AsyncDatagram, O: AsyncDatagram>(
+    pase_transport: &P,
+    pase_sid: SessionId,
+    pase_peer: SocketAddr,
+    op_transport: &O,
+    case_slot: Option<(SessionId, SocketAddr)>,
+    sessions: &mut SessionManager,
+) {
+    for event in sessions.flush_pending_acks() {
+        let MrpEvent::SendStandaloneAck {
+            session_id, packet, ..
+        } = event
+        else {
+            continue;
+        };
+        if session_id == pase_sid {
+            let _ = pase_transport.send_to(&packet, pase_peer).await;
+        } else if let Some((case_sid, case_addr)) = case_slot {
+            if session_id == case_sid {
+                let _ = op_transport.send_to(&packet, case_addr).await;
+            }
         }
     }
 }
@@ -1199,13 +1255,12 @@ where
                 fabric_id,
                 peer_node_id,
             } => {
-                // Flush the standalone ack still owed for the last secured
-                // (PASE-session) response before switching to the unsecured
-                // CASE exchange — otherwise the device retransmits that
-                // response into the Sigma handshake (exchange.rs documents
-                // the deferred ack; observed on a real device: Tapo P110M,
-                // M6.6.5 validation). Over the PASE transport/peer. Under
-                // `TransportProvides` no MRP timers exist, so this is a no-op.
+                // Guard (Tapo P110M, M6.6.5): send anything still owed before
+                // the unsecured CASE exchange starts, or the device retransmits
+                // into the Sigma handshake. Every secured exchange already sent
+                // its response's ACK before returning, so this normally finds
+                // nothing due and returns at once. Under `TransportProvides` no
+                // MRP timers exist, so it is a no-op.
                 flush_pending_acks(pase_transport, sessions, pase_peer).await?;
                 // Build CASE credentials for the commissioner's own identity.
                 // commissioner_signer is moved out of the Option here — it can
@@ -2360,9 +2415,124 @@ mod tests {
                 )
                 .unwrap();
             dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+            out.message_counter
         };
 
-        tokio::join!(controller, device);
+        let ((), response_counter) = tokio::join!(controller, device);
+        // The ArmFailSafe(0) response ends its exchange: its ACK leaves before
+        // rollback returns. It used to be dropped with the SessionManager when
+        // run_commission returned.
+        let (pkt, _) = tokio::time::timeout(Duration::from_secs(1), dev_io.recv_from())
+            .await
+            .expect("the ArmFailSafe(0) response must be ACKed before rollback returns")
+            .unwrap();
+        assert!(matches!(
+            dev.decode_inbound(&pkt, Instant::now()).unwrap(),
+            DecodeInboundOutput::AckOnly { acked_counter, .. }
+                if acked_counter == response_counter
+        ));
+    }
+
+    /// `run_commission`'s last step sends every ACK still owed, each over its
+    /// own session's transport: PASE's over the PASE transport, CASE's over
+    /// the operational one (which differ in `commission_ble`). Distinct keys
+    /// per session prove the routing: a packet sent down the wrong pipe would
+    /// not decrypt.
+    #[tokio::test]
+    async fn flush_owed_acks_routes_each_ack_to_its_sessions_transport() {
+        let pase_keys = PaseSessionKeys {
+            ke: [0u8; 16],
+            i2r_key: [1u8; 16],
+            r2i_key: [2u8; 16],
+            attestation_key: [3u8; 16],
+        };
+        let case_keys = PaseSessionKeys {
+            ke: [0u8; 16],
+            i2r_key: [4u8; 16],
+            r2i_key: [5u8; 16],
+            attestation_key: [6u8; 16],
+        };
+        let mut ctrl = SessionManager::new();
+        let mut pase_dev = SessionManager::new();
+        let mut case_dev = SessionManager::new();
+        let pase_sid = ctrl.register_pase(
+            pase_keys.clone(),
+            SessionRole::Initiator,
+            1,
+            PeerHint::default(),
+        );
+        let case_sid = ctrl.register_pase(
+            case_keys.clone(),
+            SessionRole::Initiator,
+            1,
+            PeerHint::default(),
+        );
+        let pase_dev_sid = pase_dev.register_pase(
+            pase_keys,
+            SessionRole::Responder,
+            pase_sid.0,
+            PeerHint::default(),
+        );
+        let case_dev_sid = case_dev.register_pase(
+            case_keys,
+            SessionRole::Responder,
+            case_sid.0,
+            PeerHint::default(),
+        );
+        let (pase_ctrl_io, pase_dev_io) = InMemoryDatagram::pair();
+        let (op_ctrl_io, op_dev_io) = InMemoryDatagram::pair();
+        let now = Instant::now();
+        let pase_msg = pase_dev
+            .encode_outbound(
+                pase_dev_sid,
+                Some(0x10),
+                0x05,
+                ProtocolId::INTERACTION_MODEL,
+                b"x",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+        ctrl.decode_inbound(&pase_msg.wire_bytes, now).unwrap();
+        let case_msg = case_dev
+            .encode_outbound(
+                case_dev_sid,
+                Some(0x20),
+                0x05,
+                ProtocolId::INTERACTION_MODEL,
+                b"y",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+        ctrl.decode_inbound(&case_msg.wire_bytes, now).unwrap();
+
+        flush_owed_acks(
+            &pase_ctrl_io,
+            pase_sid,
+            pase_dev_io.local_addr(),
+            &op_ctrl_io,
+            Some((case_sid, op_dev_io.local_addr())),
+            &mut ctrl,
+        )
+        .await;
+
+        for (io, dev, expected) in [
+            (&pase_dev_io, &mut pase_dev, pase_msg.message_counter),
+            (&op_dev_io, &mut case_dev, case_msg.message_counter),
+        ] {
+            let (pkt, _) = tokio::time::timeout(Duration::from_secs(1), io.recv_from())
+                .await
+                .expect("an ACK on this session's transport")
+                .unwrap();
+            match dev.decode_inbound(&pkt, Instant::now()).unwrap() {
+                DecodeInboundOutput::AckOnly { acked_counter, .. } => {
+                    assert_eq!(acked_counter, expected);
+                }
+                other => panic!("expected AckOnly, got {other:?}"),
+            }
+        }
+        assert_eq!(ctrl.poll_timeout(), None);
     }
 
     /// `establish_case_session` drives `resolve_operational` + `run_case` and
@@ -2619,14 +2789,52 @@ mod tests {
         assert_eq!(registered.keys, SessionKeys::from_case_output(&dev_out));
     }
 
-    /// After a secured round-trip, the piggyback ack for the received
-    /// response is left buffered (see `secured_round_trip`). `flush_pending_acks`
-    /// must emit it so the device stops retransmitting before the unsecured
-    /// CASE exchange starts (observed straggler: Tapo P110M, M6.6.5).
+    /// `flush_pending_acks`, the pre-CASE guard for the Tapo P110M straggler
+    /// (M6.6.5), still sends an ACK owed within its horizon. In the normal
+    /// flow nothing is owed by then (every secured exchange sent its ACK
+    /// before returning), and it returns at once.
     #[tokio::test]
     async fn flush_pending_acks_delivers_buffered_standalone_ack() {
-        use std::time::Instant;
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let owed = dev
+            .encode_outbound(
+                session,
+                Some(0x30),
+                0x05,
+                ProtocolId::INTERACTION_MODEL,
+                b"x",
+                MrpFlags { reliable: true },
+                Instant::now(),
+            )
+            .unwrap();
+        ctrl.decode_inbound(&owed.wire_bytes, Instant::now())
+            .unwrap();
 
+        flush_pending_acks(&ctrl_io, &mut ctrl, dev_io.local_addr())
+            .await
+            .unwrap();
+
+        let (pkt, _) = tokio::time::timeout(Duration::from_secs(1), dev_io.recv_from())
+            .await
+            .expect("the owed ACK")
+            .unwrap();
+        assert!(matches!(
+            dev.decode_inbound(&pkt, Instant::now()).unwrap(),
+            DecodeInboundOutput::AckOnly { acked_counter, .. }
+                if acked_counter == owed.message_counter
+        ));
+        assert_eq!(ctrl.poll_timeout(), None);
+    }
+
+    /// The standalone ACK for a secured response leaves before the round-trip
+    /// returns, so nothing is owed to the device when the unsecured CASE
+    /// exchange starts (the M6.6.5 straggler on a Tapo P110M, which the
+    /// pre-CASE `flush_pending_acks` covered by sleeping out the 200 ms timer;
+    /// it now finds nothing owed and returns at once).
+    #[tokio::test]
+    async fn a_secured_response_is_acked_before_case_starts() {
         let (mut ctrl, mut dev) = paired_pase_sessions();
         let session = SessionId(1);
         let (ctrl_io, dev_io) = InMemoryDatagram::pair();
@@ -2646,12 +2854,7 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(resp.payload, b"resp");
-            // The ack for the device's reliable response is now pending.
-            flush_pending_acks(&ctrl_io, &mut ctrl, dev_addr)
-                .await
-                .unwrap();
         };
-
         let device = async {
             let (pkt, _) = dev_io.recv_from().await.unwrap();
             let DecodeInboundOutput::AppMessage { exchange_id, .. } =
@@ -2671,22 +2874,21 @@ mod tests {
                 )
                 .unwrap();
             dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
-            // The flushed standalone ack must arrive and decode as AckOnly.
-            let (ack_pkt, _) =
-                tokio::time::timeout(std::time::Duration::from_secs(2), dev_io.recv_from())
-                    .await
-                    .expect("flush must deliver the standalone ack")
-                    .unwrap();
+            let (ack_pkt, _) = tokio::time::timeout(Duration::from_secs(1), dev_io.recv_from())
+                .await
+                .expect("the response's ACK must arrive with no flush call")
+                .unwrap();
             assert!(
                 matches!(
                     dev.decode_inbound(&ack_pkt, Instant::now()).unwrap(),
-                    DecodeInboundOutput::AckOnly { .. }
+                    DecodeInboundOutput::AckOnly { acked_counter, .. }
+                        if acked_counter == out.message_counter
                 ),
-                "flushed packet must be a standalone ack"
+                "the packet must be the response's standalone ACK"
             );
         };
-
         let ((), ()) = tokio::join!(controller, device);
+        assert_eq!(ctrl.poll_timeout(), None);
     }
 
     /// `dispatch_read` for `CommissioningInfo`: canned `ReportData` carries a
