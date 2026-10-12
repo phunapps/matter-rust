@@ -28,11 +28,13 @@ APIs have had no outside users yet and are expected to move.
 through `matter-commissioning`'s `tracing` feature, stop a withheld ACL field
 from being read as a wildcard, and make the controller acknowledge every
 reliable response as soon as its exchange ends, instead of up to 200 ms later
-or never (the MRP entries, last in each crate's list). `matter-transport` also
-stops an oversized send from leaking an exchange slot, which could leave a
-session refusing every report the device sent. Only
-`matter-transport` adds public API, and only additively, so each affected
-crate needs only a patch release:
+or never (the MRP entries, after the security entries in each crate's list).
+`matter-transport` also stops an oversized send from leaking an exchange slot,
+which could leave a session refusing every report the device sent.
+Commissioning now closes its own CASE session with a Secure Channel
+CloseSession, and both it and the controller honour one from the device.
+`matter-transport` and `matter-commissioning` add public API, only
+additively, so each affected crate needs only a patch release:
 
 | Crate | Current | Patch |
 |---|---|---|
@@ -54,12 +56,17 @@ Dependency floors to raise at release (no `Cargo.toml` changes yet):
   `matter-commissioning` 0.10.1 and `matter-interaction` 0.4.3. Raise
   `matter-commissioning` in both `[dependencies]` and `[dev-dependencies]`.
   (0.7.4 for `SessionManager::finish_exchange`, `abort_exchange`,
-  `flush_pending_acks` and `flush_session_acks` too.)
+  `flush_pending_acks`, `flush_session_acks` and
+  `secure_channel::is_close_session` too.)
 - `matter-commissioning` 0.10.1 requires `matter-interaction` 0.4.3,
   because it re-exports `InvokeResponse` and the whole crate (as `im`).
 - `matter-commissioning` 0.10.1 also requires `matter-transport` 0.7.4: its
-  exchange helpers call `SessionManager::finish_exchange` and `run_commission`
-  calls `SessionManager::flush_pending_acks`.
+  exchange helpers call `SessionManager::finish_exchange` and
+  `secure_channel::is_close_session`, and `run_commission` calls
+  `SessionManager::flush_pending_acks` and
+  `secure_channel::encode_close_session` (and, with the `tracing` feature,
+  reads `secure_channel::CLOSE_SESSION_PAYLOAD` and
+  `protocol_header::opcode::secure_channel::STATUS_REPORT`).
 
 Otherwise an application that upgrades only the controller, or only
 commissioning, keeps the leaking `Session`, `Action` and payload `Debug`
@@ -182,6 +189,31 @@ published release, `0.1.0` through `0.18.1`.
   `invoke_tlv` or `write` too large to send no longer leaks a slot, so enough
   of them can no longer stop a node's subscription reports.
 
+### matter-controller: Fixed — a CloseSession from the device closes the session
+
+- The controller acknowledged a device's CloseSession and dropped it, then
+  kept using the session the device had removed. Requests on it went
+  unanswered until their timeouts, and its subscription reports stopped
+  until the liveness timeout.
+- Now an encrypted CloseSession that starts an exchange removes the
+  session, as Matter 1.4 Core §4.11.1.4 requires and as chip and matter.js
+  do:
+  - cached routes to it are dropped, so the next request opens a fresh CASE
+    session;
+  - its subscriptions resubscribe at once;
+  - a read or subscribe in flight on it is re-sent once on a fresh session;
+  - any other request in flight on it fails at once with `Error::Operational`
+    and is not re-sent, because the device may have executed it.
+
+  Nothing is sent back. The controller still sends no CloseSession of its own
+  when it drops a session or shuts down, like chip.
+- `serve_ota` right after `commission()` works again against chip OTA
+  requestors (see `matter-commissioning`). The requestor's first QueryImage
+  still goes to the controller's own session and times out after about
+  10 s, as before.
+- Affected: every published release through `0.18.1`. Requires
+  `matter-transport` 0.7.4 and `matter-commissioning` 0.10.1.
+
 ### matter-transport: Fixed (security) — session keys stay out of `Debug` output
 
 - `SessionKeys` derived `Debug`, and `Session` derives `Debug` and prints its
@@ -279,6 +311,22 @@ published release, `0.1.0` through `0.18.1`.
   before framing since then (in `MrpState::prepare_outbound` through 0.4.0,
   then, from 0.5.0, in `encode_outbound` through `note_local_exchange`).
 
+### matter-transport: Added — the Secure Channel CloseSession
+
+- `matter_transport::secure_channel` encodes and recognises the Secure
+  Channel CloseSession status report (Matter 1.4 Core §4.11.1.4), which a
+  node sends to say it is removing a PASE or CASE session.
+  `encode_close_session` encodes one for a session, on a new exchange
+  without the R flag as the spec requires, so the send is never
+  retransmitted and holds no exchange slot. `is_close_session` recognises
+  one in a decrypted message. `CLOSE_SESSION_PAYLOAD` and
+  `PROTOCOL_CODE_CLOSE_SESSION` are its bytes and code, and
+  `protocol_header::opcode::secure_channel::STATUS_REPORT` is `0x40`. The
+  bytes match matter.js 0.17.1's (`test-vectors/transport/close-session.json`).
+  `is_close_session` also requires the Secure Channel protocol id in the
+  report body (§4.11.1.3), which chip and matter.js do not check.
+- Additive. Nothing existing changes.
+
 ### matter-commissioning: Fixed (security) — the setup passcode stays out of `Debug` output
 
 - `setup::Passcode` derived `Debug`, so a `{:?}` of it, or of the
@@ -355,6 +403,35 @@ published release, `0.1.0` through `0.18.1`.
   nothing is owed by then.
 - Affected: every published release through `0.10.0`. Requires
   `matter-transport` 0.7.4.
+
+### matter-commissioning: Fixed — commissioning closes its CASE session
+
+- `commission()` and `commission_ble()` ran CommissioningComplete on a CASE
+  session of their own, then returned and dropped it, socket and all,
+  without telling the device. The device kept the session active. A device
+  that later opened an exchange to the commissioner's node id could pick it
+  and send into a socket nobody read. chip's OTA requestor does: it reuses
+  the session with the most recent peer activity and, after one failed
+  retry, waits 24 hours. So `MatterController::serve_ota` right after
+  `commission()` failed against chip's ota-requestor-app at v1.4.2.0 and at
+  master. Until the CommissioningComplete response was acknowledged (the fix
+  above), chip marked that session defunct when its retransmits ran out,
+  which hid this.
+- They now send a CloseSession on that session (Matter 1.4 Core §4.11.1.4),
+  after the response's ACK, on every exit that has the session, over the
+  operational transport (UDP on the BLE path), and then forget it. It asks
+  for no ACK, as the spec requires and as matter.js sends it, so nothing
+  waits for it. A device that ignores it is left as before. chip evicts the
+  session on receipt. The PASE session is not closed: the device clears it
+  on CommissioningComplete.
+- A CloseSession from the device now ends the exchange waiting on that
+  session. `secured_round_trip` and `secured_read` remove the session and
+  fail with the new `DriverError::SessionClosed` instead of waiting for a
+  response that cannot come. One for another session removes that session,
+  and the wait continues. Only an encrypted CloseSession that starts an
+  exchange counts.
+- Affected: every published release through `0.10.0` left the session
+  open. Requires `matter-transport` 0.7.4.
 
 ### matter-interaction: Fixed (security) — command and attribute payloads stay out of `Debug` output
 

@@ -28,6 +28,10 @@ MRP reliability layer (§4.11) and the application protocol header
   out the ACK it still owes at once (`SessionManager::finish_exchange`,
   as chip's `FlushAcks` on close); the 200 ms standalone-ACK timer is
   only the fallback.
+- **Secure Channel CloseSession:** `secure_channel::encode_close_session`
+  closes a session the way the spec asks (new exchange, no R flag), and
+  `secure_channel::is_close_session` recognises a peer's, byte-checked
+  against matter.js.
 - **Protocol header:** the Matter application protocol header codec,
   with skip-and-ignore handling of SX/V extensions.
 - **Transport + Discovery:** sans-IO `Transport` / `Discovery` traits
