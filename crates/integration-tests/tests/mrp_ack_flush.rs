@@ -12,25 +12,30 @@
 //! neither commissioning nor a controller dropped the instant a read returns
 //! leaves the device anything to retransmit.
 //!
-//! The device's own log is the witness. chip logs, at Progress level:
+//! The device's own log is the witness. chip logs:
 //!
 //! - `??N [E:<exchange> S:<lsid> M:<counter>] (…) Msg Retransmission to …
-//!   scheduled for …ms` on EVERY reliable send
-//!   (src/messaging/ReliableMessageMgr.cpp:590 at master 5cd2917a, :581 at
-//!   v1.4.2.0);
-//! - `<<N [E:… S:<lsid> M:…] (S) Msg Retransmission to …` only when it
-//!   actually re-sends (:224), or gives up (`… failure (max retries:4)`,
-//!   :193), at both refs.
+//!   scheduled for …ms` (Progress) each time it schedules a transmission of
+//!   a reliable message: `??1` with the first send, then `??2`…`??5` after
+//!   each re-send (src/messaging/ReliableMessageMgr.cpp:590 at master
+//!   5cd2917a, :581 at v1.4.2.0);
+//! - `<<N [E:… S:<lsid> M:…] (S) Msg Retransmission to …` (Progress) only
+//!   when it actually re-sends (:224), and `<<N … failure (max retries:4)`
+//!   (Error) when it gives up (:193), at both refs.
 //!
 //! The line prefix differs by backend: chip master prints
-//! `[ts] [pid:tid] [EM] <<1 …` on Darwin and Linux, v1.4.2.0 on Linux prints
-//! `[ts][pid:tid] CHIP:EM: <<1 …` (src/platform/Linux/Logging.cpp:46), so the
-//! matchers look for the markers anywhere in the line. Sessions are named by
-//! the LSID chip logs at Detail level when it activates one,
-//! `New secure session activated for device <node, fabric>, LSID:<n>
-//! PSID:<m>!` (src/protocols/secure_channel/PairingSession.cpp:56 master,
-//! :55 v1.4.2.0). Each test also counts `??N` lines on its sessions, so a log
-//! format or level change fails loudly instead of passing vacuously.
+//! `[ts] [pid:tid] [EM] <<1 …` on Linux and `[ts] [pid:tid:queue] [EM] <<1 …`
+//! on Darwin, each line wrapped in ANSI colour codes; v1.4.2.0 on Linux
+//! prints `[ts][pid:tid] CHIP:EM: <<1 …` (src/platform/Linux/Logging.cpp:46).
+//! So the matchers look for the markers anywhere in the line and ignore the
+//! prefix and the colour codes. Sessions are named by the LSID chip logs at
+//! Detail level when it activates one, `New secure session activated for
+//! device <node, fabric>, LSID:<n> PSID:<m>!`
+//! (src/protocols/secure_channel/PairingSession.cpp:56 master, :55
+//! v1.4.2.0). Each test also counts `??N` lines on its sessions (the
+//! commissioning test on each of its two sessions), so a log format or level
+//! change, or a test watching the wrong session, fails loudly instead of
+//! passing vacuously.
 //!
 //! Runs in the all-clusters arm (every binary no other arm lists): locally
 //! (`just integration`, chip master) and in the nightly at v1.4.2.0.
@@ -40,8 +45,14 @@ use std::time::Duration;
 use integration_tests::dut::DutConfig;
 use matter_controller::ReadPath;
 
-/// Short-lived controllers in a row. chip's Linux apps at master have 15
-/// packet buffers, so 40 unACKed responses would also run one dry.
+/// Short-lived controllers in a row. The test detects retransmissions, not
+/// buffer exhaustion: all-clusters allocates packet buffers from the heap
+/// (`config/standalone/CHIPProjectConfig.h` sets
+/// `CHIP_SYSTEM_CONFIG_PACKETBUFFER_POOL_SIZE` 0, :60-61 at master 5cd2917a,
+/// :65-66 at v1.4.2.0). Only tv-app at master has just 15 packet buffers
+/// (`examples/tv-app/tv-common/include/CHIPProjectAppConfig.h`'s `#ifndef
+/// CHIP_DEVICE_LAYER_TARGET_DARWIN` leaves it on the default); 40 is well
+/// past that.
 const CYCLES: usize = 40;
 
 /// How long to watch after the last message. A chip device's first
@@ -71,8 +82,10 @@ fn is_retransmission(line: &str) -> bool {
         && marker_then_digit(line, "<<")
 }
 
-/// chip sent a reliable message: `??N … Msg Retransmission to … scheduled
-/// for …`, logged once per reliable send.
+/// chip scheduled a transmission of a reliable message: `??N … Msg
+/// Retransmission to … scheduled for …`, logged with the first send (`??1`)
+/// and again after each re-send (`??2`…): at least one line per message chip
+/// sent reliably, which is all the positive controls rely on.
 fn is_reliable_send(line: &str) -> bool {
     line.contains("Msg Retransmission to")
         && line.contains("scheduled for")
@@ -152,11 +165,19 @@ async fn commissioning_leaves_no_retransmission() {
         2,
         "PASE and the commissioner's CASE session: {all:?}"
     );
-    let (sends, retransmitted) = mrp_lines_on(&log, &commissioning);
-    assert!(
-        sends >= 2,
-        "positive control: chip's `??N` send lines on {commissioning:?} (found {sends})"
-    );
+    // Positive control per session: the PASE session carries the
+    // commissioning steps before CASE, and the commissioner's CASE session
+    // carries CommissioningComplete, so each shows at least one `??N` send.
+    // A test watching the wrong (or an empty) session fails here.
+    for (role, lsid) in ["PASE", "CASE"].iter().zip(&commissioning) {
+        let (sends, _) = mrp_lines_on(&log, std::slice::from_ref(lsid));
+        assert!(
+            sends >= 1,
+            "positive control: chip's `??N` send lines on the {role} session {lsid} \
+             (found {sends}; commissioning sessions {commissioning:?})"
+        );
+    }
+    let (_, retransmitted) = mrp_lines_on(&log, &commissioning);
     assert_eq!(
         retransmitted,
         Vec::<&str>::new(),
