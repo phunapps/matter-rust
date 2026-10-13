@@ -74,8 +74,8 @@ pub struct SessionId(pub u16);
 
 /// 32-bit monotonic message counter. Matter Core Spec §4.6.1.1 requires
 /// every message counter to start at `Crypto_DRBG(len = 28) + 1`, a CSPRNG
-/// value in `[1, 2^28]`; a secure session's outbound counter does not do
-/// that yet (see `Session::outbound_counter`).
+/// value in `[1, 2^28]`; a secure session's outbound counter does (see
+/// `Session::outbound_counter`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MessageCounter(pub u32);
 

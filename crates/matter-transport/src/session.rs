@@ -133,10 +133,14 @@ pub struct Session {
     /// a fresh session instead — a debug build trips an assertion if you
     /// don't (each cached cipher keeps a copy of its source key to check).
     pub keys: SessionKeys,
-    /// Next outbound message counter. Matter Core Spec §4.6.1.1 and §4.6.2
-    /// require it to start at `Crypto_DRBG(len = 28) + 1`, a CSPRNG value in
-    /// `[1, 2^28]`. This crate does not do that yet: every `register_*`
-    /// method starts it at 1, and nothing in this workspace overwrites it.
+    /// Next outbound message counter. Every `register_*` method starts it at
+    /// `Crypto_DRBG(len = 28) + 1`, a CSPRNG value in `[1, 2^28]`, as Matter
+    /// Core Spec §4.6.1.1 and §4.6.2 require, so a passive observer cannot
+    /// read a session's age or traffic volume off the cleartext header. A
+    /// resumed CASE session is a new session and gets a fresh random start.
+    /// If the system CSPRNG fails it starts at 1 instead (logged at `warn`).
+    /// It advances by one per send, and sending stops with
+    /// [`Error::CounterOverflow`] once it reaches `u32::MAX`.
     pub outbound_counter: u32,
     /// Inbound replay window for this session.
     pub replay_window: ReplayWindow,
@@ -458,6 +462,52 @@ fn seed_exchange_id() -> u16 {
     u16::from_le_bytes(bytes)
 }
 
+/// Map four DRBG bytes to a first outbound message counter:
+/// `Crypto_DRBG(len = 28) + 1` (Matter Core Spec §4.6.1.1), a value in
+/// `[1, 2^28]`.
+///
+/// Keeps the low 28 bits and adds one, exactly as chip does
+/// (`GetRandU32() & kMessageCounterRandomInitMask`, then a pre-increment
+/// before first use; `src/transport/MessageCounter.h`) and matter.js does
+/// (`(randomUint32 >>> 4) + 1`). It never returns 0: a peer's replay state
+/// starts at 0 (chip `PeerMessageCounter::kInitialSyncValue`), so a first
+/// counter of 0 would read as a duplicate. The largest result, `2^28`, leaves
+/// about `2^32 - 2^28` counters for traffic before exhaustion.
+fn initial_counter_from_drbg(bytes: [u8; 4]) -> u32 {
+    (u32::from_le_bytes(bytes) & 0x0FFF_FFFF) + 1
+}
+
+/// Draw a new secure session's first outbound message counter (Matter Core
+/// Spec §4.6.1.1 and §4.6.2: every session SHALL start at a CSPRNG value in
+/// `[1, 2^28]`).
+///
+/// Falls back to 1, with a `warn`, if the system CSPRNG fails. chip does not
+/// fall back: `Crypto::GetRandU32()` aborts the process on a DRBG failure
+/// (`VerifyOrDie`, `src/crypto/RandUtils.cpp`). A library must not abort its
+/// host, and returning an error would make every `register_*` method
+/// fallible, a breaking change, so this keeps registration infallible as
+/// [`seed_exchange_id`] does. The fallback is the pre-0.7.4 behaviour and
+/// costs only the traffic-analysis resistance the random start exists for
+/// (the counter travels in the cleartext header). Confidentiality,
+/// integrity and replay protection do not depend on it: every session has
+/// fresh keys, so no nonce repeats under one key. In practice the branch is
+/// unreachable, because the session being registered was just established
+/// by a PASE or CASE handshake that drew from this same CSPRNG and fails
+/// closed if it is unavailable.
+fn seed_message_counter() -> u32 {
+    let mut bytes = [0u8; 4];
+    if matter_crypto::random_bytes(&mut bytes).is_err() {
+        tracing::warn!(
+            target: "matter_transport::session",
+            "system CSPRNG unavailable seeding a session's outbound message \
+             counter; falling back to 1 (spec §4.6.1.1 wants a random start, \
+             so the counter now reveals how many messages the session sent)"
+        );
+        return 1;
+    }
+    initial_counter_from_drbg(bytes)
+}
+
 impl Default for SessionManager {
     fn default() -> Self {
         Self::new()
@@ -705,7 +755,10 @@ impl SessionManager {
             peer_id: SessionId(peer_session_id),
             role,
             keys,
-            outbound_counter: 1,
+            // Spec §4.6.1.1 / §4.6.2: a fresh CSPRNG start per session. Every
+            // `register_*` path (PASE, CASE, resumed CASE) lands here, so each
+            // new session, resumed ones included, gets its own random start.
+            outbound_counter: seed_message_counter(),
             replay_window: ReplayWindow::new(),
             peer,
             // Stamped later by the owner (the controller, once it has the
@@ -1384,6 +1437,117 @@ mod tests {
         a.register_pase(keys.clone(), SessionRole::Initiator, 1, PeerHint::default());
         b.register_pase(keys, SessionRole::Responder, 1, PeerHint::default());
         (a, b)
+    }
+
+    /// The largest first counter `Crypto_DRBG(len = 28) + 1` can produce
+    /// (spec §4.6.1.1): `0x0FFF_FFFF + 1`.
+    const MAX_INITIAL_COUNTER: u32 = 1 << 28;
+
+    /// The DRBG-to-counter mapping hits both ends of `[1, 2^28]` and ignores
+    /// the top four bits, as chip's `kMessageCounterRandomInitMask` does.
+    #[test]
+    fn initial_counter_from_drbg_spans_the_spec_range() {
+        assert_eq!(initial_counter_from_drbg([0x00; 4]), 1);
+        assert_eq!(initial_counter_from_drbg([0xFF; 4]), MAX_INITIAL_COUNTER);
+        // Only the top nibble set: masked away, so the smallest value.
+        assert_eq!(initial_counter_from_drbg([0x00, 0x00, 0x00, 0xF0]), 1);
+        // Little-endian, like the exchange-id seed.
+        assert_eq!(initial_counter_from_drbg([0x01, 0x00, 0x00, 0x00]), 2);
+    }
+
+    /// Spec §4.6.1.1 / §4.6.2: every new secure session's outbound counter
+    /// starts at a CSPRNG value in `[1, 2^28]`. Checked on both PASE register
+    /// paths (CASE and resumed CASE share `insert_session` and are checked
+    /// on real handshake outputs in matter-commissioning's CASE tests).
+    ///
+    /// Distinctness is probabilistic: 16 draws from 2^28 values all being
+    /// equal has probability 2^-420, so a failure means the counter is not
+    /// being seeded (on the start-at-1 code every draw was 1).
+    #[test]
+    fn new_sessions_start_at_a_random_counter_in_the_spec_range() {
+        let mut mgr = SessionManager::new();
+        let mut counters = Vec::new();
+        for _ in 0..8 {
+            let sid = mgr.register_pase(
+                PaseSessionKeys {
+                    ke: [0u8; 16],
+                    i2r_key: [1u8; 16],
+                    r2i_key: [2u8; 16],
+                    attestation_key: [3u8; 16],
+                },
+                SessionRole::Initiator,
+                1,
+                PeerHint::default(),
+            );
+            counters.push(mgr.get(sid).unwrap().outbound_counter);
+        }
+        for _ in 0..8 {
+            let sid = mgr.allocate_session_id();
+            mgr.register_pase_with_local_id(
+                sid,
+                PaseSessionKeys {
+                    ke: [0u8; 16],
+                    i2r_key: [1u8; 16],
+                    r2i_key: [2u8; 16],
+                    attestation_key: [3u8; 16],
+                },
+                SessionRole::Responder,
+                1,
+                PeerHint::default(),
+            );
+            counters.push(mgr.get(sid).unwrap().outbound_counter);
+        }
+        for c in &counters {
+            assert!(
+                (1..=MAX_INITIAL_COUNTER).contains(c),
+                "counter {c:#x} outside [1, 2^28]"
+            );
+        }
+        assert!(
+            counters.iter().any(|c| *c != counters[0]),
+            "16 sessions all started at {:#x}: the counter is not CSPRNG-seeded",
+            counters[0]
+        );
+    }
+
+    /// A seeded start changes nothing about advancing and exhaustion: from
+    /// the largest seed the counter climbs by one per send, and near the top
+    /// it sends up to `u32::MAX - 1` and then refuses rather than wrap.
+    #[test]
+    fn counter_advances_and_exhausts_from_a_high_start() {
+        let (mut a, mut b) = paired_sessions();
+        let sid = SessionId(1);
+        let send = |mgr: &mut SessionManager| {
+            mgr.encode_outbound(
+                sid,
+                None,
+                0x02,
+                ProtocolId::INTERACTION_MODEL,
+                b"x",
+                MrpFlags { reliable: false },
+                Instant::now(),
+            )
+        };
+
+        a.sessions.get_mut(&sid).unwrap().outbound_counter = MAX_INITIAL_COUNTER;
+        let out = send(&mut a).unwrap();
+        assert_eq!(out.message_counter, MessageCounter(MAX_INITIAL_COUNTER));
+        assert_eq!(
+            a.get(sid).unwrap().outbound_counter,
+            MAX_INITIAL_COUNTER + 1
+        );
+        // The peer accepts a first counter at the top of the seed range.
+        b.decode_inbound(&out.wire_bytes, Instant::now()).unwrap();
+
+        a.sessions.get_mut(&sid).unwrap().outbound_counter = u32::MAX - 2;
+        let out = send(&mut a).unwrap();
+        assert_eq!(out.message_counter, MessageCounter(u32::MAX - 2));
+        b.decode_inbound(&out.wire_bytes, Instant::now()).unwrap();
+        let out = send(&mut a).unwrap();
+        assert_eq!(out.message_counter, MessageCounter(u32::MAX - 1));
+        b.decode_inbound(&out.wire_bytes, Instant::now()).unwrap();
+        assert!(matches!(send(&mut a), Err(Error::CounterOverflow)));
+        assert_eq!(a.get(sid).unwrap().outbound_counter, u32::MAX);
     }
 
     #[test]

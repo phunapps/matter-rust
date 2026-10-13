@@ -30,7 +30,9 @@ from being read as a wildcard, and make the controller acknowledge every
 reliable response as soon as its exchange ends, instead of up to 200 ms later
 or never (the MRP entries, after the security entries in each crate's list).
 `matter-transport` also stops an oversized send from leaking an exchange slot,
-which could leave a session refusing every report the device sent.
+which could leave a session refusing every report the device sent, and
+starts each secure session's message counter at a random value, as the spec
+requires, instead of at 1.
 Commissioning now closes its own CASE session with a Secure Channel
 CloseSession, and both it and the controller honour one from the device.
 The Interaction Model parsers now reject a truncated message and bytes after
@@ -364,6 +366,40 @@ published release, `0.1.0` through `0.18.1`.
   been bounded since before `0.1.0`, and a fresh exchange has been recorded
   before framing since then (in `MrpState::prepare_outbound` through 0.4.0,
   then, from 0.5.0, in `encode_outbound` through `note_local_exchange`).
+
+### matter-transport: Fixed — a secure session's message counter starts at a random value
+
+- Matter 1.4 Core §4.6.1.1 and §4.6.2 (and §4.13.3.1, §4.14.1.2 and
+  §4.14.2.3 for PASE, CASE and CASE resumption) require every secure
+  session's outbound message counter to start at
+  `Crypto_DRBG(len = 28) + 1`, a CSPRNG value in `[1, 2^28]`. Every PASE and
+  CASE session, resumed ones included, started at 1 instead. The counter
+  travels in the cleartext message header, so a passive observer could read
+  how many messages we had sent on a session, and so its age and activity.
+  chip (`LocalSessionMessageCounter`, `src/transport/MessageCounter.h`, at
+  master 5cd2917a and at v1.4.2.0) and matter.js both randomise it.
+- Every `SessionManager::register_*` method now seeds it from the system
+  CSPRNG through `matter_crypto::random_bytes`, with chip's 28-bit mask plus
+  one. A resumed CASE session is a new session and gets a fresh random
+  start, as in chip, where each `SecureSession` builds its own counter.
+- If the CSPRNG fails, the counter starts at 1 and a `warn` is logged.
+  chip aborts the process there (`VerifyOrDie` in
+  `src/crypto/RandUtils.cpp`). A library should not abort its host, and an
+  error would make `register_*` fallible, a breaking change. The handshake
+  that produced the session's keys draws from the same CSPRNG and fails
+  closed without it, so in practice this fallback is never reached.
+- Confidentiality, integrity, replay protection and interoperability were
+  never affected: every session has fresh keys, so starting at 1 never
+  repeated a nonce, and peers accept any first counter above 0. Exhaustion
+  is unchanged: the counter still refuses to pass `u32::MAX` and reports
+  `Error::CounterOverflow` (or `MrpEvent::SessionCounterExhausted` for an
+  ACK), with about `2^32 - 2^28` messages available from the highest start.
+  No wire vector pins a session counter, so none changes. The unsecured
+  handshake counter in `matter-commissioning` already followed §4.6.1.1.
+- Not a breaking change: no signature or type changes.
+  `Session::outbound_counter` stays a public field that callers may set.
+- Affected: every published release, `0.1.0` through `0.7.3` (the counter has
+  started at 1 since the session manager was written, before `0.1.0`).
 
 ### matter-transport: Added — the Secure Channel CloseSession
 
