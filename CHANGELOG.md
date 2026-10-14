@@ -544,7 +544,7 @@ published release, `0.1.0` through `0.18.1`.
   first message.
 - `ReplayWindow::new` now starts in that state, with counter 0 marked as
   seen. A counter 0 is rejected with `Error::ReplayedCounter` (or
-  `Error::CounterTooOld` once the window has moved more than 31 past it).
+  `Error::CounterTooOld` once the window has moved more than 32 past it).
   Every counter from 1 up is still accepted as a first counter, the
   counters between 1 and a small first counter are still accepted once
   each, and replay handling is otherwise unchanged. A conforming peer never
@@ -555,6 +555,26 @@ published release, `0.1.0` through `0.18.1`.
   the same. `ReplayWindow` is not used there.
 - Not a breaking change: no signature or type changes. `ReplayWindow`'s
   fields are private, and only its starting state differs.
+- Affected: every published release, `0.1.0` through `0.7.3`.
+
+### matter-transport: Fixed — the replay window tracks the 32 counters behind the highest
+
+- `ReplayWindow` tracked only the 31 counters behind the highest one it had
+  accepted, so an unseen counter exactly 32 behind was rejected as too old.
+  Matter 1.4 Core §4.6.5.1 defines the window as
+  `max_message_counter - MSG_COUNTER_WINDOW_SIZE` to
+  `max_message_counter - 1`, with `MSG_COUNTER_WINDOW_SIZE` = 32, and chip
+  accepts that counter (`PeerMessageCounter::ClassifyNonFutureCounter`,
+  `offset <= CHIP_CONFIG_MESSAGE_COUNTER_WINDOW_SIZE`, identical at master
+  5cd2917a and at v1.4.2.0). A peer that reorders or retransmits across a
+  32-message gap lost that one message, and MRP retransmitted it in vain.
+- The window now uses chip's layout: the highest counter always counts as
+  seen, and bit `n - 1` records the counter `n` behind it, for `n` from 1
+  to 32. Every other accept and reject decision is unchanged, and a
+  differential test checks it, counter by counter, against a model of
+  chip's rules. `Error::CounterTooOld`'s `window_low` is now 32 below
+  `window_high` instead of 31.
+- Not a breaking change: no signature or type changes.
 - Affected: every published release, `0.1.0` through `0.7.3`.
 
 ### matter-transport: Added — the Secure Channel CloseSession

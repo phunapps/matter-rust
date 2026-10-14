@@ -248,38 +248,47 @@ pub fn decode_header(bytes: &[u8]) -> Result<(SecuredMessageHeader, &[u8])> {
 /// session, per Matter Core Specification §4.6.5 (the message reception
 /// state of §4.6.5.1).
 ///
-/// Tracks the highest counter seen plus a 32-bit bitmap covering it and
-/// the 31 counters immediately preceding it. Counters older than the
-/// window (below `highest_seen - 31`) are rejected as too old; counters in
-/// the window that have already been seen are rejected as duplicates;
-/// everything else is accepted and recorded.
+/// Tracks the highest counter seen (always counted as seen) plus a 32-bit
+/// bitmap of the 32 counters immediately behind it, `highest_seen - 1`
+/// down to `highest_seen - 32`, which is the spec's window of
+/// `MSG_COUNTER_WINDOW_SIZE` = 32 and chip's `PeerMessageCounter` layout.
+/// Counters further behind (below `highest_seen - 32`) are rejected as too
+/// old; the highest itself, and counters in the window that have already
+/// been seen, are rejected as duplicates; everything else is accepted and
+/// recorded.
 ///
-/// A new window starts synced at counter 0, with 0 itself marked as seen,
-/// so a peer's counter 0 is always rejected. A secure session's counters
+/// A new window starts synced at counter 0, so 0 is the highest and counts
+/// as seen, and a peer's counter 0 is always rejected (§4.14.1.2 for PASE
+/// and §4.14.2.3 for CASE set the peer's synchronized `max_message_counter`
+/// to 0). A secure session's counters
 /// start at 1 or higher (§4.6.1.1), and chip starts every secure session's
 /// reception state the same way (`PeerMessageCounter::SetCounter(
 /// kInitialSyncValue)` in `PairingSession::ActivateSecureSession`). Every
 /// counter from 1 up is accepted as a first counter.
 #[derive(Debug, Clone)]
 pub struct ReplayWindow {
+    /// The highest counter accepted (0 when nothing has been). Always counts
+    /// as seen.
     highest_seen: u32,
-    /// Bit `n` set ⇔ `highest_seen - n` has been observed.
-    /// Bit 0 always corresponds to `highest_seen` itself.
+    /// Bit `n - 1` set ⇔ `highest_seen - n` has been observed, for `n` in
+    /// `1..=32`.
     bitmap: u32,
 }
 
 impl ReplayWindow {
-    /// Width of the sliding window in counter slots (bits in `bitmap`).
+    /// Number of counters tracked behind the highest one (bits in the
+    /// bitmap): the spec's `MSG_COUNTER_WINDOW_SIZE`.
     pub const WIDTH: u32 = 32;
 
-    /// Create a window for a new secure session: synced at counter 0, with
-    /// 0 marked as seen. Any counter from 1 up is novel until recorded;
-    /// counter 0 is rejected as a duplicate.
+    /// Create a window for a new secure session: synced at counter 0, as
+    /// chip's `PeerMessageCounter::SetCounter(0)` is. Any counter from 1 up
+    /// is novel until recorded; counter 0 is the highest, so it is rejected
+    /// as a duplicate.
     #[must_use]
     pub fn new() -> Self {
         Self {
             highest_seen: 0,
-            bitmap: 1,
+            bitmap: 0,
         }
     }
 
@@ -294,21 +303,25 @@ impl ReplayWindow {
         let highest = self.highest_seen;
         if counter > highest {
             // Forward jump — always novel.
-            Ok(())
-        } else {
-            let offset = highest - counter;
-            if offset >= Self::WIDTH {
-                return Err(Error::CounterTooOld {
-                    counter,
-                    window_low: highest.saturating_sub(Self::WIDTH - 1),
-                    window_high: highest,
-                });
-            }
-            if self.bitmap & (1u32 << offset) != 0 {
-                return Err(Error::ReplayedCounter { counter });
-            }
-            Ok(())
+            return Ok(());
         }
+        if counter == highest {
+            // The highest always counts as seen.
+            return Err(Error::ReplayedCounter { counter });
+        }
+        // 1 <= offset here, since counter < highest.
+        let offset = highest - counter;
+        if offset > Self::WIDTH {
+            return Err(Error::CounterTooOld {
+                counter,
+                window_low: highest.saturating_sub(Self::WIDTH),
+                window_high: highest,
+            });
+        }
+        if self.bitmap & (1u32 << (offset - 1)) != 0 {
+            return Err(Error::ReplayedCounter { counter });
+        }
+        Ok(())
     }
 
     /// Check whether `counter` WOULD be rejected, without recording it or
@@ -326,10 +339,10 @@ impl ReplayWindow {
     ///
     /// # Errors
     ///
-    /// - [`Error::ReplayedCounter`] if `counter` is inside the window and
-    ///   has already been observed.
+    /// - [`Error::ReplayedCounter`] if `counter` is the highest seen, or is
+    ///   inside the window and has already been observed.
     /// - [`Error::CounterTooOld`] if `counter` is older than
-    ///   `highest_seen - 31`.
+    ///   `highest_seen - 32`.
     pub fn would_reject(&self, counter: u32) -> Result<()> {
         self.classify(counter)
     }
@@ -338,10 +351,10 @@ impl ReplayWindow {
     ///
     /// # Errors
     ///
-    /// - [`Error::ReplayedCounter`] if `counter` is inside the window and
-    ///   has already been observed.
+    /// - [`Error::ReplayedCounter`] if `counter` is the highest seen, or is
+    ///   inside the window and has already been observed.
     /// - [`Error::CounterTooOld`] if `counter` is older than
-    ///   `highest_seen - 31`.
+    ///   `highest_seen - 32`.
     pub fn check_and_record(&mut self, counter: u32) -> Result<()> {
         // Decide first (no mutation); only commit once the counter is
         // accepted. Keeps the reject logic identical to `would_reject`.
@@ -349,20 +362,22 @@ impl ReplayWindow {
 
         let highest = self.highest_seen;
         if counter > highest {
-            // Forward jump. Shift the bitmap so the new highest is bit 0
-            // and the previous highest moves to bit (counter - highest).
+            // Forward jump (chip `CommitWithPosition`). The previous highest
+            // becomes `shift` behind the new one, so it is marked at bit
+            // `shift - 1`; a jump past the window clears it. `checked_shl`
+            // because a shift of 32 would overflow `u32 <<`.
             let shift = counter - highest;
-            self.bitmap = if shift >= Self::WIDTH {
+            self.bitmap = if shift > Self::WIDTH {
                 0
             } else {
-                self.bitmap << shift
+                self.bitmap.checked_shl(shift).unwrap_or(0) | (1u32 << (shift - 1))
             };
-            self.bitmap |= 1;
             self.highest_seen = counter;
         } else {
-            // In-window, novel (classify already ruled out replay/old).
+            // In-window, novel (classify already ruled out the highest,
+            // replays and too-old counters, so 1 <= offset <= 32).
             let offset = highest - counter;
-            self.bitmap |= 1u32 << offset;
+            self.bitmap |= 1u32 << (offset - 1);
         }
         Ok(())
     }
@@ -1323,7 +1338,7 @@ mod tests {
 
         // The window must still be seeded at 5, not 1000 — so a genuine
         // follow-up at counter=6 is accepted. Pre-fix this failed as
-        // CounterTooOld (6 < 1000 - 31).
+        // CounterTooOld (6 < 1000 - 32).
         let genuine6 = encode_secured(
             &secured_header(6),
             b"world",
@@ -1729,14 +1744,15 @@ mod tests {
                 Err(Error::ReplayedCounter { counter: 100 })
             ));
 
-            // Agreement on a too-old counter (window covers 69..=100).
+            // Agreement on a too-old counter (the window tracks 68..=99
+            // behind the highest, 100).
             assert!(matches!(
-                w.would_reject(68),
-                Err(Error::CounterTooOld { counter: 68, .. })
+                w.would_reject(67),
+                Err(Error::CounterTooOld { counter: 67, .. })
             ));
             assert!(matches!(
-                w.check_and_record(68),
-                Err(Error::CounterTooOld { counter: 68, .. })
+                w.check_and_record(67),
+                Err(Error::CounterTooOld { counter: 67, .. })
             ));
 
             // Empty-window case: would_reject accepts anything.
@@ -1768,7 +1784,7 @@ mod tests {
 
         #[test]
         fn within_window_unseen_accepted() {
-            // After seeing 100, counters 100-31..=99 (within the 32-bit window)
+            // After seeing 100, counters 68..=99 (the 32-counter window)
             // that we have NOT yet seen must be accepted exactly once each.
             let mut w = ReplayWindow::new();
             w.check_and_record(100).unwrap();
@@ -1779,23 +1795,80 @@ mod tests {
             assert!(w.check_and_record(98).is_err());
         }
 
+        /// After seeing 100, the window tracks the 32 counters 68..=99
+        /// behind it (spec §4.6.5.1, `MSG_COUNTER_WINDOW_SIZE` = 32; chip
+        /// `PeerMessageCounter::ClassifyNonFutureCounter`, `offset <= 32`).
+        /// An unseen 68, exactly 32 behind, is accepted once; 67 and below
+        /// are too old.
         #[test]
         fn outside_window_rejected_as_too_old() {
-            // After seeing 100, the window covers 69..=100 (32 entries).
-            // 68 and below are too old.
             let mut w = ReplayWindow::new();
             w.check_and_record(100).unwrap();
-            let err = w.check_and_record(68).unwrap_err();
+            w.check_and_record(68).unwrap();
+            assert!(matches!(
+                w.check_and_record(68),
+                Err(Error::ReplayedCounter { counter: 68 })
+            ));
+            let err = w.check_and_record(67).unwrap_err();
             assert!(
-                matches!(err, Error::CounterTooOld { counter: 68, .. }),
-                "expected CounterTooOld for 68; got {err:?}",
+                matches!(
+                    err,
+                    Error::CounterTooOld {
+                        counter: 67,
+                        window_low: 68,
+                        window_high: 100
+                    }
+                ),
+                "expected CounterTooOld for 67; got {err:?}",
             );
+        }
+
+        /// A forward shift of exactly 32 keeps the old highest in the
+        /// window, marked seen (chip `CommitWithPosition` shifts and sets
+        /// bit `shift - 1`); a shift of 33 pushes it out.
+        #[test]
+        fn shift_of_exactly_32_keeps_the_old_highest_seen() {
+            let mut w = ReplayWindow::new();
+            w.check_and_record(1).unwrap();
+            w.check_and_record(33).unwrap();
+            assert!(matches!(
+                w.check_and_record(1),
+                Err(Error::ReplayedCounter { counter: 1 })
+            ));
+
+            let mut w = ReplayWindow::new();
+            w.check_and_record(1).unwrap();
+            w.check_and_record(34).unwrap();
+            assert!(matches!(
+                w.check_and_record(1),
+                Err(Error::CounterTooOld { counter: 1, .. })
+            ));
+        }
+
+        /// Counter 0 is marked seen until it leaves the window: a first
+        /// counter of 32 keeps it 32 behind (a duplicate), 33 pushes it out
+        /// (too old).
+        #[test]
+        fn counter_zero_at_the_window_edge() {
+            let mut w = ReplayWindow::new();
+            w.check_and_record(32).unwrap();
+            assert!(matches!(
+                w.check_and_record(0),
+                Err(Error::ReplayedCounter { counter: 0 })
+            ));
+
+            let mut w = ReplayWindow::new();
+            w.check_and_record(33).unwrap();
+            assert!(matches!(
+                w.check_and_record(0),
+                Err(Error::CounterTooOld { counter: 0, .. })
+            ));
         }
 
         #[test]
         fn forward_jump_slides_window() {
             // Going from 100 to 200 must accept 200 and forget everything
-            // older than (200 - 31) = 169.
+            // older than (200 - 32) = 168.
             let mut w = ReplayWindow::new();
             w.check_and_record(100).unwrap();
             w.check_and_record(200).unwrap();
@@ -1897,6 +1970,48 @@ mod replay_proptest {
                 if counter == 0 {
                     // Wrap-around isn't supported; we'd need re-keying.
                     break;
+                }
+            }
+        }
+
+        /// The window agrees, counter by counter, with a reference model of
+        /// chip's `PeerMessageCounter` for a secure unicast session: synced
+        /// at 0 (so 0 is seen), a counter is new iff it is ahead of the
+        /// highest, or at most 32 behind it and not yet seen. A seen counter
+        /// within 32 (the highest included) is a replay; anything further
+        /// behind is too old. Steps stay mostly within ±40 of the highest,
+        /// with occasional larger jumps.
+        #[test]
+        fn matches_chip_reference_model(
+            steps in proptest::collection::vec(
+                prop_oneof![8 => -40i64..=40, 1 => -200i64..=200],
+                1..200,
+            ),
+        ) {
+            let mut window = ReplayWindow::new();
+            let mut seen = std::collections::BTreeSet::from([0u32]);
+            let mut max = 0u32;
+            for step in steps {
+                let Ok(c) = u32::try_from((i64::from(max) + step).max(0)) else {
+                    continue;
+                };
+                let expected = if c > max {
+                    Ok(())
+                } else if max - c <= 32 {
+                    if seen.contains(&c) { Err("replay") } else { Ok(()) }
+                } else {
+                    Err("old")
+                };
+                let got = match window.check_and_record(c) {
+                    Ok(()) => Ok(()),
+                    Err(Error::ReplayedCounter { .. }) => Err("replay"),
+                    Err(Error::CounterTooOld { .. }) => Err("old"),
+                    Err(e) => panic!("unexpected error {e:?}"),
+                };
+                prop_assert_eq!(got, expected, "counter {} with max {}", c, max);
+                if expected.is_ok() {
+                    seen.insert(c);
+                    max = max.max(c);
                 }
             }
         }
