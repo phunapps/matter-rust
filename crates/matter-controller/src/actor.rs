@@ -22998,30 +22998,58 @@ mod tests {
         /// `None` if none arrives within `within`. Unlike [`Self::next_sent`],
         /// standalone ACKs are returned, not skipped.
         async fn next_frame(&mut self, within: Duration) -> Option<Sent> {
+            self.next_frame_with_header(within)
+                .await
+                .map(|(sent, _)| sent)
+        }
+
+        /// [`Self::next_frame`], also returning the frame's decrypted protocol
+        /// header, for asserting its `I` flag and piggybacked ACK counter.
+        async fn next_frame_with_header(
+            &mut self,
+            within: Duration,
+        ) -> Option<(Sent, ProtocolHeader)> {
             let Ok(Ok((wire, _))) = tokio::time::timeout(within, self.dev.recv_from()).await else {
                 return None;
             };
-            match self.device.decode_inbound(&wire, Instant::now()).unwrap() {
+            // Peek at the header with a throwaway replay window, so the real
+            // decode below still accepts the counter.
+            let header = {
+                let session = self.device.get(self.dev_sid).unwrap();
+                let (_, plaintext) = matter_transport::framing::decode_secured(
+                    &wire,
+                    &session.keys,
+                    session.role,
+                    &mut matter_transport::framing::ReplayWindow::new(),
+                    session.peer_nonce_node_id,
+                )
+                .unwrap();
+                matter_transport::protocol_header::decode_protocol_header(&plaintext)
+                    .unwrap()
+                    .0
+            };
+            let sent = match self.device.decode_inbound(&wire, Instant::now()).unwrap() {
                 DecodeInboundOutput::AckOnly {
                     exchange_id,
                     acked_counter,
                     ..
-                } => Some(Sent::Ack {
+                } => Sent::Ack {
                     exchange: exchange_id,
                     counter: acked_counter,
-                }),
+                },
                 DecodeInboundOutput::AppMessage {
                     exchange_id,
                     opcode,
                     is_initiator,
                     ..
-                } => Some(Sent::App {
+                } => Sent::App {
                     exchange: exchange_id,
                     opcode,
                     actor_initiated: is_initiator,
-                }),
+                },
                 other => panic!("unexpected frame from the actor: {other:?}"),
-            }
+            };
+            Some((sent, header))
         }
 
         /// Register a pending op on `exchange` as the request paths do:
@@ -23577,14 +23605,22 @@ mod tests {
             "the device's own exchange answered our request"
         );
         assert_eq!(w.actor.pending.len(), 1);
+        let (sent, header) = w.next_frame_with_header(SENT_WITHIN).await.unwrap();
         assert_eq!(
-            w.next_frame(SENT_WITHIN).await,
-            Some(Sent::Ack {
+            sent,
+            Sent::Ack {
                 exchange: ours.exchange_id,
                 counter: theirs.message_counter,
-            }),
-            "the device's message is ACKed at once, on its exchange"
+            },
+            "the device's message is ACKed at once"
         );
+        assert!(
+            !header
+                .exchange_flags
+                .contains(matter_transport::ExchangeFlags::INITIATOR),
+            "the ACK must go on the device's exchange (I=0)"
+        );
+        assert_eq!(header.ack_counter, Some(theirs.message_counter));
 
         let response = w
             .device
@@ -23649,14 +23685,20 @@ mod tests {
             .unwrap();
         let from = w.dev.local_addr();
         w.actor.handle_inbound(&theirs.wire_bytes, from).await;
+        let (sent, header) = w.next_frame_with_header(SENT_WITHIN).await.unwrap();
         assert_eq!(
-            w.next_frame(SENT_WITHIN).await,
-            Some(Sent::App {
+            sent,
+            Sent::App {
                 exchange: ours.exchange_id,
                 opcode: OP_STATUS_RESPONSE,
                 actor_initiated: false,
-            }),
+            },
             "the answer must go on the device's exchange"
+        );
+        assert_eq!(
+            header.ack_counter,
+            Some(theirs.message_counter),
+            "the answer must carry the report's ACK"
         );
         assert_eq!(w.actor.pending.len(), 1, "our request is still pending");
     }
