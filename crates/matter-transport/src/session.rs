@@ -24,7 +24,7 @@ use matter_crypto::pase::PaseSessionKeys;
 
 use crate::error::{Error, Result};
 use crate::framing::{
-    decode_secured_with_header, encode_secured_with_cipher, MessageCounter, NodeId, ReplayWindow,
+    decrypt_secured_with_header, encode_secured_with_cipher, MessageCounter, NodeId, ReplayWindow,
     SecuredMessageFlags, SecuredMessageHeader, SecurityFlags, SessionId,
 };
 use crate::mrp::{
@@ -349,15 +349,19 @@ pub enum DecodeInboundOutput {
         /// Counter that was acknowledged.
         acked_counter: MessageCounter,
     },
-    /// The inbound packet's counter sat inside the replay window AND
-    /// matched a recently-cached reliable peer message. The manager
-    /// re-built a standalone-ack packet (consuming one outbound counter
-    /// slot) to re-send to the peer; the caller need not deliver any
-    /// application payload.
+    /// The inbound packet authenticated but its counter is a duplicate (the
+    /// replay window's highest, an already-seen counter in the window, a
+    /// counter older than the window, or 0), and it has R set on a session
+    /// that is not `transport_reliable`. As chip does, the manager built a
+    /// standalone ACK for it (consuming one outbound counter slot), on the
+    /// duplicate's exchange with the opposite `I` flag, and dropped any ACK
+    /// still buffered for that counter, so it is acknowledged exactly once. The
+    /// duplicate's piggybacked ACK was not processed, and it must not be
+    /// delivered: send `ack_packet` to the peer and nothing else.
     DuplicateReliableAckResent {
         /// Local session ID this message was demuxed onto.
         session_id: SessionId,
-        /// Exchange identifier from the cached entry.
+        /// Exchange identifier, from the duplicate's protocol header.
         exchange_id: u16,
         /// Fully-encrypted standalone-ack packet ready to send.
         ack_packet: Vec<u8>,
@@ -1123,13 +1127,17 @@ impl SessionManager {
     /// Decode + verify + replay-check an inbound packet, then dispatch into
     /// MRP for exchange / ack / duplicate-reliable handling.
     ///
-    /// The replay window is consulted as part of the framing decode (the
-    /// cipher-taking internal twin of [`crate::framing::decode_secured`]);
-    /// if it rejects the counter the manager checks the per-session
-    /// recent-reliable cache and, on a hit, builds a fresh standalone-ack
-    /// packet to re-send (the
-    /// [`DecodeInboundOutput::DuplicateReliableAckResent`] variant). Any ACK
-    /// still buffered for that counter is dropped, so it is sent once.
+    /// The replay window is consulted only after the packet authenticates
+    /// (TRAN-1). If it rejects the counter as a duplicate (`ReplayedCounter`
+    /// or `CounterTooOld`, counter 0 included) and the message has R set on
+    /// a session that is not `transport_reliable`, the manager builds a
+    /// standalone ACK for it on its own exchange with the opposite role (the
+    /// [`DecodeInboundOutput::DuplicateReliableAckResent`] variant), as
+    /// chip's `ExchangeManager::SendStandaloneAckIfNeeded` and
+    /// `ReliableMessageContext::HandleNeedsAckInner` do. Any ACK still
+    /// buffered for that counter is dropped, so it is sent once. A
+    /// duplicate's piggybacked ACK is not processed, and the duplicate is
+    /// never delivered.
     ///
     /// # Errors
     ///
@@ -1138,8 +1146,8 @@ impl SessionManager {
     /// - [`Error::UnknownSession`] if the header's `session_id` does not
     ///   match a registered session.
     /// - [`Error::ReplayedCounter`] / [`Error::CounterTooOld`] per the
-    ///   session's replay window — but only when the counter is NOT a
-    ///   recognised duplicate-reliable resend.
+    ///   session's replay window, for a duplicate that gets no ACK: one
+    ///   without R, or any duplicate on a `transport_reliable` session.
     /// - [`Error::DecryptionFailed`] on AES-CCM tag failure.
     /// - [`Error::MalformedProtocolHeader`] if the decrypted bytes do not
     ///   parse as a valid Matter protocol header.
@@ -1163,19 +1171,16 @@ impl SessionManager {
         // borrows of `session` end before the match arms below use `session`
         // again.
         let nonce_node_id = session.peer_nonce_node_id;
-        let decoded = {
+        let (replay, decrypted) = {
             let (cipher, replay_window) = session.inbound_cipher_and_window();
-            decode_secured_with_header(
-                packet,
-                &peeked,
-                header_len,
-                cipher,
-                replay_window,
-                nonce_node_id,
-            )
+            let plaintext =
+                decrypt_secured_with_header(packet, &peeked, header_len, cipher, nonce_node_id)?;
+            // TRAN-1: only an authenticated message reaches the replay
+            // window, and only it can earn a duplicate ACK below.
+            (replay_window.check_and_record(peer_counter.0), plaintext)
         };
-        match decoded {
-            Ok(decrypted) => {
+        match replay {
+            Ok(()) => {
                 let outcome = session.mrp.process_inbound(decrypted, peer_counter, now)?;
                 // A transport_reliable session (BTP) skips ack scheduling
                 // entirely, even if the peer's message carried R=1:
@@ -1232,34 +1237,57 @@ impl SessionManager {
                     }
                 })
             }
-            Err(Error::ReplayedCounter { counter }) => {
-                // Check whether MRP recognises this as a reliable duplicate.
-                if let Some(view) = session
-                    .mrp
-                    .check_duplicate_reliable(MessageCounter(counter))
-                {
-                    let ack_packet = Self::build_standalone_ack_packet(
-                        session,
-                        view.exchange_id,
-                        MessageCounter(counter),
-                        view.is_local_initiator,
-                    )?;
-                    // The duplicate gets its ACK now; drop any copy still
-                    // buffered for the same counter so a later finish or timer
-                    // does not send a second (chip clears its pending flag
-                    // here too, `ReliableMessageContext.cpp:120-153`).
-                    session.mrp.forget_ack_for(MessageCounter(counter));
-                    Ok(DecodeInboundOutput::DuplicateReliableAckResent {
-                        session_id: local_id,
-                        exchange_id: view.exchange_id,
-                        ack_packet,
-                    })
-                } else {
-                    Err(Error::ReplayedCounter { counter })
-                }
+            Err(err @ (Error::ReplayedCounter { .. } | Error::CounterTooOld { .. })) => {
+                Self::answer_duplicate(session, local_id, peer_counter, &decrypted, err)
             }
             Err(other) => Err(other),
         }
+    }
+
+    /// Answer an authenticated duplicate the way chip does
+    /// (`SessionManager.cpp:963-1005`, `ExchangeMgr.cpp:415-446`,
+    /// `ReliableMessageContext.cpp:116-153`, the same at master 5cd2917a and
+    /// v1.4.2.0): if it has R set and the session runs MRP (not
+    /// `transport_reliable`; chip's `AllowsMRP()` is UDP-only), build one
+    /// standalone ACK for its counter, on its exchange with the opposite
+    /// role, and drop any ACK still buffered for that counter so it is sent
+    /// once. Its piggybacked ACK is not processed, no exchange state is
+    /// touched, and nothing is delivered. Otherwise return `replay_err`.
+    fn answer_duplicate(
+        session: &mut Session,
+        session_id: SessionId,
+        counter: MessageCounter,
+        plaintext: &[u8],
+        replay_err: Error,
+    ) -> Result<DecodeInboundOutput> {
+        let (header, _) = crate::protocol_header::decode_protocol_header(plaintext)?;
+        let reliable = header
+            .exchange_flags
+            .contains(crate::protocol_header::ExchangeFlags::RELIABLE);
+        if !reliable || session.transport_reliable {
+            return Err(replay_err);
+        }
+        // The duplicate's I flag names its sender's role, so the ACK goes
+        // out with the opposite one (chip creates the ephemeral exchange
+        // with `!payloadHeader.IsInitiator()`).
+        let is_local_initiator = !header
+            .exchange_flags
+            .contains(crate::protocol_header::ExchangeFlags::INITIATOR);
+        let ack_packet = Self::build_standalone_ack_packet(
+            session,
+            header.exchange_id,
+            counter,
+            is_local_initiator,
+        )?;
+        // The duplicate gets its ACK now; drop any copy still buffered for
+        // the same counter so a later finish or timer does not send a second
+        // (chip clears its pending flag here too).
+        session.mrp.forget_ack_for(counter);
+        Ok(DecodeInboundOutput::DuplicateReliableAckResent {
+            session_id,
+            exchange_id: header.exchange_id,
+            ack_packet,
+        })
     }
 
     /// Earliest pending MRP deadline across every registered session, or
@@ -2664,6 +2692,244 @@ mod tests {
                 DecodeInboundOutput::DuplicateReliableAckResent { .. }
             ),
             "an authenticated reliable duplicate must be re-acked; got {second:?}"
+        );
+    }
+
+    // --- Every authenticated reliable duplicate is ACKed (chip) ---
+    //
+    // chip classifies max, seen-in-window and before-window counters alike as
+    // duplicates (SessionManager.cpp:963-1005), and the exchange layer ACKs any
+    // duplicate with R set on an MRP session, on its own exchange or on an
+    // ephemeral one with role !I (ExchangeMgr.cpp:415-446), without processing
+    // its piggybacked ACK or delivering it (ExchangeContext.cpp:543/572;
+    // ReliableMessageContext.cpp:116-153).
+
+    /// The protocol header and acked counter of a standalone ACK `packet`
+    /// that `b` built, as `a` decodes it.
+    fn ack_seen_by(
+        a: &mut SessionManager,
+        packet: &[u8],
+        now: Instant,
+    ) -> (crate::protocol_header::ProtocolHeader, MessageCounter) {
+        let header = protocol_header_of(a, SessionId(1), packet);
+        let acked = match a.decode_inbound(packet, now).unwrap() {
+            DecodeInboundOutput::AckOnly { acked_counter, .. } => acked_counter,
+            other => panic!("expected AckOnly, got {other:?}"),
+        };
+        (header, acked)
+    }
+
+    /// A reliable message that arrives again after the window has moved
+    /// more than 32 past it (`CounterTooOld`) is still acknowledged, once, on its
+    /// own exchange with the opposite role. Before the fix only a counter
+    /// still in the window and in MRP's recent cache got an ACK.
+    #[test]
+    fn a_too_old_reliable_duplicate_is_acked_once() {
+        let (mut a, mut b) = paired_sessions();
+        let sid = SessionId(1);
+        let now = Instant::now();
+        let m = a
+            .encode_outbound(
+                sid,
+                None,
+                0x08,
+                ProtocolId::INTERACTION_MODEL,
+                b"req",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+        assert!(matches!(
+            b.decode_inbound(&m.wire_bytes, now).unwrap(),
+            DecodeInboundOutput::AppMessage { .. }
+        ));
+        // Move b's window 40 past m.
+        a.get_mut(sid).unwrap().outbound_counter = m.message_counter.0 + 40;
+        let jump = a
+            .encode_outbound(
+                sid,
+                None,
+                0x08,
+                ProtocolId::INTERACTION_MODEL,
+                b"later",
+                MrpFlags::default(),
+                now,
+            )
+            .unwrap();
+        b.decode_inbound(&jump.wire_bytes, now).unwrap();
+
+        let ack_packet = match b.decode_inbound(&m.wire_bytes, now).unwrap() {
+            DecodeInboundOutput::DuplicateReliableAckResent {
+                exchange_id,
+                ack_packet,
+                ..
+            } => {
+                assert_eq!(exchange_id, m.exchange_id);
+                ack_packet
+            }
+            other => panic!("expected DuplicateReliableAckResent, got {other:?}"),
+        };
+        let (header, acked) = ack_seen_by(&mut a, &ack_packet, now);
+        assert_eq!(acked, m.message_counter);
+        assert_eq!(header.exchange_id, m.exchange_id);
+        assert!(
+            !header
+                .exchange_flags
+                .contains(crate::protocol_header::ExchangeFlags::INITIATOR),
+            "m had I=1, so its ACK has I=0"
+        );
+        // One ACK only: the buffered one for m went with it.
+        let later = b.handle_timeout(now + std::time::Duration::from_secs(1));
+        assert!(standalone_acks(&later).is_empty(), "{later:?}");
+    }
+
+    /// A reliable message with counter 0 is a duplicate (never delivered),
+    /// but it is acknowledged, as chip acknowledges it; counter 1 is still
+    /// accepted after.
+    #[test]
+    fn a_counter_zero_reliable_message_is_acked_not_delivered() {
+        let (mut a, mut b) = paired_sessions();
+        let sid = SessionId(1);
+        let now = Instant::now();
+        a.get_mut(sid).unwrap().outbound_counter = 0;
+        let zero = a
+            .encode_outbound(
+                sid,
+                None,
+                0x08,
+                ProtocolId::INTERACTION_MODEL,
+                b"zero",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+        let ack_packet = match b.decode_inbound(&zero.wire_bytes, now).unwrap() {
+            DecodeInboundOutput::DuplicateReliableAckResent { ack_packet, .. } => ack_packet,
+            other => panic!("expected DuplicateReliableAckResent, got {other:?}"),
+        };
+        let (_, acked) = ack_seen_by(&mut a, &ack_packet, now);
+        assert_eq!(acked, MessageCounter(0));
+
+        let one = a
+            .encode_outbound(
+                sid,
+                None,
+                0x08,
+                ProtocolId::INTERACTION_MODEL,
+                b"one",
+                MrpFlags::default(),
+                now,
+            )
+            .unwrap();
+        assert_eq!(one.message_counter, MessageCounter(1));
+        assert!(matches!(
+            b.decode_inbound(&one.wire_bytes, now).unwrap(),
+            DecodeInboundOutput::AppMessage { .. }
+        ));
+    }
+
+    /// A duplicate without R gets no ACK: the replay error is returned and
+    /// no outbound counter is spent.
+    #[test]
+    fn an_unreliable_duplicate_is_not_acked() {
+        let (mut a, mut b) = paired_sessions();
+        let sid = SessionId(1);
+        let now = Instant::now();
+        let m = a
+            .encode_outbound(
+                sid,
+                None,
+                0x08,
+                ProtocolId::INTERACTION_MODEL,
+                b"x",
+                MrpFlags::default(),
+                now,
+            )
+            .unwrap();
+        b.decode_inbound(&m.wire_bytes, now).unwrap();
+        let before = b.get(sid).unwrap().outbound_counter;
+        assert!(matches!(
+            b.decode_inbound(&m.wire_bytes, now),
+            Err(Error::ReplayedCounter { .. })
+        ));
+        assert_eq!(b.get(sid).unwrap().outbound_counter, before);
+    }
+
+    /// A `transport_reliable` (BTP) session never ACKs, a duplicate
+    /// included: chip's `AllowsMRP()` is UDP-only. Before the fix a
+    /// duplicate still in MRP's recent cache got an ACK here.
+    #[test]
+    fn a_transport_reliable_session_does_not_ack_a_duplicate() {
+        let (mut a, mut b) = paired_sessions();
+        let sid = SessionId(1);
+        b.get_mut(sid).unwrap().transport_reliable = true;
+        let now = Instant::now();
+        let m = a
+            .encode_outbound(
+                sid,
+                None,
+                0x08,
+                ProtocolId::INTERACTION_MODEL,
+                b"x",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+        b.decode_inbound(&m.wire_bytes, now).unwrap();
+        let before = b.get(sid).unwrap().outbound_counter;
+        let result = b.decode_inbound(&m.wire_bytes, now);
+        assert!(
+            matches!(result, Err(Error::ReplayedCounter { .. })),
+            "{result:?}"
+        );
+        assert_eq!(b.get(sid).unwrap().outbound_counter, before);
+    }
+
+    /// A duplicate's piggybacked ACK is not processed (chip
+    /// `ExchangeContext::HandleMessage` skips `HandleRcvdAck` for a
+    /// duplicate): our retransmit stays pending. The duplicate here is a
+    /// counter-0 reply that carries an ACK for our reliable request.
+    #[test]
+    fn a_duplicates_piggybacked_ack_is_ignored() {
+        let (mut a, mut b) = paired_sessions();
+        let sid = SessionId(1);
+        let now = Instant::now();
+        let y = b
+            .encode_outbound(
+                sid,
+                None,
+                0x08,
+                ProtocolId::INTERACTION_MODEL,
+                b"y",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+        a.decode_inbound(&y.wire_bytes, now).unwrap();
+        a.get_mut(sid).unwrap().outbound_counter = 0;
+        let reply = a
+            .encode_outbound(
+                sid,
+                Some(y.exchange_id),
+                0x09,
+                ProtocolId::INTERACTION_MODEL,
+                b"reply",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+        assert!(reply.piggyback_acked, "the reply carries the ACK for y");
+        assert!(matches!(
+            b.decode_inbound(&reply.wire_bytes, now).unwrap(),
+            DecodeInboundOutput::DuplicateReliableAckResent { .. }
+        ));
+        let later = b.handle_timeout(now + std::time::Duration::from_secs(30));
+        assert!(
+            later.iter().any(|e| matches!(
+                e,
+                MrpEvent::Retransmit { counter, .. } if *counter == y.message_counter
+            )),
+            "y's retransmit must still be pending; got {later:?}"
         );
     }
 

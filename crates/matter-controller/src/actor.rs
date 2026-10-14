@@ -24343,6 +24343,28 @@ mod tests {
         );
     }
 
+    /// An authenticated duplicate with R set is acknowledged and never handled, as
+    /// chip ACKs it (ExchangeMgr.cpp:415-446) and drops it. Here the device's
+    /// counter is 0, which every secure session treats as a duplicate: a
+    /// stray report would otherwise draw a StatusResponse(InvalidSubscription),
+    /// so the ACK must be the only thing the actor sends. Before the
+    /// transport fix the duplicate got no ACK at all.
+    #[tokio::test]
+    async fn an_authenticated_duplicate_is_acked_and_not_handled() {
+        let mut w = wired_actor();
+        w.device.get_mut(w.dev_sid).unwrap().outbound_counter = 0;
+        let report = build_report_data(1, 0x06, 0x0000, &matter_codec::Value::Bool(true));
+        let (exchange, counter) = w
+            .deliver_counted(None, ProtocolId::INTERACTION_MODEL, OP_REPORT_DATA, &report)
+            .await;
+        assert_eq!(counter, matter_transport::MessageCounter(0));
+        assert_eq!(
+            w.next_frame(SENT_WITHIN).await,
+            Some(Sent::Ack { exchange, counter })
+        );
+        assert_eq!(w.next_frame(NOTHING_SENT_WITHIN).await, None);
+    }
+
     /// Mid-exchange guard: the `StatusResponse` to our `TimedRequest` does not end
     /// the exchange. Its ACK rides the action we send next on the same
     /// exchange, with our I flag; no standalone ACK goes first. A flush here

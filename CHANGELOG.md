@@ -577,6 +577,39 @@ published release, `0.1.0` through `0.18.1`.
 - Not a breaking change: no signature or type changes.
 - Affected: every published release, `0.1.0` through `0.7.3`.
 
+### matter-transport: Fixed — every authenticated reliable duplicate is ACKed
+
+- A duplicate with R set (a retransmit whose ACK was lost) got an ACK only
+  if its counter was still in the replay window and in MRP's 32-entry cache
+  of recent reliable messages. A duplicate older than the window, one the
+  cache had evicted, and a counter-0 message got none. The sender then
+  retransmitted until MRP gave up, and could fail an exchange the
+  controller had already completed. chip ACKs every authenticated
+  duplicate with R set on an MRP session: `SessionManager` classifies the
+  highest counter, a seen in-window counter and a counter before the window
+  alike as duplicates (`SessionManager.cpp:963-1005` at master 5cd2917a),
+  and the exchange layer sends one standalone ACK for it, on its exchange
+  or on an ephemeral one with the opposite role
+  (`ExchangeMgr.cpp:415-446`, `ReliableMessageContext.cpp:116-153`). The
+  same holds at v1.4.2.0.
+- `SessionManager::decode_inbound` now does the same, from the duplicate's
+  decrypted protocol header. Its result is the existing
+  `DecodeInboundOutput::DuplicateReliableAckResent`, which every caller
+  already sends: the controller actor, the OTA provider server and the
+  commissioning exchange helpers. The duplicate's piggybacked ACK is not
+  processed, no exchange state changes, and nothing is delivered. Any ACK
+  still buffered for its counter is dropped, so it is ACKed exactly once.
+- A duplicate without R, and any duplicate on a `transport_reliable` (BTP)
+  session, still returns `Error::ReplayedCounter` or `Error::CounterTooOld`
+  and sends nothing. chip's `AllowsMRP()` is UDP-only. A BTP duplicate
+  that was still cached used to get an ACK, which BTP never needs.
+- The replay check still runs only after the AEAD tag verifies (TRAN-1),
+  so a forged duplicate gets no ACK and spends no counter.
+- Not a breaking change: no signature or type changes.
+  `MrpState::check_duplicate_reliable` stays and still answers from its
+  cache; `decode_inbound` just no longer consults it.
+- Affected: every published release, `0.1.0` through `0.7.3`.
+
 ### matter-transport: Added — the Secure Channel CloseSession
 
 - `matter_transport::secure_channel` encodes and recognises the Secure

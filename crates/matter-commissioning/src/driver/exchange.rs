@@ -583,6 +583,90 @@ mod tests {
         (ctrl, dev)
     }
 
+    /// An authenticated duplicate that arrives while the driver waits is
+    /// acknowledged, not taken as the response, and the round trip still
+    /// completes.
+    /// The duplicate here is a reliable message with counter 0, which every
+    /// secure session treats as a duplicate (chip ACKs it, `ExchangeMgr.cpp:
+    /// 415-446`). Before the transport fix it surfaced as `ReplayedCounter`
+    /// and aborted the exchange.
+    #[tokio::test]
+    async fn secured_round_trip_acks_an_authenticated_duplicate() {
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = matter_transport::SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+
+        let controller = secured_round_trip(
+            &ctrl_io,
+            &mut ctrl,
+            session,
+            dev_addr,
+            0x08,
+            ProtocolId::INTERACTION_MODEL,
+            b"req",
+        );
+
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, .. } =
+                dev.decode_inbound(&pkt, Instant::now()).unwrap()
+            else {
+                panic!("expected an application message");
+            };
+            // A reliable duplicate (counter 0) on the device's own exchange.
+            let saved = dev.get(session).unwrap().outbound_counter;
+            dev.get_mut(session).unwrap().outbound_counter = 0;
+            let dup = dev
+                .encode_outbound(
+                    session,
+                    None,
+                    0x05,
+                    ProtocolId::INTERACTION_MODEL,
+                    b"dup",
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev.get_mut(session).unwrap().outbound_counter = saved;
+            dev_io.send_to(&dup.wire_bytes, ctrl_addr).await.unwrap();
+            // The driver ACKs it, naming counter 0. Bounded, so a driver
+            // that sends nothing fails here instead of hanging the join.
+            let (ack, _) =
+                tokio::time::timeout(std::time::Duration::from_secs(5), dev_io.recv_from())
+                    .await
+                    .expect("the driver must ACK the duplicate")
+                    .unwrap();
+            match dev.decode_inbound(&ack, Instant::now()).unwrap() {
+                DecodeInboundOutput::AckOnly {
+                    exchange_id: acked_on,
+                    acked_counter,
+                    ..
+                } => {
+                    assert_eq!(acked_on, dup.exchange_id);
+                    assert_eq!(acked_counter, matter_transport::MessageCounter(0));
+                }
+                other => panic!("expected the duplicate's ACK, got {other:?}"),
+            }
+            let out = dev
+                .encode_outbound(
+                    session,
+                    Some(exchange_id),
+                    0x09,
+                    ProtocolId::INTERACTION_MODEL,
+                    b"resp",
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+        };
+
+        let (got, ()) = tokio::join!(controller, device);
+        assert_eq!(got.unwrap().payload, b"resp");
+    }
+
     #[tokio::test]
     async fn secured_round_trip_retransmits_dropped_request() {
         let (mut ctrl, mut dev) = paired_pase_sessions();

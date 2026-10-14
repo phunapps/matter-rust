@@ -524,19 +524,24 @@ pub fn decode_secured(
         crate::session::SessionRole::Responder => &keys.i2r_key,
     };
 
-    let plaintext = decode_secured_with_header(
+    let plaintext = decrypt_secured_with_header(
         bytes,
         &header,
         header_len,
         &matter_crypto::aead::SessionAead::new(key),
-        replay_window,
         nonce_source_node_id,
     )?;
+    // TRAN-1: authenticated, so it is now safe to COMMIT the counter to the
+    // replay window. A forged datagram never reaches this point.
+    replay_window.check_and_record(header.message_counter.0)?;
     Ok((header, plaintext))
 }
 
-/// [`decode_secured`] with the header already parsed and the AES-CCM cipher
-/// supplied by the caller.
+/// The decrypt-and-authenticate half of [`decode_secured`], with the header
+/// already parsed and the AES-CCM cipher supplied by the caller. It does not
+/// touch a replay window: the caller checks the counter afterwards, and must
+/// never before (TRAN-1), so that only an authenticated message is
+/// classified and only an authenticated duplicate can earn an ACK.
 ///
 /// `header` MUST be the result of [`decode_header`] on `bytes`, and
 /// `header_len` the number of leading bytes it consumed (i.e.
@@ -551,27 +556,26 @@ pub fn decode_secured(
 ///
 /// # Errors
 ///
-/// Same as [`decode_secured`], plus [`Error::MalformedHeader`] if
-/// `header_len` is past the end of `bytes` (a caller-contract violation; we
-/// bound-check rather than panic).
-pub(crate) fn decode_secured_with_header(
+/// - [`Error::DecryptionFailed`] if the AES-CCM tag does not verify.
+/// - [`Error::MalformedHeader`] if `header_len` is past the end of `bytes`
+///   (a caller-contract violation; we bound-check rather than panic).
+pub(crate) fn decrypt_secured_with_header(
     bytes: &[u8],
     header: &SecuredMessageHeader,
     header_len: usize,
     cipher: &matter_crypto::aead::SessionAead,
-    replay_window: &mut ReplayWindow,
     nonce_source_node_id: u64,
 ) -> Result<Vec<u8>> {
     // TRAN-1: replay classification happens AFTER authentication, never
-    // before. The header (session id, counter) is unauthenticated cleartext,
-    // so we do NOT run a pre-decrypt reject here — an attacker who replays a
-    // previously-seen reliable counter with any ciphertext would otherwise be
-    // reported to the caller as `ReplayedCounter`, which drives the MRP
-    // duplicate-ack path (`SessionManager::decode_inbound`) into emitting an
-    // encrypted standalone ack and burning an outbound counter for a datagram
-    // that never authenticated. We decrypt first; only an authenticated
-    // duplicate reaches `check_and_record` below and yields `ReplayedCounter`.
-    // (chip does the same: decrypt+verify before message-counter verification,
+    // before, and is the caller's step. The header (session id, counter) is
+    // unauthenticated cleartext, so there is no pre-decrypt reject here — an
+    // attacker who replays a previously-seen reliable counter with any
+    // ciphertext would otherwise be reported as `ReplayedCounter`, which
+    // drives the MRP duplicate-ack path (`SessionManager::decode_inbound`)
+    // into emitting an encrypted standalone ack and burning an outbound
+    // counter for a datagram that never authenticated. We decrypt first; the
+    // caller checks the window only after this returns Ok. (chip does the
+    // same: decrypt+verify before message-counter verification,
     // `SessionManager.cpp:963`.)
 
     // The AAD is the on-the-wire header — the leading `header_len` bytes of
@@ -585,14 +589,9 @@ pub(crate) fn decode_secured_with_header(
         .ok_or(Error::MalformedHeader(header_len))?;
     let nonce = build_nonce(header, nonce_source_node_id);
 
-    let plaintext = cipher
+    cipher
         .decrypt(&nonce, aad, rest)
-        .map_err(|_| Error::DecryptionFailed)?;
-
-    // Authenticated: now it is safe to COMMIT the counter to the replay
-    // window. A forged datagram never reaches this point.
-    replay_window.check_and_record(header.message_counter.0)?;
-    Ok(plaintext)
+        .map_err(|_| Error::DecryptionFailed)
 }
 
 /// Encode + encrypt a Matter **group** secured message (Matter Core Spec
@@ -1264,16 +1263,9 @@ mod tests {
         // pre-parsed header, as `SessionManager::decode_inbound` does.
         let (parsed, rest) = decode_header(&public).unwrap();
         let header_len = public.len() - rest.len();
-        let mut window = ReplayWindow::new();
-        let plaintext = decode_secured_with_header(
-            &public,
-            &parsed,
-            header_len,
-            &cipher,
-            &mut window,
-            nonce_node_id,
-        )
-        .unwrap();
+        let plaintext =
+            decrypt_secured_with_header(&public, &parsed, header_len, &cipher, nonce_node_id)
+                .unwrap();
         assert_eq!(plaintext, payload);
 
         // ...and the public decoder accepts the with-cipher frame.

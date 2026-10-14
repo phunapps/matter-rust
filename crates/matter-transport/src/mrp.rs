@@ -34,10 +34,9 @@ pub const MAX_EXCHANGES_PER_SESSION: usize = 256;
 /// Most ACKs held for reliable messages a newer reliable message on the same
 /// exchange displaced. A conformant peer never has two unacknowledged
 /// reliable messages on one exchange, so this only bounds a misbehaving one;
-/// past it the displaced ACK is dropped, and the duplicate path
-/// ([`MrpState::check_duplicate_reliable`]) ACKs the peer's retransmit of
-/// that message instead, while the message is still in the 32-entry
-/// recent-reliable cache (a peer that keeps flooding can evict it first).
+/// past it the displaced ACK is dropped, and the duplicate path in
+/// [`SessionManager::decode_inbound`](crate::SessionManager::decode_inbound)
+/// ACKs the peer's retransmit of that message instead.
 const MAX_DISPLACED_ACKS: usize = 32;
 
 /// Spec §4.12.8. Growth factor applied per retransmit beyond the threshold.
@@ -1291,9 +1290,13 @@ impl MrpState {
 
     /// Look up `peer_counter` in the 32-entry recent-reliable cache.
     /// Returns `Some(view)` if the counter was seen on a recent reliable
-    /// inbound (the wider system uses this to trigger an ack-resend
-    /// without re-delivering the application payload), or `None` if the
-    /// counter is not cached (either never seen or already evicted).
+    /// inbound, or `None` if the counter is not cached (either never seen or
+    /// already evicted).
+    ///
+    /// [`SessionManager::decode_inbound`](crate::SessionManager::decode_inbound)
+    /// no longer consults it: it ACKs every authenticated duplicate that has
+    /// R set, from the duplicate's own protocol header, as chip does, whether
+    /// or not the counter is still cached.
     ///
     /// Linear scan over 32 slots — trivial cost.
     #[must_use]
@@ -3280,9 +3283,8 @@ mod tests {
     }
 
     /// A peer that floods one exchange with reliable messages cannot grow the
-    /// displaced queue without bound; past the cap, the duplicate path ACKs
-    /// its retransmits instead, while they are still in the recent-reliable
-    /// cache.
+    /// displaced queue without bound; past the cap, the duplicate path in
+    /// `SessionManager::decode_inbound` ACKs its retransmits instead.
     #[test]
     fn displaced_acks_are_bounded() {
         let mut mrp = MrpState::new(cfg());
