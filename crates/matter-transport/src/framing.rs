@@ -244,17 +244,25 @@ pub fn decode_header(bytes: &[u8]) -> Result<(SecuredMessageHeader, &[u8])> {
     Ok((parsed, &bytes[offset..]))
 }
 
-/// Sliding-window dedup for inbound message counters per Matter Core
-/// Specification §4.6.5 (the message reception state of §4.6.5.1).
+/// Sliding-window dedup for inbound message counters on a secure unicast
+/// session, per Matter Core Specification §4.6.5 (the message reception
+/// state of §4.6.5.1).
 ///
-/// Tracks the highest counter seen plus a 32-bit bitmap covering the 32
-/// counters immediately preceding it. Counters older than the window
-/// (below `highest_seen - 31`) are rejected as too old; counters in the
-/// window that have already been seen are rejected as duplicates;
+/// Tracks the highest counter seen plus a 32-bit bitmap covering it and
+/// the 31 counters immediately preceding it. Counters older than the
+/// window (below `highest_seen - 31`) are rejected as too old; counters in
+/// the window that have already been seen are rejected as duplicates;
 /// everything else is accepted and recorded.
+///
+/// A new window starts synced at counter 0, with 0 itself marked as seen,
+/// so a peer's counter 0 is always rejected. A secure session's counters
+/// start at 1 or higher (§4.6.1.1), and chip starts every secure session's
+/// reception state the same way (`PeerMessageCounter::SetCounter(
+/// kInitialSyncValue)` in `PairingSession::ActivateSecureSession`). Every
+/// counter from 1 up is accepted as a first counter.
 #[derive(Debug, Clone)]
 pub struct ReplayWindow {
-    highest_seen: Option<u32>,
+    highest_seen: u32,
     /// Bit `n` set ⇔ `highest_seen - n` has been observed.
     /// Bit 0 always corresponds to `highest_seen` itself.
     bitmap: u32,
@@ -264,13 +272,14 @@ impl ReplayWindow {
     /// Width of the sliding window in counter slots (bits in `bitmap`).
     pub const WIDTH: u32 = 32;
 
-    /// Create an empty window — every counter is novel until the first
-    /// `check_and_record` call.
+    /// Create a window for a new secure session: synced at counter 0, with
+    /// 0 marked as seen. Any counter from 1 up is novel until recorded;
+    /// counter 0 is rejected as a duplicate.
     #[must_use]
     pub fn new() -> Self {
         Self {
-            highest_seen: None,
-            bitmap: 0,
+            highest_seen: 0,
+            bitmap: 1,
         }
     }
 
@@ -282,11 +291,7 @@ impl ReplayWindow {
     /// Returns `Err` for the same conditions [`Self::check_and_record`]
     /// documents; otherwise `Ok`.
     fn classify(&self, counter: u32) -> Result<()> {
-        let Some(highest) = self.highest_seen else {
-            // Empty window: any counter is fresh.
-            return Ok(());
-        };
-
+        let highest = self.highest_seen;
         if counter > highest {
             // Forward jump — always novel.
             Ok(())
@@ -342,29 +347,22 @@ impl ReplayWindow {
         // accepted. Keeps the reject logic identical to `would_reject`.
         self.classify(counter)?;
 
-        match self.highest_seen {
-            None => {
-                // Empty window: any counter is fresh.
-                self.highest_seen = Some(counter);
-                self.bitmap = 1;
-            }
-            Some(highest) if counter > highest => {
-                // Forward jump. Shift the bitmap so the new highest is bit 0
-                // and the previous highest moves to bit (counter - highest).
-                let shift = counter - highest;
-                self.bitmap = if shift >= Self::WIDTH {
-                    0
-                } else {
-                    self.bitmap << shift
-                };
-                self.bitmap |= 1;
-                self.highest_seen = Some(counter);
-            }
-            Some(highest) => {
-                // In-window, novel (classify already ruled out replay/old).
-                let offset = highest - counter;
-                self.bitmap |= 1u32 << offset;
-            }
+        let highest = self.highest_seen;
+        if counter > highest {
+            // Forward jump. Shift the bitmap so the new highest is bit 0
+            // and the previous highest moves to bit (counter - highest).
+            let shift = counter - highest;
+            self.bitmap = if shift >= Self::WIDTH {
+                0
+            } else {
+                self.bitmap << shift
+            };
+            self.bitmap |= 1;
+            self.highest_seen = counter;
+        } else {
+            // In-window, novel (classify already ruled out replay/old).
+            let offset = highest - counter;
+            self.bitmap |= 1u32 << offset;
         }
         Ok(())
     }
@@ -1809,14 +1807,70 @@ mod tests {
             assert!(matches!(err, Error::ReplayedCounter { counter: 200 }));
         }
 
+        /// A peer's first counter 0 is rejected. Secure-session counters
+        /// start at 1 or higher (spec §4.6.1.1), and chip starts the
+        /// reception state synced at 0 (`PeerMessageCounter::SetCounter(
+        /// kInitialSyncValue)`), so 0 is its max counter: a duplicate.
         #[test]
-        fn counter_zero_accepted() {
-            // Spec §4.6.1.1 has a sender start its counters at a random
-            // value in [1, 2^28], but inbound counters from a peer can
-            // technically be anything; we do not special-case zero.
+        fn first_counter_zero_rejected() {
             let mut w = ReplayWindow::new();
-            w.check_and_record(0).unwrap();
-            assert!(w.check_and_record(0).is_err());
+            assert!(matches!(
+                w.would_reject(0),
+                Err(Error::ReplayedCounter { counter: 0 })
+            ));
+            assert!(matches!(
+                w.check_and_record(0),
+                Err(Error::ReplayedCounter { counter: 0 })
+            ));
+            // The rejection recorded nothing: 1 is still the first counter.
+            w.check_and_record(1).unwrap();
+        }
+
+        /// Counter 0 stays rejected after the window moves, inside the
+        /// window (chip marks the old max, 0, as seen when it shifts) and
+        /// beyond it.
+        #[test]
+        fn counter_zero_rejected_after_any_start() {
+            let mut w = ReplayWindow::new();
+            w.check_and_record(5).unwrap();
+            assert!(matches!(
+                w.check_and_record(0),
+                Err(Error::ReplayedCounter { counter: 0 })
+            ));
+
+            let mut w = ReplayWindow::new();
+            w.check_and_record(31).unwrap();
+            assert!(matches!(
+                w.check_and_record(0),
+                Err(Error::ReplayedCounter { counter: 0 })
+            ));
+
+            let mut w = ReplayWindow::new();
+            w.check_and_record(1000).unwrap();
+            assert!(matches!(
+                w.check_and_record(0),
+                Err(Error::CounterTooOld { counter: 0, .. })
+            ));
+        }
+
+        /// The counters between 0 and a small first counter were never
+        /// seen, so each is accepted once, as before (chip's window is
+        /// clear when it syncs at 0).
+        #[test]
+        fn counters_below_a_small_first_counter_accepted() {
+            let mut w = ReplayWindow::new();
+            w.check_and_record(5).unwrap();
+            for n in 1u32..5 {
+                w.check_and_record(n).unwrap();
+                assert!(w.check_and_record(n).is_err());
+            }
+        }
+
+        #[test]
+        fn first_counter_one_accepted() {
+            let mut w = ReplayWindow::new();
+            w.check_and_record(1).unwrap();
+            assert!(w.check_and_record(1).is_err());
         }
     }
 }
@@ -1828,10 +1882,11 @@ mod replay_proptest {
     use proptest::prelude::*;
 
     proptest! {
-        /// Strictly-increasing counters are always accepted.
+        /// Strictly-increasing counters are always accepted, from any
+        /// non-zero start (0 is never a valid secure-session counter).
         #[test]
         fn monotonic_sequence_always_accepted(
-            seed in any::<u32>(),
+            seed in 1u32..,
             len in 1usize..=100,
         ) {
             let mut window = ReplayWindow::new();
@@ -1846,9 +1901,18 @@ mod replay_proptest {
             }
         }
 
+        /// Any random first counter in the spec's start range [1, 2^28]
+        /// is accepted, and 0 is rejected after it.
+        #[test]
+        fn random_first_counter_accepted(c in 1u32..=0x1000_0000) {
+            let mut window = ReplayWindow::new();
+            prop_assert!(window.check_and_record(c).is_ok());
+            prop_assert!(window.check_and_record(0).is_err());
+        }
+
         /// Whatever counter we record, recording it twice always errors.
         #[test]
-        fn idempotent_replay_rejection(c in any::<u32>()) {
+        fn idempotent_replay_rejection(c in 1u32..) {
             let mut window = ReplayWindow::new();
             window.check_and_record(c).unwrap();
             prop_assert!(window.check_and_record(c).is_err());

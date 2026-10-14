@@ -530,6 +530,33 @@ published release, `0.1.0` through `0.18.1`.
 - Affected: every published release, `0.1.0` through `0.7.3` (the counter has
   started at 1 since the session manager was written, before `0.1.0`).
 
+### matter-transport: Fixed — a peer's message counter 0 is rejected on a secure session
+
+- `ReplayWindow` trusted a peer's first counter, whatever it was, so a
+  secure session accepted a first message with counter 0. Secure-session
+  counters start at 1 or higher (Matter 1.4 Core §4.6.1.1), and chip never
+  accepts 0 on one. `PairingSession::ActivateSecureSession` syncs each new
+  session's reception state at 0 (`SetCounter(kInitialSyncValue)`), so
+  `VerifyEncryptedUnicast` classifies 0 as a duplicate: as the max counter
+  at first, then as a seen in-window counter or a before-window counter
+  (`src/transport/PeerMessageCounter.h`, identical at master 5cd2917a and
+  at v1.4.2.0). The rule holds for the whole session, not only for the
+  first message.
+- `ReplayWindow::new` now starts in that state, with counter 0 marked as
+  seen. A counter 0 is rejected with `Error::ReplayedCounter` (or
+  `Error::CounterTooOld` once the window has moved more than 31 past it).
+  Every counter from 1 up is still accepted as a first counter, the
+  counters between 1 and a small first counter are still accepted once
+  each, and replay handling is otherwise unchanged. A conforming peer never
+  sends 0, so its traffic is unaffected.
+- Unsecured sessions follow a separate rule, and are unchanged. chip's
+  `VerifyUnencrypted` trusts any first counter, 0 included, and the
+  commissioning drivers' unsecured handshake (`matter-commissioning`) does
+  the same. `ReplayWindow` is not used there.
+- Not a breaking change: no signature or type changes. `ReplayWindow`'s
+  fields are private, and only its starting state differs.
+- Affected: every published release, `0.1.0` through `0.7.3`.
+
 ### matter-transport: Added — the Secure Channel CloseSession
 
 - `matter_transport::secure_channel` encodes and recognises the Secure

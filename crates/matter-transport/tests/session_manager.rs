@@ -143,6 +143,58 @@ fn encode_outbound_then_decode_inbound_roundtrip() {
     }
 }
 
+/// A secure session rejects a peer message counter of 0, and still accepts
+/// counter 1. Secure-session counters start at 1 or higher (Matter 1.4
+/// §4.6.1.1), and chip starts each secure session's reception state synced
+/// at 0 (`PairingSession::ActivateSecureSession` →
+/// `SetCounter(kInitialSyncValue)`), so its `VerifyEncryptedUnicast` treats
+/// counter 0 as a duplicate. Before the fix the first counter, 0 included,
+/// was trusted.
+#[test]
+fn decode_inbound_rejects_peer_counter_zero_on_a_secure_session() {
+    let mut alice = SessionManager::new();
+    let mut bob = SessionManager::new();
+    let keys = pase_keys();
+    let now = std::time::Instant::now();
+    let alice_sid =
+        alice.register_pase(keys.clone(), SessionRole::Initiator, 1, PeerHint::default());
+    let _bob_sid = bob.register_pase(
+        keys,
+        SessionRole::Responder,
+        alice_sid.0,
+        PeerHint::default(),
+    );
+
+    let mut send_with_counter = |counter: u32| {
+        alice.get_mut(alice_sid).unwrap().outbound_counter = counter;
+        alice
+            .encode_outbound(
+                alice_sid,
+                None,
+                0x02,
+                ProtocolId::INTERACTION_MODEL,
+                b"ping",
+                MrpFlags::default(),
+                now,
+            )
+            .unwrap()
+            .wire_bytes
+    };
+
+    let zero = send_with_counter(0);
+    let err = bob.decode_inbound(&zero, now).unwrap_err();
+    assert!(
+        matches!(err, matter_transport::Error::ReplayedCounter { counter: 0 }),
+        "counter 0 must be rejected as a duplicate; got {err:?}",
+    );
+
+    let one = send_with_counter(1);
+    assert!(matches!(
+        bob.decode_inbound(&one, now).unwrap(),
+        DecodeInboundOutput::AppMessage { .. }
+    ));
+}
+
 #[test]
 fn decode_inbound_unknown_session_errors() {
     let mut mgr = SessionManager::new();
