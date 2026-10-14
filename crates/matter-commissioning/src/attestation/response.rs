@@ -162,7 +162,10 @@ pub struct AttestationElementsFields {
 ///
 /// Unknown tags (including future spec additions and the two optional
 /// fields above) are skipped so forward-compatible devices do not
-/// regress here.
+/// regress here. An unknown container is skipped whole, nested
+/// containers included, so none of its members is read as a top-level
+/// field. Bytes after the outer structure's end are ignored, as chip's
+/// `DeconstructAttestationElements` ignores them.
 ///
 /// # Errors
 ///
@@ -226,11 +229,20 @@ pub fn extract_attestation_elements_fields(
                 }
                 ts = Some(v);
             }
-            // Forward-compat: ignore unknown fields (firmware_info,
+            // An unknown container (a future field, or a known tag in the
+            // wrong shape) is skipped whole, at any depth, so its members are
+            // never read as top-level fields. This is what chip's
+            // `TLVReader::Next()` does for a container it has not entered.
+            Some(Element::ContainerStart { .. }) => reader
+                .skip_container()
+                .map_err(|_| AttestationError::ResponseElementsMalformed)?,
+            // Forward-compat: ignore unknown scalar fields (firmware_info,
             // vendor_specific, future tags).
             Some(_) => {}
         }
     }
+    // No strict close here: chip's `DeconstructAttestationElements` never
+    // reads past the structure, so bytes after its end are ignored.
     Ok(AttestationElementsFields {
         certification_declaration: cd.ok_or(AttestationError::ResponseElementsMalformed)?,
         attestation_nonce: nonce.ok_or(AttestationError::ResponseElementsMalformed)?,
@@ -445,5 +457,84 @@ mod tests {
 
         let err = extract_attestation_elements_fields(&tlv).expect_err("short nonce");
         assert!(matches!(err, AttestationError::ResponseElementsMalformed));
+    }
+
+    /// Encode attestation elements: `{1: cd, 2: nonce, 3: ts}` (each
+    /// optional), with `decoy` written inside the outer structure first.
+    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    fn elements_with_decoy(
+        real: Option<(&[u8], &[u8; 32], u64)>,
+        decoy: impl FnOnce(&mut matter_codec::TlvWriter<'_>),
+    ) -> Vec<u8> {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        decoy(&mut w);
+        if let Some((cd, nonce, ts)) = real {
+            w.put_bytes(Tag::Context(1), cd).unwrap();
+            w.put_bytes(Tag::Context(2), nonce).unwrap();
+            w.put_uint(Tag::Context(3), ts).unwrap();
+        }
+        w.end_container().unwrap();
+        buf
+    }
+
+    /// A decoy container three levels deep (ctx 6 → ctx 7 → ctx 8) whose
+    /// innermost members carry the three required tags.
+    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    fn deep_decoy(w: &mut matter_codec::TlvWriter<'_>) {
+        use matter_codec::Tag;
+        w.start_structure(Tag::Context(6)).unwrap();
+        w.start_list(Tag::Context(7)).unwrap();
+        w.start_structure(Tag::Context(8)).unwrap();
+        w.put_bytes(Tag::Context(1), &[0xBA, 0xD0]).unwrap();
+        w.put_bytes(Tag::Context(2), &[0xEE; 32]).unwrap();
+        w.put_uint(Tag::Context(3), 0xBAD).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+    }
+
+    /// The fields of an unknown container are not top-level fields, at any
+    /// depth: chip's `TLVReader::Next()` skips a container it has not
+    /// entered. A decoy holding only fake required fields must not satisfy
+    /// the parser. Before the fix the fake fields were read as the real ones
+    /// and the decoy's first end-of-container ended the structure.
+    #[test]
+    fn extract_attestation_elements_fields_does_not_read_decoy_container_fields() {
+        let tlv = elements_with_decoy(None, deep_decoy);
+        assert!(matches!(
+            extract_attestation_elements_fields(&tlv),
+            Err(AttestationError::ResponseElementsMalformed)
+        ));
+    }
+
+    /// The real fields after a deep decoy container are the ones returned.
+    /// Before the fix the decoy's fake `1` was read first and the real `1`
+    /// tripped the duplicate check.
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn extract_attestation_elements_fields_skips_decoy_container() {
+        let nonce = [0xAB_u8; 32];
+        let tlv = elements_with_decoy(Some((&[0xCD, 0xCD], &nonce, 0x42)), deep_decoy);
+        let fields = extract_attestation_elements_fields(&tlv).expect("decoy skipped");
+        assert_eq!(fields.certification_declaration, vec![0xCD, 0xCD]);
+        assert_eq!(fields.attestation_nonce, nonce);
+        assert_eq!(fields.timestamp_epoch_seconds, 0x42);
+    }
+
+    /// Bytes after the outer structure's close are ignored, as chip's
+    /// `DeconstructAttestationElements` ignores them (it never reads past
+    /// the structure). Pins that the container fix did not add a strict
+    /// close here.
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn extract_attestation_elements_fields_ignores_trailing_bytes() {
+        let nonce = [0xAB_u8; 32];
+        let mut tlv = elements_with_decoy(Some((&[0xCD], &nonce, 7)), |_| {});
+        tlv.extend_from_slice(&[0x24, 0x01, 0x05]);
+        let fields = extract_attestation_elements_fields(&tlv).expect("trailing ignored");
+        assert_eq!(fields.timestamp_epoch_seconds, 7);
     }
 }

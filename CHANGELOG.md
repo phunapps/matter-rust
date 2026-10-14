@@ -43,7 +43,8 @@ The Interaction Model parsers now reject a truncated message and bytes after
 one, as chip does, so a cut-off chunk can no longer end a chunked read early
 with partial data. `matter-codec` gains the strict-close check they share,
 `matter-ota`'s Provider decoders use it too, and `matter-commissioning`'s
-response decoders stop misreading an unknown container field.
+response decoders and attestation parsers stop misreading an unknown
+container field.
 `matter-codec`, `matter-transport` and `matter-commissioning` add public API,
 only additively, so each affected crate needs only a patch release:
 
@@ -697,6 +698,29 @@ published release, `0.1.0` through `0.18.1`.
   `matter-interaction` 0.4.3 floor (see there).
 - Affected: every published release, `0.1.0` through `0.10.0`. Requires
   `matter-codec` 0.3.2.
+
+### matter-commissioning: Fixed — attestation elements and the Certification Declaration skip unknown containers
+
+- `extract_attestation_elements_fields` and the Certification Declaration
+  verifier had the same unknown-container bug as the response decoders
+  above. A container field's members were read as top-level fields, and
+  its end-of-container ended the structure. In a CD, a container ahead of
+  the real fields supplied the VendorID and product IDs, and one after them
+  could supply the `dac_origin_*` overrides. A container inside the
+  `product_id_array` added its integers as product IDs and cut the array
+  short. Both parsers now skip an unknown container whole, nested
+  containers included, as chip's `TLVReader::Next` does. Exploiting the CD
+  case needed a CD signed by a trusted CD signer, since the signature is
+  checked before the TLV is parsed. In attestation elements the device
+  signs the whole blob, so a misparse gave it nothing it could not send
+  directly.
+- The CD verifier now also rejects bytes after the CD's top-level
+  structure, as chip's `DecodeCertificationElements` does (`ExitContainer`
+  then `VerifyEndOfContainer`). End of input inside the structure was
+  already an error. The attestation-elements parser still ignores bytes
+  after its structure, as chip's `DeconstructAttestationElements` does.
+- Affected: every published release, `0.1.0` through `0.10.0`. Requires
+  `matter-codec` 0.3.2 (for `TlvReader::finish`).
 
 ### matter-interaction: Fixed — parsers reject a truncated message and trailing bytes
 

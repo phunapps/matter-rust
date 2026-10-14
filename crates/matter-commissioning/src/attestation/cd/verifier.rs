@@ -421,6 +421,11 @@ struct ParsedCd {
 /// fields are forward-compat ignored — the verifier only needs VID + PID
 /// (and the optional `dac_origin_*` overrides + `authorized_paa_list`) for
 /// cross-checking against the DAC subject.
+///
+/// An unknown container, at the top level or inside `product_id_array`, is
+/// skipped whole, nested containers included, so none of its members is
+/// read as a CD field. Bytes after the top-level structure are rejected,
+/// as chip's `DecodeCertificationElements` rejects them.
 #[allow(
     clippy::too_many_lines,
     reason = "one linear tag-dispatch loop over the CD's context-tagged fields; \
@@ -488,6 +493,12 @@ fn parse_inner_cd_tlv(tlv: &[u8]) -> Result<ParsedCd, AttestationError> {
                             })?;
                             pids.push(ProductId::new(p16));
                         }
+                        // A container inside the array is skipped whole, so its
+                        // integers are not read as product IDs and its
+                        // end-of-container does not end the array.
+                        Some(Element::ContainerStart { .. }) => reader
+                            .skip_container()
+                            .map_err(|_| AttestationError::CertificationDeclarationTlvMalformed)?,
                         // Inside the array, unknown shapes are a structural error
                         // (the spec says product IDs are u16). But be lenient on
                         // tagged-not-anonymous in case future M6.x extensions land.
@@ -554,10 +565,23 @@ fn parse_inner_cd_tlv(tlv: &[u8]) -> Result<ParsedCd, AttestationError> {
                 }
                 authorized_paa_list = Some(list);
             }
-            // Forward-compat: ignore other context-tagged scalars / containers.
+            // Forward-compat: skip any other container whole, at any depth,
+            // so its members are never read as top-level CD fields. This is
+            // what chip's `TLVReader::Next()` does for a container it has not
+            // entered.
+            Some(Element::ContainerStart { .. }) => reader
+                .skip_container()
+                .map_err(|_| AttestationError::CertificationDeclarationTlvMalformed)?,
+            // Forward-compat: ignore other context-tagged scalars.
             Some(_) => {}
         }
     }
+    // Nothing may follow the top-level structure. chip's
+    // `DecodeCertificationElements` ends with `ExitContainer` then
+    // `VerifyEndOfContainer` (`CertificationDeclaration.cpp:210-212`).
+    reader
+        .finish()
+        .map_err(|_| AttestationError::CertificationDeclarationTlvMalformed)?;
 
     let vendor_id = vid.ok_or(AttestationError::CertificationDeclarationTlvMalformed)?;
     if pids.is_empty() {
@@ -950,6 +974,134 @@ mod tests {
         let parsed = parse_inner_cd_tlv(&buf).expect("forward-compat decode");
         assert_eq!(parsed.vendor_id, VendorId::new(0xFFF1));
         assert_eq!(parsed.product_ids, vec![ProductId::new(0x8001)]);
+    }
+
+    /// Write a decoy container three levels deep (ctx 12 → ctx 13 →
+    /// ctx 14) whose innermost members are both `dac_origin_*` overrides,
+    /// preceded by a VID and a PID array when `with_vid_pids` is set.
+    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    fn write_deep_cd_decoy(w: &mut matter_codec::TlvWriter<'_>, with_vid_pids: bool) {
+        use matter_codec::Tag;
+        w.start_structure(Tag::Context(12)).unwrap();
+        w.start_list(Tag::Context(13)).unwrap();
+        w.start_structure(Tag::Context(14)).unwrap();
+        if with_vid_pids {
+            w.put_uint(Tag::Context(1), 0xBAD1).unwrap();
+            w.start_array(Tag::Context(2)).unwrap();
+            w.put_uint(Tag::Anonymous, 0x0BAD).unwrap();
+            w.end_container().unwrap();
+        }
+        w.put_uint(Tag::Context(9), 0x1234).unwrap();
+        w.put_uint(Tag::Context(10), 0x5678).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+    }
+
+    /// The fields of an unknown top-level container are not CD fields, at
+    /// any depth (chip's `TLVReader::Next()` skips a container it has not
+    /// entered). Before the fix the decoy's VID and PIDs were read as the
+    /// CD's own and its first end-of-container ended the CD, so the real
+    /// fields after it were never seen.
+    #[test]
+    #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn parse_inner_cd_tlv_skips_decoy_container_before_real_fields() {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        write_deep_cd_decoy(&mut w, true);
+        w.put_uint(Tag::Context(1), 0xFFF1).unwrap();
+        w.start_array(Tag::Context(2)).unwrap();
+        w.put_uint(Tag::Anonymous, 0x8000).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+
+        let parsed = parse_inner_cd_tlv(&buf).expect("decoy skipped");
+        assert_eq!(parsed.vendor_id, VendorId::new(0xFFF1));
+        assert_eq!(parsed.product_ids, vec![ProductId::new(0x8000)]);
+        assert_eq!(parsed.dac_origin_vendor_id, None);
+        assert_eq!(parsed.dac_origin_product_id, None);
+    }
+
+    /// A decoy after the real fields must not supply the `dac_origin_*`
+    /// overrides. Before the fix its inner ctx 9/10 were read as overrides.
+    #[test]
+    #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn parse_inner_cd_tlv_decoy_container_does_not_set_dac_origin() {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(1), 0xFFF1).unwrap();
+        w.start_array(Tag::Context(2)).unwrap();
+        w.put_uint(Tag::Anonymous, 0x8000).unwrap();
+        w.end_container().unwrap();
+        write_deep_cd_decoy(&mut w, false);
+        w.end_container().unwrap();
+
+        let parsed = parse_inner_cd_tlv(&buf).expect("decoy skipped");
+        assert_eq!(parsed.vendor_id, VendorId::new(0xFFF1));
+        assert_eq!(parsed.product_ids, vec![ProductId::new(0x8000)]);
+        assert_eq!(parsed.dac_origin_vendor_id, None);
+        assert_eq!(parsed.dac_origin_product_id, None);
+    }
+
+    /// A container nested three deep inside the `product_id_array` is
+    /// skipped whole: its anonymous integers are not product IDs, and its
+    /// end-of-container does not end the array. Before the fix `0x0BAD`
+    /// became a PID and `0x8001` was lost.
+    #[test]
+    #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn parse_inner_cd_tlv_skips_decoy_container_inside_pid_array() {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(1), 0xFFF1).unwrap();
+        w.start_array(Tag::Context(2)).unwrap();
+        w.put_uint(Tag::Anonymous, 0x8000).unwrap();
+        w.start_array(Tag::Anonymous).unwrap();
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.start_array(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Anonymous, 0x0BAD).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.put_uint(Tag::Anonymous, 0x8001).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+
+        let parsed = parse_inner_cd_tlv(&buf).expect("decoy skipped");
+        assert_eq!(
+            parsed.product_ids,
+            vec![ProductId::new(0x8000), ProductId::new(0x8001)]
+        );
+    }
+
+    /// Bytes after the CD's top-level structure are rejected, as chip's
+    /// `DecodeCertificationElements` rejects them (`ExitContainer` then
+    /// `VerifyEndOfContainer`). Before the fix they were ignored.
+    #[test]
+    fn parse_inner_cd_tlv_rejects_trailing_bytes() {
+        let mut buf = cd_tlv_with_paa_list(None);
+        buf.extend_from_slice(&[0x24, 0x01, 0x05]);
+        assert!(matches!(
+            parse_inner_cd_tlv(&buf),
+            Err(AttestationError::CertificationDeclarationTlvMalformed)
+        ));
+    }
+
+    /// A CD whose top-level structure is never closed is rejected (chip's
+    /// `ExitContainer` fails at end of input). Pins the existing behaviour.
+    #[test]
+    fn parse_inner_cd_tlv_rejects_unclosed_structure() {
+        let mut buf = cd_tlv_with_paa_list(None);
+        assert_eq!(buf.pop(), Some(0x18));
+        assert!(matches!(
+            parse_inner_cd_tlv(&buf),
+            Err(AttestationError::CertificationDeclarationTlvMalformed)
+        ));
     }
 
     #[test]
