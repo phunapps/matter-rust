@@ -422,14 +422,22 @@ struct ParsedCd {
 /// (and the optional `dac_origin_*` overrides + `authorized_paa_list`) for
 /// cross-checking against the DAC subject.
 ///
-/// An unknown container, at the top level or inside `product_id_array`, is
-/// skipped whole, nested containers included, so none of its members is
-/// read as a CD field. Bytes after the top-level structure are rejected,
-/// as chip's `DecodeCertificationElements` rejects them.
+/// An unknown top-level container is skipped whole, nested containers
+/// included, so none of its members is read as a CD field. As chip's
+/// `DecodeCertificationElements` does, the CD is rejected for:
+/// - a `product_id_array` entry that is not an anonymous unsigned integer;
+/// - an `authorized_paa_list` (tag 11) that is not an Array;
+/// - a `dac_origin_*` (tag 9 or 10) that is not an unsigned integer;
+/// - bytes after the top-level structure.
 #[allow(
     clippy::too_many_lines,
     reason = "one linear tag-dispatch loop over the CD's context-tagged fields; \
      splitting the per-tag arms into helpers would scatter the decode logic."
+)]
+#[allow(
+    clippy::match_same_arms,
+    reason = "the end-of-input arm and the misshapen-field arm both reject the \
+     CD, but for different reasons that each carry their own comment."
 )]
 fn parse_inner_cd_tlv(tlv: &[u8]) -> Result<ParsedCd, AttestationError> {
     use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
@@ -493,16 +501,14 @@ fn parse_inner_cd_tlv(tlv: &[u8]) -> Result<ParsedCd, AttestationError> {
                             })?;
                             pids.push(ProductId::new(p16));
                         }
-                        // A container inside the array is skipped whole, so its
-                        // integers are not read as product IDs and its
-                        // end-of-container does not end the array.
-                        Some(Element::ContainerStart { .. }) => reader
-                            .skip_container()
-                            .map_err(|_| AttestationError::CertificationDeclarationTlvMalformed)?,
-                        // Inside the array, unknown shapes are a structural error
-                        // (the spec says product IDs are u16). But be lenient on
-                        // tagged-not-anonymous in case future M6.x extensions land.
-                        Some(_) => {}
+                        // Anything else (a container, a tagged entry, a signed
+                        // or non-integer value) is a structural error, as in
+                        // chip: its loop is `Next(kTLVType_UnsignedInteger,
+                        // AnonymousTag())` and must end on `CHIP_END_OF_TLV`
+                        // (`CertificationDeclaration.cpp:241/246`).
+                        Some(_) => {
+                            return Err(AttestationError::CertificationDeclarationTlvMalformed)
+                        }
                     }
                 }
             }
@@ -565,10 +571,30 @@ fn parse_inner_cd_tlv(tlv: &[u8]) -> Result<ParsedCd, AttestationError> {
                 }
                 authorized_paa_list = Some(list);
             }
+            // A known optional field in the wrong shape rejects the CD, as in
+            // chip (`CertificationDeclaration.cpp`):
+            // - tag 11 that is not an Array (a Structure, a List or a
+            //   scalar; `:287`, `:190` in the full decoder). Read as absent,
+            //   it would drop the CD's PAA restriction, so this fails closed.
+            // - tag 9 or 10 (`dac_origin_*`) that is not an unsigned integer
+            //   (`Get` fails, `:273-277`).
+            // The well-formed shapes matched the arms above.
+            Some(
+                Element::ContainerStart {
+                    tag: Tag::Context(9..=11),
+                    ..
+                }
+                | Element::Scalar {
+                    tag: Tag::Context(9..=11),
+                    ..
+                },
+            ) => return Err(AttestationError::CertificationDeclarationTlvMalformed),
             // Forward-compat: skip any other container whole, at any depth,
             // so its members are never read as top-level CD fields. This is
-            // what chip's `TLVReader::Next()` does for a container it has not
-            // entered.
+            // more lenient than chip, whose CD decode is positional and skips
+            // unknown members only after the optional trailing fields
+            // (`ExitContainer`, `CertificationDeclaration.cpp:308`), but the
+            // content is signed by a trusted CD signer.
             Some(Element::ContainerStart { .. }) => reader
                 .skip_container()
                 .map_err(|_| AttestationError::CertificationDeclarationTlvMalformed)?,
@@ -1047,13 +1073,12 @@ mod tests {
         assert_eq!(parsed.dac_origin_product_id, None);
     }
 
-    /// A container nested three deep inside the `product_id_array` is
-    /// skipped whole: its anonymous integers are not product IDs, and its
-    /// end-of-container does not end the array. Before the fix `0x0BAD`
-    /// became a PID and `0x8001` was lost.
-    #[test]
-    #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
-    fn parse_inner_cd_tlv_skips_decoy_container_inside_pid_array() {
+    /// Encode a CD `{1: 0xFFF1, 2: [0x8000, <entry>], <extra>}` and parse it.
+    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    fn parse_cd_with(
+        pid_entry: impl FnOnce(&mut matter_codec::TlvWriter<'_>),
+        extra: impl FnOnce(&mut matter_codec::TlvWriter<'_>),
+    ) -> Result<ParsedCd, AttestationError> {
         use matter_codec::{Tag, TlvWriter};
         let mut buf = Vec::new();
         let mut w = TlvWriter::new(&mut buf);
@@ -1061,22 +1086,125 @@ mod tests {
         w.put_uint(Tag::Context(1), 0xFFF1).unwrap();
         w.start_array(Tag::Context(2)).unwrap();
         w.put_uint(Tag::Anonymous, 0x8000).unwrap();
-        w.start_array(Tag::Anonymous).unwrap();
-        w.start_structure(Tag::Anonymous).unwrap();
-        w.start_array(Tag::Anonymous).unwrap();
-        w.put_uint(Tag::Anonymous, 0x0BAD).unwrap();
+        pid_entry(&mut w);
         w.end_container().unwrap();
+        extra(&mut w);
         w.end_container().unwrap();
-        w.end_container().unwrap();
-        w.put_uint(Tag::Anonymous, 0x8001).unwrap();
-        w.end_container().unwrap();
-        w.end_container().unwrap();
+        parse_inner_cd_tlv(&buf)
+    }
 
-        let parsed = parse_inner_cd_tlv(&buf).expect("decoy skipped");
-        assert_eq!(
-            parsed.product_ids,
-            vec![ProductId::new(0x8000), ProductId::new(0x8001)]
+    fn is_cd_malformed(r: &Result<ParsedCd, AttestationError>) -> bool {
+        matches!(
+            r,
+            Err(AttestationError::CertificationDeclarationTlvMalformed)
+        )
+    }
+
+    /// `product_id_array` holds anonymous unsigned integers only. chip's
+    /// verifier-path decoder loops `Next(kTLVType_UnsignedInteger,
+    /// AnonymousTag())` and requires `CHIP_END_OF_TLV` to end it
+    /// (`CertificationDeclaration.cpp:241/246`), so any other entry
+    /// rejects the CD. A container nested three deep is one such entry.
+    #[test]
+    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    fn parse_inner_cd_tlv_rejects_container_inside_pid_array() {
+        use matter_codec::Tag;
+        let r = parse_cd_with(
+            |w| {
+                w.start_array(Tag::Anonymous).unwrap();
+                w.start_structure(Tag::Anonymous).unwrap();
+                w.start_array(Tag::Anonymous).unwrap();
+                w.put_uint(Tag::Anonymous, 0x0BAD).unwrap();
+                w.end_container().unwrap();
+                w.end_container().unwrap();
+                w.end_container().unwrap();
+            },
+            |_| {},
         );
+        assert!(is_cd_malformed(&r), "{r:?}");
+    }
+
+    /// A tagged PID entry is rejected (chip: `CHIP_ERROR_UNEXPECTED_TLV_ELEMENT`).
+    #[test]
+    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    fn parse_inner_cd_tlv_rejects_tagged_pid_entry() {
+        use matter_codec::Tag;
+        let r = parse_cd_with(|w| w.put_uint(Tag::Context(0), 0x8001).unwrap(), |_| {});
+        assert!(is_cd_malformed(&r), "{r:?}");
+    }
+
+    /// A signed-integer PID entry is rejected (chip: `CHIP_ERROR_WRONG_TLV_TYPE`).
+    #[test]
+    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    fn parse_inner_cd_tlv_rejects_signed_pid_entry() {
+        use matter_codec::Tag;
+        let r = parse_cd_with(|w| w.put_int(Tag::Anonymous, 0x8001).unwrap(), |_| {});
+        assert!(is_cd_malformed(&r), "{r:?}");
+    }
+
+    /// An `authorized_paa_list` (tag 11) that is not an Array rejects the CD,
+    /// as chip rejects it (`CertificationDeclaration.cpp:287`, and `:190` in
+    /// the full decoder). Read as absent, it would drop the CD's PAA
+    /// restriction: before the fix a Structure holding a valid SKID parsed
+    /// with no PAA constraint.
+    #[test]
+    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    fn parse_inner_cd_tlv_rejects_non_array_authorized_paa_list() {
+        use matter_codec::Tag;
+        for as_list in [false, true] {
+            let r = parse_cd_with(
+                |_| {},
+                |w| {
+                    if as_list {
+                        w.start_list(Tag::Context(11)).unwrap();
+                    } else {
+                        w.start_structure(Tag::Context(11)).unwrap();
+                    }
+                    w.put_bytes(Tag::Anonymous, &[0xAA; 20]).unwrap();
+                    w.end_container().unwrap();
+                },
+            );
+            assert!(is_cd_malformed(&r), "{r:?}");
+        }
+    }
+
+    /// A scalar `authorized_paa_list` (tag 11) rejects the CD too.
+    #[test]
+    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    fn parse_inner_cd_tlv_rejects_scalar_authorized_paa_list() {
+        use matter_codec::Tag;
+        let r = parse_cd_with(
+            |_| {},
+            |w| w.put_bytes(Tag::Context(11), &[0xAA; 20]).unwrap(),
+        );
+        assert!(is_cd_malformed(&r), "{r:?}");
+    }
+
+    /// A `dac_origin_vendor_id` (tag 9) or `dac_origin_product_id` (tag 10)
+    /// that is not an unsigned integer rejects the CD, as chip's `Get`
+    /// fails on it (`CertificationDeclaration.cpp:273-277`). Before the fix
+    /// it was dropped and the DAC bound against the CD's own VID and PIDs.
+    #[test]
+    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    fn parse_inner_cd_tlv_rejects_non_uint_dac_origin() {
+        use matter_codec::Tag;
+        let r = parse_cd_with(
+            |_| {},
+            |w| {
+                w.put_int(Tag::Context(9), 0x1234).unwrap();
+                w.put_uint(Tag::Context(10), 0x5678).unwrap();
+            },
+        );
+        assert!(is_cd_malformed(&r), "tag 9 signed: {r:?}");
+        let r = parse_cd_with(
+            |_| {},
+            |w| {
+                w.put_uint(Tag::Context(9), 0x1234).unwrap();
+                w.start_structure(Tag::Context(10)).unwrap();
+                w.end_container().unwrap();
+            },
+        );
+        assert!(is_cd_malformed(&r), "tag 10 container: {r:?}");
     }
 
     /// Bytes after the CD's top-level structure are rejected, as chip's

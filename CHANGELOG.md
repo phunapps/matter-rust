@@ -779,7 +779,7 @@ published release, `0.1.0` through `0.18.1`.
 - Affected: every published release, `0.1.0` through `0.10.0`. Requires
   `matter-codec` 0.3.2.
 
-### matter-commissioning: Fixed — attestation elements and the Certification Declaration skip unknown containers
+### matter-commissioning: Fixed (security) — attestation elements and the Certification Declaration no longer misread unknown or misshapen fields
 
 - `extract_attestation_elements_fields` and the Certification Declaration
   verifier had the same unknown-container bug as the response decoders
@@ -788,17 +788,40 @@ published release, `0.1.0` through `0.18.1`.
   the real fields supplied the VendorID and product IDs, and one after them
   could supply the `dac_origin_*` overrides. A container inside the
   `product_id_array` added its integers as product IDs and cut the array
-  short. Both parsers now skip an unknown container whole, nested
-  containers included, as chip's `TLVReader::Next` does. Exploiting the CD
-  case needed a CD signed by a trusted CD signer, since the signature is
-  checked before the TLV is parsed. In attestation elements the device
-  signs the whole blob, so a misparse gave it nothing it could not send
-  directly.
-- The CD verifier now also rejects bytes after the CD's top-level
-  structure, as chip's `DecodeCertificationElements` does (`ExitContainer`
-  then `VerifyEndOfContainer`). End of input inside the structure was
-  already an error. The attestation-elements parser still ignores bytes
-  after its structure, as chip's `DeconstructAttestationElements` does.
+  short. Both parsers now skip an unknown top-level container whole,
+  nested containers included, as chip's `TLVReader::Next` skips a container
+  it has not entered. For attestation elements that is how chip parses
+  them (`DeconstructAttestationElements`). chip's CD decode is positional
+  instead: it skips unknown members only after the optional trailing
+  fields (`ExitContainer`), and an unknown element between required fields
+  fails it. So our CD skip is more lenient than chip's, and harmless,
+  since the CD is signed.
+- The CD verifier now rejects, as chip's `DecodeCertificationElements` does
+  (`src/credentials/CertificationDeclaration.cpp`, identical at master
+  5cd2917a and v1.4.2.0):
+  - a `product_id_array` entry that is not an anonymous unsigned integer,
+    a nested container included. It used to be ignored, or, for a
+    container, read as described above (`:241/246`).
+  - an `authorized_paa_list` (tag 11) that is not an Array: a Structure, a
+    List or a scalar (`:287`, and `:190` in the full decoder). It used to
+    be read as absent, which drops the CD's PAA restriction: a CD meant to
+    limit which PAAs may anchor the device was accepted with no limit.
+    This was the one fail-open case, and it needed a CD signed by a
+    trusted CD signer.
+  - a `dac_origin_vendor_id` (tag 9) or `dac_origin_product_id` (tag 10)
+    that is not an unsigned integer (`:273-277`). It used to be dropped,
+    so the DAC was bound against the CD's own VendorID and product IDs.
+    That fails safe, but differs from chip.
+  - bytes after the CD's top-level structure (`ExitContainer` then
+    `VerifyEndOfContainer`). End of input inside the structure was already
+    an error.
+- The attestation-elements parser still ignores bytes after its structure,
+  as chip's `DeconstructAttestationElements` does.
+- Exploiting any CD case needs a CD signed by a trusted CD signer, since
+  the signature is checked before the TLV is parsed. In attestation
+  elements the device signs the whole blob, so a misparse gave it nothing
+  it could not send directly. All ten of chip's test CDs
+  (`credentials/test/certification-declaration/`) still verify.
 - Affected: every published release, `0.1.0` through `0.10.0`. Requires
   `matter-codec` 0.3.2 (for `TlvReader::finish`).
 
