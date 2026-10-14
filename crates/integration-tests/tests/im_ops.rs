@@ -167,13 +167,19 @@ async fn subscribe_onoff_attribute() {
             Ok(Some(SubscriptionEvent::Report(report))) => {
                 if report.path.cluster == 0x0006 && report.path.attribute == 0x0000 {
                     // Matched — OnOff changed.
-                    return;
+                    break;
                 }
             }
             // Event / Lagged / Established / Resubscribing / future variants
             Ok(Some(_)) => {}
         }
     }
+
+    // End the subscription with this test through the public cancel API,
+    // instead of leaving it to `Drop`'s best-effort cancel. Cancelling is
+    // controller-side: the controller forgets the subscription and answers
+    // any later report for it with InvalidSubscription.
+    sub.cancel().await.expect("cancel subscription");
 }
 
 // ── 5. events ─────────────────────────────────────────────────────────────────
