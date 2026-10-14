@@ -1390,6 +1390,7 @@ impl SessionManager {
     /// with this id, and otherwise the peer's, as for
     /// [`Self::encode_outbound`]; [`Self::finish_exchange_with_role`] names
     /// the role explicitly.
+    #[must_use = "the returned events carry standalone-ACK packets to send"]
     pub fn finish_exchange(&mut self, session_id: SessionId, exchange_id: u16) -> Vec<MrpEvent> {
         self.end_exchange(session_id, ExchangeTarget::ById(exchange_id), false)
     }
@@ -1400,6 +1401,7 @@ impl SessionManager {
     /// [`Self::encode_outbound_with_role`] names it. Only that exchange's
     /// owed ACK is sent and only it is reclaimed; an exchange with the same
     /// id and the other role is left alone.
+    #[must_use = "the returned events carry standalone-ACK packets to send"]
     pub fn finish_exchange_with_role(
         &mut self,
         session_id: SessionId,
@@ -1420,6 +1422,7 @@ impl SessionManager {
     ///
     /// `exchange_id` names the exchange as for [`Self::finish_exchange`];
     /// [`Self::abort_exchange_with_role`] names the role explicitly.
+    #[must_use = "the returned events carry standalone-ACK packets to send"]
     pub fn abort_exchange(&mut self, session_id: SessionId, exchange_id: u16) -> Vec<MrpEvent> {
         self.end_exchange(session_id, ExchangeTarget::ById(exchange_id), true)
     }
@@ -1428,6 +1431,7 @@ impl SessionManager {
     /// role, as [`Self::finish_exchange_with_role`] names it. Our
     /// retransmits on an exchange with the same id and the other role keep
     /// running.
+    #[must_use = "the returned events carry standalone-ACK packets to send"]
     pub fn abort_exchange_with_role(
         &mut self,
         session_id: SessionId,
@@ -1471,6 +1475,7 @@ impl SessionManager {
     /// Every standalone ACK any session still owes, as [`Self::finish_exchange`]
     /// would return them, in ascending session-id order. For teardown, when
     /// nothing will pump [`Self::handle_timeout`] again.
+    #[must_use = "the returned events carry standalone-ACK packets to send"]
     pub fn flush_pending_acks(&mut self) -> Vec<MrpEvent> {
         let mut session_ids: Vec<SessionId> = self.sessions.keys().copied().collect();
         session_ids.sort_unstable_by_key(|sid| sid.0);
@@ -1501,6 +1506,7 @@ impl SessionManager {
     /// [`Self::finish_exchange`], it reclaims every exchange it leaves idle, so
     /// a later message on one of our still-open exchanges would go out on a
     /// re-created exchange without the initiator flag.
+    #[must_use = "the returned events carry standalone-ACK packets to send"]
     pub fn flush_session_acks(&mut self, session_id: SessionId) -> Vec<MrpEvent> {
         let Some(session) = self.sessions.get_mut(&session_id) else {
             return Vec::new();
@@ -2978,7 +2984,8 @@ mod tests {
                 .encode_outbound_with_role(sid, id, false, 0x05, im, b"reply", reliable, now)
                 .unwrap();
 
-            a.abort_exchange_with_role(sid, id, abort_ours);
+            // The flushed ACKs are not under test here.
+            let _ = a.abort_exchange_with_role(sid, id, abort_ours);
             let kept = if abort_ours { &on_peers } else { &on_ours };
             let retransmits: Vec<MessageCounter> = a
                 .handle_timeout(now + std::time::Duration::from_secs(10))

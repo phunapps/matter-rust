@@ -1372,6 +1372,7 @@ impl MrpState {
     /// with the same id and the other role stays owed.
     /// [`SessionManager::finish_exchange_with_role`](crate::SessionManager::finish_exchange_with_role)
     /// can name either.
+    #[must_use = "the returned events carry standalone-ACK packets to send"]
     pub fn flush_exchange_acks(&mut self, exchange_id: u16) -> Vec<MrpTimerEvent> {
         let exchange = self.resolve(exchange_id);
         self.flush_exchange_acks_on(exchange)
@@ -1398,6 +1399,7 @@ impl MrpState {
     /// ascending exchange-id order (the order [`Self::handle_timeout`] uses;
     /// where an exchange we started and one the peer started share an id,
     /// the peer's comes first). For a session that is going away.
+    #[must_use = "the returned events carry standalone-ACK packets to send"]
     pub fn flush_all_acks(&mut self) -> Vec<MrpTimerEvent> {
         let mut exchanges: Vec<ExchangeKey> = self
             .pending_outbound_acks
