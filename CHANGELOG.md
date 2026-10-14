@@ -393,11 +393,13 @@ published release, `0.1.0` through `0.18.1`.
 
 ### matter-transport: Fixed — a secure session's message counter starts at a random value
 
-- Matter 1.4 Core §4.6.1.1 and §4.6.2 (and §4.13.3.1, §4.14.1.2 and
-  §4.14.2.3 for PASE, CASE and CASE resumption) require every secure
-  session's outbound message counter to start at
+- Matter 1.4 Core §4.6.1.1 and §4.6.2 require every secure session's
+  outbound message counter to start at
   `Crypto_DRBG(len = 28) + 1`, a CSPRNG value in `[1, 2^28]`. Every PASE and
-  CASE session, resumed ones included, started at 1 instead. The counter
+  CASE session, resumed ones included, started at 1 instead. The session
+  context (§4.13.3.1), PASE (§4.14.1.2) and CASE (§4.14.2.3: the responder
+  after Sigma3, the initiator on resumption, the receiver of
+  SigmaFinished) each repeat the rule. The counter
   travels in the cleartext message header, so a passive observer could read
   how many messages we had sent on a session, and so its age and activity.
   chip (`LocalSessionMessageCounter`, `src/transport/MessageCounter.h`, at

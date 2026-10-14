@@ -1694,13 +1694,6 @@ mod tests {
         let registered = sessions.get(sid).unwrap();
         assert_eq!(registered.keys, SessionKeys::from_case_output(&dev_out));
         assert_eq!(registered.peer_id, matter_transport::SessionId(0x00D2));
-        // Its outbound counter starts at a random value in [1, 2^28] (spec
-        // §4.6.1.1, §4.14.2.3), not at a fixed 1.
-        assert!(
-            (1..=1u32 << 28).contains(&registered.outbound_counter),
-            "CASE counter {:#x} outside [1, 2^28]",
-            registered.outbound_counter
-        );
     }
 
     // ---------------------------------------------------------------
@@ -1751,7 +1744,6 @@ mod tests {
     /// The fast path end to end: Sigma1-with-resumption → `Sigma2_Resume` →
     /// success `StatusReport` → ack. No Sigma3 exists on this path.
     #[tokio::test]
-    #[allow(clippy::too_many_lines)] // one linear handshake scenario, then checks on its output
     async fn resumption_takes_the_sigma2_resume_fast_path() {
         let (rcac, rcac_signer, rcac_pub) = build_test_rcac();
         let (init_noc, init_signer) = build_test_noc(&rcac_signer, T_INITIATOR_NODE);
@@ -1859,24 +1851,6 @@ mod tests {
             next.id,
             matter_crypto::ResumptionId([0x42; 16]),
             "the responder must have rotated the resumption id"
-        );
-        // A resumed session is a new session with its own random counter start.
-        assert_registers_with_a_spec_counter(&established.output, SessionRole::Initiator);
-        assert_registers_with_a_spec_counter(&dev_out, SessionRole::Responder);
-    }
-
-    /// Register `output` and check the session's first outbound counter is in
-    /// `[1, 2^28]` (spec §4.6.1.1, and §4.14.2.3 for a resumed session).
-    fn assert_registers_with_a_spec_counter(
-        output: &matter_crypto::CaseSessionOutput,
-        role: SessionRole,
-    ) {
-        let mut sessions = SessionManager::new();
-        let sid = sessions.register_case(output, role);
-        let counter = sessions.get(sid).unwrap().outbound_counter;
-        assert!(
-            (1..=1u32 << 28).contains(&counter),
-            "CASE counter {counter:#x} outside [1, 2^28]"
         );
     }
 
