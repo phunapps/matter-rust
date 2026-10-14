@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use matter_commissioning::driver::AsyncDatagram;
 use matter_commissioning::NocRng;
 use matter_transport::{
-    DecodeInboundOutput, Discovery, MrpEvent, MrpFlags, ProtocolHeader, ProtocolId, QueryHandle,
-    ServiceKind, SessionId, SessionManager, SessionRole,
+    DecodeInboundOutput, Discovery, MessageCounter, MrpEvent, MrpFlags, ProtocolHeader, ProtocolId,
+    QueryHandle, ServiceKind, SessionId, SessionManager, SessionRole,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -846,6 +846,23 @@ struct Pending {
     request: PendingRequest,
     /// Has this op already been retried once after a reconnect?
     retried: bool,
+    /// Our message counter for the most recent reliable message sent on this
+    /// op's exchange: the request, a timed action, a write chunk, or a
+    /// `StatusResponse` asking for the next read chunk or answering a priming
+    /// report. `None` while none is recorded (an op parked for a reconnect).
+    ///
+    /// [`Self::drive_mrp`](Actor::drive_mrp) treats an `MrpEvent::Expired` as
+    /// this op's own only when its counter is this one. The event names the
+    /// exchange by id alone, and a device may start its own exchange with the
+    /// same id (Matter 1.4 Core §4.10.2); the expiry of one of our reliable
+    /// answers there must not take this op's reconnect-and-re-send path,
+    /// which would re-send a request the device already received. Our counter
+    /// names exactly one message in the session, so it names the exchange and
+    /// its role. MRP keeps at most one reliable message in flight per
+    /// exchange, so the latest is the only one that can expire. A send site
+    /// that forgot to record its counter fails safe: the op's real expiry is
+    /// ignored and the op fails at its `response_deadline`, with no re-send.
+    last_reliable_send: Option<MessageCounter>,
     /// Where the resolved result is delivered.
     reply: PendingReply,
 }
@@ -5274,7 +5291,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             )
             .await;
         match sent {
-            Ok(exchange) => {
+            Ok((exchange, counter)) => {
                 let mut np = p;
                 np.peer = peer;
                 np.retried = true;
@@ -5297,6 +5314,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     | PendingReply::Action { .. }
                     | PendingReply::ChunkedWrite { .. } => {}
                 }
+                np.last_reliable_send = Some(counter);
                 self.pending.insert((sid, exchange), np);
             }
             Err(e) => Self::fail_pending(p, e),
@@ -5339,7 +5357,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             )
             .await
         {
-            Ok(exchange) => {
+            Ok((exchange, counter)) => {
                 self.pending.insert(
                     (sid, exchange),
                     Pending {
@@ -5354,6 +5372,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                         // Skip SH.1's reconnect-once — a timeout reschedules on
                         // the backoff (see `on_pending_timeout`).
                         retried: true,
+                        last_reliable_send: Some(counter),
                         reply: PendingReply::Subscribe {
                             sub_id: pr.sub_id,
                             reply: None,
@@ -5774,7 +5793,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         self.connect(node_id).await
     }
 
-    /// Encode+send a reliable secured request; returns the allocated exchange id.
+    /// Encode+send a reliable secured request; returns the allocated exchange
+    /// id and the request's message counter (for
+    /// [`Pending::last_reliable_send`]).
     async fn send_request(
         &mut self,
         sid: SessionId,
@@ -5782,7 +5803,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         opcode: u8,
         protocol_id: ProtocolId,
         payload: &[u8],
-    ) -> Result<u16, Error> {
+    ) -> Result<(u16, MessageCounter), Error> {
         let out = self.sessions.encode_outbound(
             sid,
             None,
@@ -5797,7 +5818,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             .send_to(&out.wire_bytes, peer)
             .await
             .map_err(|e| Error::Operational(format!("request send: {e}")))?;
-        Ok(exchange)
+        Ok((exchange, out.message_counter))
     }
 
     /// Send a secured IM round-trip and register a pending op; the central
@@ -5823,7 +5844,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             .send_request(sid, peer, opcode, protocol_id, &payload)
             .await
         {
-            Ok(exchange) => {
+            Ok((exchange, counter)) => {
                 self.pending.insert(
                     (sid, exchange),
                     Pending {
@@ -5836,6 +5857,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                             payload,
                         },
                         retried: false,
+                        last_reliable_send: Some(counter),
                         reply: PendingReply::RoundTrip(reply),
                     },
                 );
@@ -5873,7 +5895,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             )
             .await
         {
-            Ok(exchange) => {
+            Ok((exchange, counter)) => {
                 self.pending.insert(
                     (sid, exchange),
                     Pending {
@@ -5886,6 +5908,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                             payload: req,
                         },
                         retried: false,
+                        last_reliable_send: Some(counter),
                         reply: PendingReply::TimedAction {
                             action_opcode,
                             action_payload,
@@ -5975,7 +5998,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             )
             .await
         {
-            Ok(exchange) => {
+            Ok((exchange, counter)) => {
                 self.pending.insert(
                     (sid, exchange),
                     Pending {
@@ -5988,6 +6011,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                             payload: plain_payload,
                         },
                         retried: false,
+                        last_reliable_send: Some(counter),
                         reply: PendingReply::Action {
                             opcode,
                             timed_payload,
@@ -6071,7 +6095,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             .send_request(sid, peer, opcode, ProtocolId::INTERACTION_MODEL, &payload)
             .await
         {
-            Ok(exchange) => {
+            Ok((exchange, counter)) => {
                 self.pending.insert(
                     (sid, exchange),
                     Pending {
@@ -6084,6 +6108,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                             payload,
                         },
                         retried: false,
+                        last_reliable_send: Some(counter),
                         reply: PendingReply::Read {
                             reply,
                             chunks: Vec::new(),
@@ -6149,7 +6174,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         // First chunk allocates the exchange; capture it so later chunks
         // (sent one at a time, gated on each WriteResponse — see
         // resolve_chunked_write) reuse it.
-        let exchange = match self
+        let (exchange, counter) = match self
             .send_request(
                 sid,
                 peer,
@@ -6159,7 +6184,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             )
             .await
         {
-            Ok(ex) => ex,
+            Ok(sent) => sent,
             Err(e) => {
                 let _ = reply.send(Err(e));
                 return;
@@ -6200,6 +6225,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 // already retried so a timeout fails the op cleanly instead
                 // of attempting a reconnect-resend.
                 retried: true,
+                last_reliable_send: Some(counter),
                 reply: PendingReply::ChunkedWrite {
                     reply,
                     remaining,
@@ -6427,7 +6453,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 } else if more {
                     // Ack this chunk on the same exchange to solicit the next.
                     if let Some(peer) = peer {
-                        let _ = self.send_chunk_ack(session_id, exchange_id, peer).await;
+                        if let Ok(counter) =
+                            self.send_chunk_ack(session_id, exchange_id, peer).await
+                        {
+                            self.note_reliable_send(key, counter);
+                        }
                     }
                 } else if let Some(p) = self.pending.remove(&key) {
                     self.finish_exchange(session_id, exchange_id, p.peer).await;
@@ -6477,14 +6507,17 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             let _ = reply.send(Ok(payload));
             return;
         }
-        if let Err(e) = self
+        let counter = match self
             .send_on_exchange(sid, exchange, p.peer, action_opcode, &action_payload)
             .await
         {
-            self.finish_exchange(sid, exchange, p.peer).await;
-            let _ = reply.send(Err(e));
-            return;
-        }
+            Ok(counter) => counter,
+            Err(e) => {
+                self.finish_exchange(sid, exchange, p.peer).await;
+                let _ = reply.send(Err(e));
+                return;
+            }
+        };
         // Await the action's response on the same exchange as a normal round-trip.
         self.pending.insert(
             (sid, exchange),
@@ -6498,6 +6531,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     payload: action_payload,
                 },
                 retried: true, // mid-handshake; do not trigger the reconnect-once dance
+                last_reliable_send: Some(counter),
                 reply: PendingReply::RoundTrip(reply),
             },
         );
@@ -6586,14 +6620,17 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             let _ = reply.send(Ok(statuses));
             return;
         };
-        if let Err(e) = self
+        let counter = match self
             .send_on_exchange(sid, exchange, p.peer, OP_WRITE_REQUEST, &next)
             .await
         {
-            self.finish_exchange(sid, exchange, p.peer).await;
-            let _ = reply.send(Err(e));
-            return;
-        }
+            Ok(counter) => counter,
+            Err(e) => {
+                self.finish_exchange(sid, exchange, p.peer).await;
+                let _ = reply.send(Err(e));
+                return;
+            }
+        };
         self.pending.insert(
             (sid, exchange),
             Pending {
@@ -6606,6 +6643,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     payload: next,
                 },
                 retried: true, // see the ChunkedWrite insert in handle_chunked_write
+                last_reliable_send: Some(counter),
                 reply: PendingReply::ChunkedWrite {
                     reply,
                     remaining,
@@ -6619,6 +6657,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// exchange id via `encode_outbound(.., Some(exchange), ..)`, exactly like
     /// [`Self::send_chunk_ack`]. Reliable. Sends the Write/Invoke half of a timed
     /// interaction on the same exchange as the preceding `TimedRequest`.
+    /// Returns the message's counter, for [`Pending::last_reliable_send`].
     async fn send_on_exchange(
         &mut self,
         sid: SessionId,
@@ -6626,7 +6665,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         peer: SocketAddr,
         opcode: u8,
         payload: &[u8],
-    ) -> Result<(), Error> {
+    ) -> Result<MessageCounter, Error> {
         // A pending exchange, so one we started (`I=1`).
         let out = self.sessions.encode_outbound_with_role(
             sid,
@@ -6642,17 +6681,18 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             .send_to(&out.wire_bytes, peer)
             .await
             .map_err(|e| Error::Operational(format!("timed action send: {e}")))?;
-        Ok(())
+        Ok(out.message_counter)
     }
 
     /// Reliable `StatusResponse(SUCCESS)` on a read exchange to solicit the next
-    /// chunk (mirrors `secured_read`'s per-chunk ack).
+    /// chunk (mirrors `secured_read`'s per-chunk ack). Returns the message's
+    /// counter, for [`Pending::last_reliable_send`].
     async fn send_chunk_ack(
         &mut self,
         sid: SessionId,
         exchange: u16,
         peer: SocketAddr,
-    ) -> Result<(), Error> {
+    ) -> Result<MessageCounter, Error> {
         let status = matter_interaction::build_status_response(0);
         // The read is a pending exchange, so one we started (`I=1`).
         let out = self.sessions.encode_outbound_with_role(
@@ -6669,7 +6709,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             .send_to(&out.wire_bytes, peer)
             .await
             .map_err(|e| Error::Operational(format!("chunk ack send: {e}")))?;
-        Ok(())
+        Ok(out.message_counter)
     }
 
     /// Deliver a steady-state `ReportData` to its subscription
@@ -6959,7 +6999,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             )
             .await
         {
-            Ok(exchange) => {
+            Ok((exchange, counter)) => {
                 let sub_id = SubId(self.next_sub_id);
                 self.next_sub_id += 1;
                 // Bounded report channel + reliable control channel. The bounded
@@ -6986,6 +7026,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                             payload: req,
                         },
                         retried: false,
+                        last_reliable_send: Some(counter),
                         reply: PendingReply::Subscribe {
                             sub_id,
                             reply: Some(reply),
@@ -7089,7 +7130,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         };
         if let Some(peer) = self.pending.get(&key).map(|p| p.peer) {
             // A priming report arrives on our subscribe exchange.
-            let _ = self.send_status_ack(key.0, key.1, true, peer).await;
+            if let Ok(counter) = self.send_status_ack(key.0, key.1, true, peer).await {
+                self.note_reliable_send(key, counter);
+            }
         }
         if let Some(Pending {
             reply: PendingReply::Subscribe {
@@ -7212,7 +7255,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// exchange, `exchange` with role `is_local_initiator` (false for a
     /// device-initiated report, true for a priming report on our subscribe
     /// exchange); it also piggybacks the MRP ack for what arrived there. Sent
-    /// reliably, for the reason given on [`Self::send_status_ack`].
+    /// reliably, for the reason given on [`Self::send_status_ack`]. Returns
+    /// the message's counter, for [`Pending::last_reliable_send`].
     async fn send_status(
         &mut self,
         sid: SessionId,
@@ -7220,7 +7264,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         is_local_initiator: bool,
         peer: SocketAddr,
         status: u8,
-    ) -> Result<(), Error> {
+    ) -> Result<MessageCounter, Error> {
         let payload = matter_interaction::build_status_response(status);
         let out = self.sessions.encode_outbound_with_role(
             sid,
@@ -7236,7 +7280,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             .send_to(&out.wire_bytes, peer)
             .await
             .map_err(|e| Error::Operational(format!("status response send: {e}")))?;
-        Ok(())
+        Ok(out.message_counter)
     }
 
     /// Send an application `StatusResponse(Success)` on a subscription exchange
@@ -7259,9 +7303,17 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         exchange: u16,
         is_local_initiator: bool,
         peer: SocketAddr,
-    ) -> Result<(), Error> {
+    ) -> Result<MessageCounter, Error> {
         self.send_status(sid, exchange, is_local_initiator, peer, 0)
             .await
+    }
+
+    /// Record `counter` as the last reliable message sent on the pending op
+    /// `key` ([`Pending::last_reliable_send`]). No-op if `key` is not pending.
+    fn note_reliable_send(&mut self, key: (SessionId, u16), counter: MessageCounter) {
+        if let Some(p) = self.pending.get_mut(&key) {
+            p.last_reliable_send = Some(counter);
+        }
     }
 
     /// Close `exchange` on `sid` the way chip's `ExchangeContext::DoClose`
@@ -7534,10 +7586,33 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 MrpEvent::Expired {
                     session_id,
                     exchange_id,
-                    ..
+                    counter,
                 } => {
-                    self.on_pending_timeout(session_id, exchange_id, SubscribeFailure::MrpExpired)
+                    // The event names the exchange by id alone. It is the
+                    // pending op's own expiry only if it is the op's last
+                    // reliable message; otherwise it is one of our reliable
+                    // answers on a device exchange with the same id, which MRP
+                    // has already given up on (`Pending::last_reliable_send`).
+                    let ours = self
+                        .pending
+                        .get(&(session_id, exchange_id))
+                        .is_some_and(|p| p.last_reliable_send == Some(counter));
+                    if ours {
+                        self.on_pending_timeout(
+                            session_id,
+                            exchange_id,
+                            SubscribeFailure::MrpExpired,
+                        )
                         .await;
+                    } else {
+                        tracing::debug!(
+                            target: "matter_controller::actor",
+                            session_id = session_id.0,
+                            exchange_id,
+                            counter = counter.0,
+                            "MRP gave up on a message that is no pending op's own"
+                        );
+                    }
                 }
                 // Standalone ACKs and an exhausted counter take the same path
                 // as a close's flush. `MrpEvent` is `#[non_exhaustive]`;
@@ -14784,6 +14859,7 @@ mod tests {
                     payload: vec![],
                 },
                 retried: true,
+                last_reliable_send: None,
                 reply: PendingReply::Subscribe {
                     sub_id: pr.sub_id,
                     reply: None,
@@ -15036,6 +15112,7 @@ mod tests {
                     payload: vec![],
                 },
                 retried: false,
+                last_reliable_send: None,
                 reply: PendingReply::RoundTrip(reply_tx),
             },
         );
@@ -15065,6 +15142,7 @@ mod tests {
                     payload: vec![],
                 },
                 retried: false,
+                last_reliable_send: None,
                 reply: PendingReply::RoundTrip(reply_tx),
             },
         );
@@ -15157,6 +15235,7 @@ mod tests {
                     payload: vec![],
                 },
                 retried,
+                last_reliable_send: None,
                 reply: PendingReply::Read {
                     reply: reply_tx,
                     chunks: Vec::new(),
@@ -22610,6 +22689,7 @@ mod tests {
                     payload,
                 },
                 retried: false,
+                last_reliable_send: None,
                 reply: PendingReply::Subscribe {
                     sub_id: SubId(sub_id),
                     reply: Some(reply),
@@ -22961,6 +23041,7 @@ mod tests {
                         payload: vec![],
                     },
                     retried: true,
+                    last_reliable_send: None,
                     reply,
                 },
             );
@@ -23147,6 +23228,7 @@ mod tests {
                         payload: vec![],
                     },
                     retried: false,
+                    last_reliable_send: None,
                     reply,
                 },
             );
@@ -23300,6 +23382,7 @@ mod tests {
                     payload: vec![],
                 },
                 retried: false,
+                last_reliable_send: None,
                 reply: PendingReply::RoundTrip(reply),
             },
         );
@@ -23576,6 +23659,250 @@ mod tests {
             "the answer must go on the device's exchange"
         );
         assert_eq!(w.actor.pending.len(), 1, "our request is still pending");
+    }
+
+    /// The expiry half of the collision (review I1). Our invoke R is pending on
+    /// our exchange X and the device has acknowledged it, so it was delivered. The
+    /// device then opens its own exchange X; we answer it with a reliable
+    /// `StatusResponse`, and the device goes silent, so that answer expires.
+    /// `MrpEvent::Expired` names only the id, X. It is not R's expiry: R must
+    /// stay pending, unanswered, and must not be re-sent (it may be a toggle).
+    ///
+    /// Intervals are shrunk to 1 ms (one transmission, no jitter), so the
+    /// answer's deadline has passed after the 50 ms sleep.
+    #[tokio::test]
+    async fn an_expiry_on_a_device_exchange_reusing_a_pending_id_is_not_the_requests() {
+        let mut w = wired_actor();
+        w.route_node(0x42);
+        let dev_addr = w.dev.local_addr();
+        let im = ProtocolId::INTERACTION_MODEL;
+        {
+            let session = w.actor.sessions.get_mut(w.sid).unwrap();
+            session.peer_addr = Some(dev_addr);
+            let mut config = matter_transport::MrpConfig::default();
+            config.initial_active = Duration::from_millis(1);
+            config.initial_idle = Duration::from_millis(1);
+            config.max_transmissions = 1;
+            config.backoff_jitter = 0.0;
+            session.mrp = matter_transport::MrpState::with_jitter_seed(config, 1);
+        }
+        let (reply, mut reply_rx) = oneshot::channel();
+        let sent = w
+            .actor
+            .send_request(w.sid, dev_addr, 0x08, im, &[0x15, 0x18])
+            .await
+            .unwrap();
+        let exchange = sent.0;
+        w.actor.pending.insert(
+            (w.sid, exchange),
+            Pending {
+                response_deadline: far_future(),
+                node_id: 0x42,
+                peer: dev_addr,
+                request: PendingRequest {
+                    opcode: 0x08,
+                    protocol_id: im,
+                    payload: vec![0x15, 0x18],
+                },
+                retried: false,
+                last_reliable_send: Some(sent.1),
+                reply: PendingReply::RoundTrip(reply),
+            },
+        );
+        // The device receives R and ACKs it at once.
+        let Some(Sent::App { .. }) = w.next_frame(SENT_WITHIN).await else {
+            panic!("expected R on the wire");
+        };
+        let ack = w
+            .device
+            .finish_exchange_with_role(w.dev_sid, exchange, false)
+            .into_iter()
+            .find_map(|e| match e {
+                MrpEvent::SendStandaloneAck { packet, .. } => Some(packet),
+                _ => None,
+            })
+            .expect("the device owes R an ACK");
+        w.actor.handle_inbound(&ack, dev_addr).await;
+
+        // The device's own exchange X: a report no subscription matches,
+        // answered reliably with InvalidSubscription. The device never ACKs it.
+        let report = build_report_data(1, 0x06, 0x0000, &matter_codec::Value::Bool(true));
+        let theirs = w
+            .device
+            .encode_outbound_with_role(
+                w.dev_sid,
+                exchange,
+                true,
+                OP_REPORT_DATA,
+                im,
+                &report,
+                MrpFlags { reliable: true },
+                Instant::now(),
+            )
+            .unwrap();
+        w.actor.handle_inbound(&theirs.wire_bytes, dev_addr).await;
+        assert!(matches!(
+            w.next_frame(SENT_WITHIN).await,
+            Some(Sent::App {
+                opcode: OP_STATUS_RESPONSE,
+                actor_initiated: false,
+                ..
+            })
+        ));
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        w.actor.drive_mrp().await;
+        assert!(
+            matches!(
+                reply_rx.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ),
+            "R was failed by the answer's expiry"
+        );
+        assert!(
+            w.actor.pending.contains_key(&(w.sid, exchange)),
+            "R was taken out of pending (re-sent or failed) by the answer's expiry"
+        );
+        assert!(
+            w.actor.pending_connects.is_empty(),
+            "R was queued for a re-send"
+        );
+        assert!(
+            w.actor.sessions.get(w.sid).is_some(),
+            "the session was dropped"
+        );
+    }
+
+    /// Every path that puts a reliable message on a pending op's exchange
+    /// records its counter in `last_reliable_send`, so the op's own MRP expiry
+    /// is still recognised as its own (the positive half of
+    /// `an_expiry_on_a_device_exchange_reusing_a_pending_id_is_not_the_requests`).
+    /// Covers the request entry points, the timed action, the read-chunk and
+    /// priming `StatusResponse`s, a chunked write's next chunk and the
+    /// reconnect re-send.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // One walk through every send path.
+    async fn every_reliable_send_on_a_pending_exchange_records_its_counter() {
+        fn last_sent(w: &Wired) -> MessageCounter {
+            MessageCounter(w.actor.sessions.get(w.sid).unwrap().outbound_counter - 1)
+        }
+        fn sole(w: &Wired) -> (u16, Option<MessageCounter>) {
+            assert_eq!(w.actor.pending.len(), 1);
+            let (key, p) = w.actor.pending.iter().next().unwrap();
+            (key.1, p.last_reliable_send)
+        }
+        /// Read (and so let the device decode) everything the actor sent.
+        async fn drain(w: &mut Wired) {
+            while w.next_frame(Duration::from_millis(20)).await.is_some() {}
+        }
+        async fn answer(w: &mut Wired, exchange: u16, opcode: u8, payload: &[u8]) {
+            let out = w
+                .device
+                .encode_outbound_with_role(
+                    w.dev_sid,
+                    exchange,
+                    false,
+                    opcode,
+                    ProtocolId::INTERACTION_MODEL,
+                    payload,
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            let from = w.dev.local_addr();
+            w.actor.handle_inbound(&out.wire_bytes, from).await;
+        }
+
+        let mut w = wired_actor();
+        w.route_node(0x42);
+        let peer = w.dev.local_addr();
+        let im = ProtocolId::INTERACTION_MODEL;
+
+        // Round trip.
+        let (tx, _rx) = oneshot::channel();
+        w.actor
+            .start_round_trip(0x42, 0x08, im, vec![0x15, 0x18], tx)
+            .await;
+        assert_eq!(sole(&w).1, Some(last_sent(&w)), "start_round_trip");
+        w.actor.pending.clear();
+        drain(&mut w).await;
+
+        // Read, then the StatusResponse that asks for the next chunk.
+        let (tx, _rx) = oneshot::channel();
+        w.actor.start_read(0x42, vec![0x15, 0x18], tx).await;
+        assert_eq!(sole(&w).1, Some(last_sent(&w)), "start_read");
+        let (exchange, _) = sole(&w);
+        drain(&mut w).await;
+        let chunk = build_report_data_chunk(1, 0x06, 0, &matter_codec::Value::Bool(true), true);
+        answer(&mut w, exchange, OP_REPORT_DATA, &chunk).await;
+        assert_eq!(sole(&w).1, Some(last_sent(&w)), "read chunk StatusResponse");
+        w.actor.pending.clear();
+        drain(&mut w).await;
+
+        // Timed: the TimedRequest, then the action after StatusResponse(0).
+        let (tx, _rx) = oneshot::channel();
+        w.actor
+            .begin_timed(w.sid, peer, 0x42, 1000, 0x08, vec![0x15, 0x18], tx)
+            .await;
+        assert_eq!(sole(&w).1, Some(last_sent(&w)), "begin_timed");
+        let (exchange, _) = sole(&w);
+        drain(&mut w).await;
+        answer(
+            &mut w,
+            exchange,
+            OP_STATUS_RESPONSE,
+            &matter_interaction::build_status_response(0),
+        )
+        .await;
+        assert_eq!(sole(&w).1, Some(last_sent(&w)), "timed action");
+        w.actor.pending.clear();
+        drain(&mut w).await;
+
+        // Chunked write: the first chunk, then the next after its WriteResponse.
+        let (tx, _rx) = oneshot::channel();
+        w.actor
+            .handle_chunked_write(0x42, vec![vec![0x15, 0x18], vec![0x15, 0x18]], tx)
+            .await;
+        assert_eq!(
+            sole(&w).1,
+            Some(last_sent(&w)),
+            "chunked write, first chunk"
+        );
+        let (exchange, _) = sole(&w);
+        drain(&mut w).await;
+        answer(
+            &mut w,
+            exchange,
+            OP_WRITE_RESPONSE,
+            &write_response_success(),
+        )
+        .await;
+        assert_eq!(sole(&w).1, Some(last_sent(&w)), "chunked write, next chunk");
+        w.actor.pending.clear();
+        drain(&mut w).await;
+
+        // Subscribe.
+        let (tx, _rx) = oneshot::channel();
+        w.actor
+            .start_subscribe(0x42, vec![], vec![], vec![], 0, 60, tx)
+            .await;
+        assert_eq!(sole(&w).1, Some(last_sent(&w)), "start_subscribe");
+        let (exchange, _) = sole(&w);
+        drain(&mut w).await;
+        // A priming report, answered with a reliable StatusResponse(0).
+        let priming = build_report_data(1, 0x06, 0, &matter_codec::Value::Bool(true));
+        answer(&mut w, exchange, OP_REPORT_DATA, &priming).await;
+        assert_eq!(sole(&w).1, Some(last_sent(&w)), "priming StatusResponse");
+        drain(&mut w).await;
+        let (_, p) = w.actor.pending.drain().next().unwrap();
+
+        // The reconnect re-send of a parked op.
+        let parked = Pending {
+            last_reliable_send: None,
+            ..p
+        };
+        w.actor.resume_resend_pending(parked, w.sid, peer).await;
+        assert_eq!(sole(&w).1, Some(last_sent(&w)), "resume_resend_pending");
     }
 
     /// Guard: another Secure Channel status report on a new exchange
@@ -23907,6 +24234,7 @@ mod tests {
                     payload: vec![],
                 },
                 retried: true,
+                last_reliable_send: None,
                 reply: PendingReply::TimedAction {
                     action_opcode: 0x08, // InvokeRequest
                     action_payload: vec![0x15, 0x18],
@@ -23968,6 +24296,7 @@ mod tests {
                     payload: vec![],
                 },
                 retried: true,
+                last_reliable_send: None,
                 reply: PendingReply::ChunkedWrite {
                     reply,
                     remaining: VecDeque::from([vec![0x15, 0x18]]),
@@ -24204,7 +24533,7 @@ mod tests {
             session.mrp = matter_transport::MrpState::with_jitter_seed(config, 1);
         }
         // A resubscribe attempt on the wire that the device never ACKs.
-        let exchange = w
+        let (exchange, sent_counter) = w
             .actor
             .send_request(
                 w.sid,
@@ -24224,6 +24553,8 @@ mod tests {
         ));
         let (pr, _reports, _ctrl) = test_pending_resubscribe(1, 0x42, 0, Instant::now());
         seed_inflight_resubscribe(&mut w.actor, (w.sid, exchange), pr, far_future());
+        // The attempt's own expiry must be recognised as its own.
+        w.actor.note_reliable_send((w.sid, exchange), sent_counter);
         // A device message on another exchange whose ACK is still buffered.
         let counter = w.buffer_device_message(0x7E);
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -24935,7 +25266,7 @@ mod tests {
         let sid = register_test_session(&mut actor);
         let peer: SocketAddr = "127.0.0.1:5540".parse().unwrap();
         // A real reliable send, so MRP holds a retransmit for the exchange.
-        let exchange = tokio::time::timeout(
+        let (exchange, _) = tokio::time::timeout(
             SENT_WITHIN,
             actor.send_request(
                 sid,
@@ -24979,7 +25310,7 @@ mod tests {
         let mut actor = actor_with_one_fabric();
         let sid = register_test_session(&mut actor);
         let peer: SocketAddr = "127.0.0.1:5540".parse().unwrap();
-        let exchange = tokio::time::timeout(
+        let (exchange, _) = tokio::time::timeout(
             SENT_WITHIN,
             actor.send_request(
                 sid,
@@ -24994,7 +25325,7 @@ mod tests {
         .unwrap();
         let (pr, _reports, _ctrl) = test_pending_resubscribe(1, 0x42, 0, Instant::now());
         seed_inflight_resubscribe(&mut actor, (sid, exchange), pr, far_future());
-        let other = tokio::time::timeout(
+        let (other, _) = tokio::time::timeout(
             SENT_WITHIN,
             actor.send_request(sid, peer, 0x02, ProtocolId::INTERACTION_MODEL, b"ping"),
         )
