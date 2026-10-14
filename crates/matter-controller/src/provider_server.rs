@@ -201,6 +201,10 @@ pub struct ProviderServer<D> {
     /// Number of accepts performed so far (also indexes the session id).
     accepts: u16,
     now: MatterTime,
+    /// Next message counter for the unsecured handshake frames this server
+    /// sends (Sigma2, `Sigma2_Resume`, status reports). Starts at a CSPRNG
+    /// value in `[1, 2^28]` (Matter Core Spec §4.6.1.1, §4.6.1.2; see
+    /// [`seed_handshake_counter`]) and advances by one per frame.
     handshake_counter: u32,
     /// When set, an accepted session whose authenticated peer node id is not
     /// this value fails the accept (its pooled credential is consumed — that
@@ -221,6 +225,34 @@ pub struct ProviderServer<D> {
     /// the serve future must not lose the rotation. Best-effort: the sink
     /// must not block (spawn if it needs async work).
     record_sink: Option<Box<dyn Fn(ResumptionRecord) + Send + Sync>>,
+}
+
+/// Draw the provider server's first unsecured handshake counter:
+/// `Crypto_DRBG(len = 28) + 1`, a CSPRNG value in `[1, 2^28]` (Matter Core
+/// Spec §4.6.1.1; §4.6.1.2 requires the unencrypted counter to start random).
+/// Same mapping as chip's `GlobalUnencryptedMessageCounter::Init`
+/// (`GetRandU32() & 0x0FFFFFFF`, then a pre-increment;
+/// `src/transport/MessageCounter.h`) and as `matter-transport`'s secure
+/// session counters.
+///
+/// Falls back to 1, with a `warn`, if the system CSPRNG fails, so
+/// [`ProviderServer::new`] stays infallible. chip aborts there instead
+/// (`VerifyOrDie` in `src/crypto/RandUtils.cpp`); a library must not abort its
+/// host. The fallback loses only the traffic-analysis resistance the random
+/// start exists for: the counter is in the cleartext header, and these
+/// frames are unencrypted anyway. Every accept then runs a CASE handshake
+/// that needs the same CSPRNG and fails closed without it.
+fn seed_handshake_counter() -> u32 {
+    let mut bytes = [0u8; 4];
+    if matter_crypto::random_bytes(&mut bytes).is_err() {
+        tracing::warn!(
+            target: "matter_controller::provider_server",
+            "system CSPRNG unavailable seeding the provider server's handshake \
+             counter; falling back to 1 (spec §4.6.1.1 wants a random start)"
+        );
+        return 1;
+    }
+    (u32::from_le_bytes(bytes) & 0x0FFF_FFFF) + 1
 }
 
 impl<D: AsyncDatagram> ProviderServer<D> {
@@ -251,7 +283,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
             base_session_id,
             accepts: 0,
             now,
-            handshake_counter: 1,
+            handshake_counter: seed_handshake_counter(),
             expected_peer: None,
             resumption_records: Vec::new(),
             record_sink: None,
@@ -1193,6 +1225,41 @@ mod tests {
         assert_eq!(
             parse_status_report_body(&body),
             Some((STATUS_GENERAL_FAILURE, 0x0000_0002, code))
+        );
+    }
+
+    /// The unsecured handshake counter (Sigma2 / `Sigma2_Resume` / status
+    /// reports) starts at a CSPRNG value in `[1, 2^28]` per server (Matter
+    /// Core Spec §4.6.1.1, §4.6.1.2). Distinctness is what tells this apart
+    /// from the old fixed start of 1: 8 draws from 2^28 values all being
+    /// equal has probability 2^-196.
+    #[test]
+    fn handshake_counter_starts_at_a_random_value_in_the_spec_range() {
+        let starts: Vec<u32> = (0..8)
+            .map(|_| {
+                let (io, _peer) = matter_commissioning::driver::InMemoryDatagram::pair();
+                let mut server = ProviderServer::new(
+                    io,
+                    Vec::new(),
+                    TrustedRoots::new(),
+                    0x10,
+                    MatterTime::from_unix_secs(2_000_000_000),
+                );
+                let first = server.next_handshake_counter();
+                assert_eq!(server.next_handshake_counter(), first.wrapping_add(1));
+                first
+            })
+            .collect();
+        for c in &starts {
+            assert!(
+                (1..=1u32 << 28).contains(c),
+                "handshake counter {c:#x} outside [1, 2^28]"
+            );
+        }
+        assert!(
+            starts.iter().any(|c| *c != starts[0]),
+            "8 provider servers all started at {:#x}: the counter is not CSPRNG-seeded",
+            starts[0]
         );
     }
 

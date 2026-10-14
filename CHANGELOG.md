@@ -32,7 +32,8 @@ or never (the MRP entries, after the security entries in each crate's list).
 `matter-transport` also stops an oversized send from leaking an exchange slot,
 which could leave a session refusing every report the device sent, and
 starts each secure session's message counter at a random value, as the spec
-requires, instead of at 1.
+requires, instead of at 1; the controller's OTA provider server does the same
+for its handshake counter.
 Commissioning now closes its own CASE session with a Secure Channel
 CloseSession, and both it and the controller honour one from the device.
 The Interaction Model parsers now reject a truncated message and bytes after
@@ -270,6 +271,29 @@ published release, `0.1.0` through `0.18.1`.
 - Affected: every published release through `0.18.1`. Requires
   `matter-interaction` 0.4.3 and, with `ota`, `matter-ota` 0.5.2.
 
+### matter-controller: Fixed — the OTA provider server's handshake counter starts at a random value
+
+- `ProviderServer`, which `serve_ota` runs to accept the OTA requestor's
+  CASE session, sends its Sigma2, `Sigma2_Resume` and status reports as
+  unsecured messages with its own message counter. That counter started at
+  1 for every server and counted up, so a passive observer could read how
+  many handshake frames a server had sent. Matter 1.4 Core §4.6.1.1 requires
+  every message counter to start at `Crypto_DRBG(len = 28) + 1`, a CSPRNG
+  value in `[1, 2^28]`, and §4.6.1.2 applies it to the unencrypted counter.
+  chip seeds its `GlobalUnencryptedMessageCounter` that way
+  (`src/transport/MessageCounter.h`, at master 5cd2917a and at v1.4.2.0).
+- `ProviderServer::new` now seeds it from `matter_crypto::random_bytes` with
+  the same 28-bit mask plus one as `matter-transport` 0.7.4's secure-session
+  counters. If the CSPRNG fails it starts at 1 and logs a `warn`, for the
+  same reason as there (chip aborts; a library should not, and an error
+  would make `new` fallible).
+- Interoperability is unaffected: chip tracks a peer's unsecured counter
+  per unauthenticated session (`UnauthenticatedSession::GetPeerMessageCounter`)
+  and accepts any first value, as it already does for the commissioning
+  drivers' random handshake counters.
+- Affected: every published release, `0.1.0` through `0.18.1`
+  (`ProviderServer` predates `0.1.0`).
+
 ### matter-transport: Fixed (security) — session keys stay out of `Debug` output
 
 - `SessionKeys` derived `Debug`, and `Session` derives `Debug` and prints its
@@ -394,8 +418,11 @@ published release, `0.1.0` through `0.18.1`.
   is unchanged: the counter still refuses to pass `u32::MAX` and reports
   `Error::CounterOverflow` (or `MrpEvent::SessionCounterExhausted` for an
   ACK), with about `2^32 - 2^28` messages available from the highest start.
-  No wire vector pins a session counter, so none changes. The unsecured
-  handshake counter in `matter-commissioning` already followed §4.6.1.1.
+  No wire vector pins a session counter, so none changes.
+- Unsecured handshake counters are not `matter-transport`'s, and are
+  covered separately: the commissioning drivers' (`matter-commissioning`)
+  already followed §4.6.1.1, and the OTA provider server's
+  (`matter-controller`) is fixed in 0.18.2 (see there).
 - Not a breaking change: no signature or type changes.
   `Session::outbound_counter` stays a public field that callers may set.
 - Affected: every published release, `0.1.0` through `0.7.3` (the counter has
