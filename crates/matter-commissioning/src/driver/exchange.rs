@@ -155,8 +155,14 @@ pub async fn secured_round_trip<T: AsyncDatagram>(
                     continue;
                 }
                 match decoded {
+                    // Our response arrives on our exchange: our id, and `I`
+                    // clear because we are its initiator. A message the device
+                    // starts carries `I=1` and is a different exchange even
+                    // when its id equals ours (Matter 1.4 Core §4.10.5.1;
+                    // chip `ExchangeContext::MatchExchange`).
                     DecodeInboundOutput::AppMessage {
                         exchange_id,
+                        is_initiator: false,
                         payload,
                         protocol_id: msg_protocol_id,
                         opcode: msg_opcode,
@@ -362,9 +368,14 @@ pub async fn secured_read<T: AsyncDatagram>(
                     continue;
                 }
                 match decoded {
-                    DecodeInboundOutput::AppMessage { exchange_id, payload, .. }
-                        if exchange_id == our_exchange =>
-                    {
+                    // Our exchange only: our id with `I` clear, as in
+                    // `secured_round_trip`.
+                    DecodeInboundOutput::AppMessage {
+                        exchange_id,
+                        is_initiator: false,
+                        payload,
+                        ..
+                    } if exchange_id == our_exchange => {
                         // Enforce all three read caps BEFORE parsing the chunk —
                         // in particular the per-chunk cap bounds a lone oversized
                         // blob up front rather than parsing it first.
@@ -393,9 +404,10 @@ pub async fn secured_read<T: AsyncDatagram>(
                         }
                         // Ack this chunk + solicit the next on the same exchange.
                         let status = crate::im::build_status_response(0);
-                        let ack = sessions.encode_outbound(
+                        let ack = sessions.encode_outbound_with_role(
                             session_id,
-                            Some(our_exchange),
+                            our_exchange,
+                            true,
                             OP_STATUS_RESPONSE,
                             ProtocolId::INTERACTION_MODEL,
                             &status,
@@ -465,8 +477,10 @@ async fn drive_timer_tick<T: AsyncDatagram>(
     Ok(())
 }
 
-/// Send the standalone ACK still owed on `exchange_id` now that the exchange
-/// is over ([`SessionManager::finish_exchange`]). Best effort: a failed send
+/// Send the standalone ACK still owed on `exchange_id`, an exchange we
+/// started, now that the exchange is over
+/// ([`SessionManager::finish_exchange_with_role`]; a device exchange that
+/// reuses the id keeps its own ACK). Best effort: a failed send
 /// or an exhausted counter is not an error for the caller (its response
 /// already arrived, or it is already failing); chip ignores `FlushAcks`
 /// failures the same way (`ExchangeContext::DoClose`). An exhausted counter
@@ -479,7 +493,7 @@ async fn flush_exchange_ack<T: AsyncDatagram>(
     exchange_id: u16,
     peer: SocketAddr,
 ) {
-    for event in sessions.finish_exchange(session_id, exchange_id) {
+    for event in sessions.finish_exchange_with_role(session_id, exchange_id, true) {
         match event {
             MrpEvent::SendStandaloneAck { packet, .. } => {
                 let _ = transport.send_to(&packet, peer).await;
@@ -1497,6 +1511,67 @@ mod tests {
             "{got:?}"
         );
         assert!(ctrl.get(session).is_none());
+    }
+
+    /// A device that starts its own exchange with the id of ours (legal:
+    /// each side allocates its own ids, Matter 1.4 Core §4.10.2) sends with
+    /// `I=1`, so its message is not our response; the response is the `I=0`
+    /// one that follows.
+    #[tokio::test]
+    async fn secured_round_trip_ignores_a_device_exchange_that_reuses_our_id() {
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = matter_transport::SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let (dev_addr, ctrl_addr) = (dev_io.local_addr(), ctrl_io.local_addr());
+        let controller = secured_round_trip(
+            &ctrl_io,
+            &mut ctrl,
+            session,
+            dev_addr,
+            0x08,
+            ProtocolId::INTERACTION_MODEL,
+            b"req",
+        );
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, .. } =
+                dev.decode_inbound(&pkt, Instant::now()).unwrap()
+            else {
+                panic!("expected the request");
+            };
+            // The device's own exchange, same id: I=1.
+            let unsolicited = dev
+                .encode_outbound_with_role(
+                    session,
+                    exchange_id,
+                    true,
+                    0x05,
+                    ProtocolId::INTERACTION_MODEL,
+                    b"device-initiated",
+                    MrpFlags { reliable: false },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev_io
+                .send_to(&unsolicited.wire_bytes, ctrl_addr)
+                .await
+                .unwrap();
+            let resp = dev
+                .encode_outbound_with_role(
+                    session,
+                    exchange_id,
+                    false,
+                    0x09,
+                    ProtocolId::INTERACTION_MODEL,
+                    b"resp",
+                    MrpFlags { reliable: false },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev_io.send_to(&resp.wire_bytes, ctrl_addr).await.unwrap();
+        };
+        let (got, ()) = tokio::join!(controller, device);
+        assert_eq!(got.unwrap().payload, b"resp");
     }
 
     /// Guard: a `CloseSession`-shaped report on the exchange WE started (I
