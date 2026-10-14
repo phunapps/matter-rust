@@ -861,7 +861,10 @@ struct Pending {
     /// its role. MRP keeps at most one reliable message in flight per
     /// exchange, so the latest is the only one that can expire. A send site
     /// that forgot to record its counter fails safe: the op's real expiry is
-    /// ignored and the op fails at its `response_deadline`, with no re-send.
+    /// ignored and the op is handled at its `response_deadline` under the
+    /// deadline policy instead ([`Actor::drive_response_deadlines`]: a read is
+    /// re-sent once, a resubscribe rescheduled, anything else failed), which
+    /// never re-sends a request the device may have executed.
     last_reliable_send: Option<MessageCounter>,
     /// Where the resolved result is delivered.
     reply: PendingReply,
@@ -23815,13 +23818,73 @@ mod tests {
         );
     }
 
+    /// The positive end to end: a plain invoke the device never ACKs is
+    /// matched to its own MRP expiry (the counter it recorded), so it takes the
+    /// reconnect-and-re-send-once path (SH.1 stale-session recovery): it leaves
+    /// `pending`, the stale route is evicted, and the re-send waits on a new
+    /// session. Intervals are shrunk to 1 ms, one transmission, no jitter.
+    #[tokio::test]
+    async fn an_invokes_own_mrp_expiry_still_reconnects_and_resends() {
+        let mut w = wired_actor();
+        let fabric_id = w.route_node(0x42);
+        let dev_addr = w.dev.local_addr();
+        {
+            let session = w.actor.sessions.get_mut(w.sid).unwrap();
+            session.peer_addr = Some(dev_addr);
+            let mut config = matter_transport::MrpConfig::default();
+            config.initial_active = Duration::from_millis(1);
+            config.initial_idle = Duration::from_millis(1);
+            config.max_transmissions = 1;
+            config.backoff_jitter = 0.0;
+            session.mrp = matter_transport::MrpState::with_jitter_seed(config, 1);
+        }
+        let (tx, mut reply_rx) = oneshot::channel();
+        w.actor
+            .handle_action(
+                0x42,
+                0x08,
+                vec![0x15, 0x18],
+                Box::new(|| vec![0x15, 0x18]),
+                vec![],
+                1000,
+                tx,
+            )
+            .await;
+        assert_eq!(w.actor.pending.len(), 1);
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        w.actor.drive_mrp().await;
+        assert!(w.actor.pending.is_empty(), "the expiry is the invoke's own");
+        assert!(
+            matches!(
+                reply_rx.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ),
+            "the invoke is re-sent once, not failed"
+        );
+        assert!(
+            !w.actor.cache.contains_key(&(fabric_id, 0x42)),
+            "the stale route is evicted"
+        );
+        assert!(
+            w.actor
+                .pending_connects
+                .get(&0x42)
+                .is_some_and(|waiters| waiters
+                    .iter()
+                    .any(|wt| matches!(wt, ConnectWaiter::ResendPending(_)))),
+            "the re-send waits on a new session"
+        );
+    }
+
     /// Every path that puts a reliable message on a pending op's exchange
     /// records its counter in `last_reliable_send`, so the op's own MRP expiry
     /// is still recognised as its own (the positive half of
     /// `an_expiry_on_a_device_exchange_reusing_a_pending_id_is_not_the_requests`).
-    /// Covers the request entry points, the timed action, the read-chunk and
-    /// priming `StatusResponse`s, a chunked write's next chunk and the
-    /// reconnect re-send.
+    /// Covers the request entry points (the production invoke path
+    /// `handle_action` among them), a resubscribe attempt, the timed action,
+    /// the read-chunk and priming `StatusResponse`s, a chunked write's next
+    /// chunk and the reconnect re-send.
     #[tokio::test]
     #[allow(clippy::too_many_lines)] // One walk through every send path.
     async fn every_reliable_send_on_a_pending_exchange_records_its_counter() {
@@ -23866,6 +23929,30 @@ mod tests {
             .start_round_trip(0x42, 0x08, im, vec![0x15, 0x18], tx)
             .await;
         assert_eq!(sole(&w).1, Some(last_sent(&w)), "start_round_trip");
+        w.actor.pending.clear();
+        drain(&mut w).await;
+
+        // The production invoke path (a plain, non-timed attempt).
+        let (tx, _rx) = oneshot::channel();
+        w.actor
+            .handle_action(
+                0x42,
+                0x08,
+                vec![0x15, 0x18],
+                Box::new(|| vec![0x15, 0x18]),
+                vec![],
+                1000,
+                tx,
+            )
+            .await;
+        assert_eq!(sole(&w).1, Some(last_sent(&w)), "handle_action");
+        w.actor.pending.clear();
+        drain(&mut w).await;
+
+        // A resubscribe attempt.
+        let (pr, _reports, _ctrl) = test_pending_resubscribe(1, 0x42, 0, Instant::now());
+        w.actor.resume_resubscribe(pr, w.sid, peer).await;
+        assert_eq!(sole(&w).1, Some(last_sent(&w)), "resume_resubscribe");
         w.actor.pending.clear();
         drain(&mut w).await;
 
