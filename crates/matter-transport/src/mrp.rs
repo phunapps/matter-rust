@@ -1188,7 +1188,17 @@ impl MrpState {
 
         if header.exchange_flags.contains(ExchangeFlags::ACK) {
             if let Some(MessageCounter(c)) = header.ack_counter {
-                self.pending_acks.remove(&MessageCounter(c));
+                // By counter alone (§4.12.5.2.1): our counter names one
+                // message, whatever exchange the ACK rides. If it was on the
+                // other exchange with this id (a peer that piggybacks on node
+                // and exchange id only, as §4.12.5.1.1 reads, can do that),
+                // that exchange may now have no work left; reclaim it here,
+                // since the reclaims below act on the inbound's own exchange.
+                if let Some(acked) = self.pending_acks.remove(&MessageCounter(c)) {
+                    if acked.exchange != exchange {
+                        self.reclaim_if_idle(acked.exchange);
+                    }
+                }
             }
             // StandaloneAck: opcode 0x10, empty app payload, A=1, R=0.
             // `unwrap_or` here is safe — A=1 guarantees ack_counter is Some,
@@ -3825,6 +3835,36 @@ mod tests {
                 (SHARED_ID, MessageCounter(101), false),
             ]
         );
+    }
+
+    /// An ACK clears a retransmit by counter alone (§4.12.5.2.1), whatever
+    /// exchange it rides. When the ACK for our message on the peer's exchange
+    /// rides a message on OURS (a peer that matches piggybacks on node and
+    /// exchange id only, as §4.12.5.1.1 reads), the peer's exchange is left
+    /// with no work and must be reclaimed, or each such ACK leaks a slot.
+    #[test]
+    fn a_cross_exchange_ack_reclaims_the_exchange_it_completes() {
+        let mut mrp = MrpState::new(cfg());
+        let now = t0();
+        send_reliable_on(&mut mrp, peers(SHARED_ID), 1, now);
+        mrp.note_local_exchange(SHARED_ID);
+        assert_eq!(mrp.exchange_count(), 2);
+
+        let inbound = build_inbound_payload(
+            ExchangeFlags::ACK,
+            0x05,
+            SHARED_ID,
+            Some(MessageCounter(1)),
+            b"on-ours",
+        );
+        mrp.process_inbound(inbound, MessageCounter(100), now)
+            .unwrap();
+        assert!(!mrp.has_pending(), "the retransmit is cleared");
+        assert!(
+            !mrp.holds(SHARED_ID, false),
+            "the peer's exchange is reclaimed"
+        );
+        assert_eq!(mrp.exchange_count(), 0, "ours is idle too");
     }
 
     /// A transport-reliable session cancels the ACK the inbound armed, and
