@@ -53,10 +53,13 @@ const IDLE_SLEEP: Duration = Duration::from_secs(3600);
 /// timers are honoured. `peer` is used only as the send destination — inbound
 /// datagrams are matched by session id and exchange id (the source address is
 /// not filtered), consistent with the single-peer commissioning flow. A frame
-/// that fails to decode (bad tag, replayed counter, malformed header) is
-/// propagated as an error and aborts the round-trip rather than being skipped;
-/// that is acceptable under the single-peer assumption but is a place to harden
-/// if this is ever used where unrelated traffic can reach the socket.
+/// for an unknown session, one that fails authentication, and an
+/// authenticated duplicate that earns no ACK (no R) are skipped, as chip
+/// drops a duplicate that needs no ACK. Any other decode failure (a
+/// malformed header, for example) is propagated as an error and aborts the
+/// round-trip; that is acceptable under the single-peer assumption but is a
+/// place to harden if this is ever used where unrelated traffic can reach the
+/// socket.
 ///
 /// The response ends the exchange, so before returning this sends the
 /// standalone ACK MRP buffered for it ([`SessionManager::finish_exchange`];
@@ -141,9 +144,18 @@ pub async fn secured_round_trip<T: AsyncDatagram>(
                     // `SessionManager`: the device keeps MRP-retransmitting its
                     // final commissioning-session frame (addressed to the old,
                     // now-unknown session id) into the new session's recv loop.
+                    //
+                    // An authenticated duplicate that earns no ACK (no R, or a
+                    // `transport_reliable` session) is skipped too, as chip
+                    // drops it (`SessionManager.cpp:996` at master 5cd2917a,
+                    // `:1001` at v1.4.2.0) and as the controller actor does. A
+                    // duplicate with R set comes back as
+                    // `DuplicateReliableAckResent` below and is ACKed once.
                     Err(
                         matter_transport::Error::UnknownSession(_)
-                        | matter_transport::Error::DecryptionFailed,
+                        | matter_transport::Error::DecryptionFailed
+                        | matter_transport::Error::ReplayedCounter { .. }
+                        | matter_transport::Error::CounterTooOld { .. },
                     ) => continue,
                     Err(e) => return Err(e.into()),
                 };
@@ -302,7 +314,8 @@ fn check_chunk(
 /// final chunk ends the exchange: its standalone ACK is sent before this
 /// returns, as [`secured_round_trip`] does. Inbound demultiplexing (exchange
 /// match, unsecured-straggler skip, `UnknownSession`/`DecryptionFailed` skip,
-/// duplicate-ack bounce, MRP timer) is identical to [`secured_round_trip`].
+/// unacknowledged-duplicate skip, duplicate-ack bounce, MRP timer) is
+/// identical to [`secured_round_trip`].
 ///
 /// # Errors
 ///
@@ -357,9 +370,13 @@ pub async fn secured_read<T: AsyncDatagram>(
                 }
                 let decoded = match sessions.decode_inbound(&packet, Instant::now()) {
                     Ok(d) => d,
+                    // As in `secured_round_trip`: an unknown session, a failed
+                    // tag, or an authenticated duplicate that earns no ACK.
                     Err(
                         matter_transport::Error::UnknownSession(_)
-                        | matter_transport::Error::DecryptionFailed,
+                        | matter_transport::Error::DecryptionFailed
+                        | matter_transport::Error::ReplayedCounter { .. }
+                        | matter_transport::Error::CounterTooOld { .. },
                     ) => continue,
                     Err(e) => return Err(e.into()),
                 };
@@ -665,6 +682,130 @@ mod tests {
 
         let (got, ()) = tokio::join!(controller, device);
         assert_eq!(got.unwrap().payload, b"resp");
+    }
+
+    /// Send `dev` a message without R on a fresh device-started exchange,
+    /// twice, as a network that duplicates a datagram delivers it. The second
+    /// copy is an authenticated duplicate that earns no ACK.
+    async fn send_duplicated_unreliable(
+        dev: &mut SessionManager,
+        dev_io: &InMemoryDatagram,
+        to: std::net::SocketAddr,
+    ) {
+        let session = matter_transport::SessionId(1);
+        let msg = dev
+            .encode_outbound(
+                session,
+                None,
+                0x05,
+                ProtocolId::INTERACTION_MODEL,
+                b"unreliable",
+                MrpFlags::default(),
+                Instant::now(),
+            )
+            .unwrap();
+        dev_io.send_to(&msg.wire_bytes, to).await.unwrap();
+        dev_io.send_to(&msg.wire_bytes, to).await.unwrap();
+    }
+
+    /// A network-duplicated message without R, arriving mid-step, is dropped
+    /// and the round trip completes, as chip drops a duplicate that needs no
+    /// ACK (`SessionManager.cpp:996`). Before the fix its `ReplayedCounter`
+    /// ended the commissioning step.
+    #[tokio::test]
+    async fn secured_round_trip_drops_an_unreliable_duplicate() {
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = matter_transport::SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+
+        let controller = secured_round_trip(
+            &ctrl_io,
+            &mut ctrl,
+            session,
+            dev_addr,
+            0x08,
+            ProtocolId::INTERACTION_MODEL,
+            b"req",
+        );
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, .. } =
+                dev.decode_inbound(&pkt, Instant::now()).unwrap()
+            else {
+                panic!("expected an application message");
+            };
+            send_duplicated_unreliable(&mut dev, &dev_io, ctrl_addr).await;
+            let out = dev
+                .encode_outbound(
+                    session,
+                    Some(exchange_id),
+                    0x09,
+                    ProtocolId::INTERACTION_MODEL,
+                    b"resp",
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+        };
+        let (got, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(controller, device)
+        })
+        .await
+        .expect("the step must finish");
+        assert_eq!(
+            got.expect("the duplicate must not end the step").payload,
+            b"resp"
+        );
+    }
+
+    /// [`secured_read`] drops a network-duplicated message without R too.
+    #[tokio::test]
+    async fn secured_read_drops_an_unreliable_duplicate() {
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = matter_transport::SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+
+        let controller = secured_read(
+            &ctrl_io,
+            &mut ctrl,
+            session,
+            dev_addr,
+            0x02,
+            ProtocolId::INTERACTION_MODEL,
+            b"read",
+        );
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, .. } =
+                dev.decode_inbound(&pkt, Instant::now()).unwrap()
+            else {
+                panic!("expected the ReadRequest");
+            };
+            send_duplicated_unreliable(&mut dev, &dev_io, ctrl_addr).await;
+            let out = dev
+                .encode_outbound(
+                    session,
+                    Some(exchange_id),
+                    0x05,
+                    ProtocolId::INTERACTION_MODEL,
+                    &report_data(1, 0x06, 0x0000, 1, false),
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+        };
+        let (got, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(controller, device)
+        })
+        .await
+        .expect("the read must finish");
+        assert_eq!(got.expect("the duplicate must not end the read").len(), 1);
     }
 
     #[tokio::test]

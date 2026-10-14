@@ -727,6 +727,22 @@ published release, `0.1.0` through `0.18.1`.
 - Affected: every published release through `0.10.0`. Requires
   `matter-transport` 0.7.4.
 
+### matter-commissioning: Fixed — a duplicate without R no longer ends a commissioning step
+
+- `secured_round_trip` and `secured_read`, the exchange helpers every
+  secured commissioning step runs through, aborted the step on any replay
+  error from `decode_inbound`. So a network-duplicated message without R
+  (a standalone ACK, say) that arrived while a step waited ended it with
+  `DriverError::Transport(ReplayedCounter)`. chip drops a duplicate that
+  needs no ACK (`SessionManager.cpp:996` at master 5cd2917a, `:1001` at
+  v1.4.2.0), and the controller actor already logs and drops one. Both
+  helpers now skip it and keep waiting.
+- A duplicate with R set is unchanged: it comes back as
+  `DuplicateReliableAckResent`, and the helpers send its one ACK (see the
+  `matter-transport` entry "every authenticated reliable duplicate is
+  ACKed").
+- Affected: every published release, `0.1.0` through `0.10.0`.
+
 ### matter-commissioning: Fixed — commissioning closes its CASE session
 
 - `commission()` and `commission_ble()` ran CommissioningComplete on a CASE
