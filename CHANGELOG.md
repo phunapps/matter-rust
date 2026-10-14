@@ -22,9 +22,9 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
-## Unreleased — security and MRP patches
+## Security and MRP patches — 2026-10-15 (matter-codec 0.3.2, matter-crypto 0.5.1, matter-interaction 0.4.3, matter-transport 0.7.4, matter-ota 0.5.2, matter-commissioning 0.10.1, matter-controller 0.18.2)
 
-**Not released.** These fixes stop secrets reaching logs through `{:?}` and
+These fixes stop secrets reaching logs through `{:?}` and
 through `matter-commissioning`'s `tracing` feature, stop a withheld ACL field
 from being read as a wildcard, and make the controller acknowledge every
 reliable response as soon as its exchange ends, instead of up to 200 ms later
@@ -52,7 +52,7 @@ restriction, and other misshapen fields, as chip does.
 `matter-codec`, `matter-transport` and `matter-commissioning` add public API,
 only additively, so each affected crate needs only a patch release:
 
-| Crate | Current | Patch |
+| Crate | Previous | Released |
 |---|---|---|
 | `matter-controller` | 0.18.1 | **0.18.2** |
 | `matter-transport` | 0.7.3 | **0.7.4** |
@@ -60,7 +60,7 @@ only additively, so each affected crate needs only a patch release:
 | `matter-interaction` | 0.4.2 | **0.4.3** |
 | `matter-ota` | 0.5.1 | **0.5.2** |
 | `matter-codec` | 0.3.1 | **0.3.2** |
-| `matter-crypto` | 0.5.0 | **0.5.1** (optional: latent hardening only, nothing observable changes) |
+| `matter-crypto` | 0.5.0 | **0.5.1** (latent hardening only, nothing observable changes) |
 
 `matter-codec` and `matter-ota` joined this batch with the strict-close fix.
 `matter-codec` 0.3.2 adds `TlvReader::finish` and `Error::TrailingData`
@@ -74,7 +74,7 @@ do not build against `matter-codec` 0.3.1, so the codec goes first. Then
 publish the rest in dependency order:
 
 1. `matter-codec` 0.3.2.
-2. `matter-crypto` 0.5.1, if it is published at all (optional, see above).
+2. `matter-crypto` 0.5.1.
 3. `matter-interaction` 0.4.3 and `matter-transport` 0.7.4.
 4. `matter-ota` 0.5.2, which depends on interaction.
 5. `matter-commissioning` 0.10.1, which depends on interaction and transport.
@@ -88,7 +88,7 @@ all, and neither does `matter-codec`. `matter-controller` uses only
 `matter-clusters` exactly as 0.5.1 did, through the same `0.5.0` requirement.
 `matter-commissioning` uses `matter-clusters` only as a dev-dependency.
 
-Dependency floors to raise at release (no `Cargo.toml` changes yet):
+Dependency floors raised in this release:
 
 - `matter-controller` 0.18.2 requires `matter-transport` 0.7.4,
   `matter-commissioning` 0.10.1 and `matter-interaction` 0.4.3. Raise

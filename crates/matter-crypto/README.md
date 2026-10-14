@@ -58,7 +58,7 @@ Stability: a `0.x` crate, so a **minor** bump may break API.
 
 ```toml
 [dependencies]
-matter-crypto = "0.3"
+matter-crypto = "0.5"
 ```
 
 ## Minimal example
