@@ -33,7 +33,9 @@ or never (the MRP entries, after the security entries in each crate's list).
 which could leave a session refusing every report the device sent, and
 starts each secure session's message counter at a random value, as the spec
 requires, instead of at 1; the controller's OTA provider server does the same
-for its handshake counter. Its MRP state now tells an exchange we started
+for its handshake counter. Its replay window now rejects a peer's counter 0,
+tracks all 32 counters behind the highest instead of 31, and every
+authenticated duplicate with R set gets its ACK, as in chip. Its MRP state now tells an exchange we started
 from one the peer started with the same exchange id, so neither can take the
 other's owed ACK, and the controller and commissioning match responses the
 same way.
@@ -44,7 +46,9 @@ one, as chip does, so a cut-off chunk can no longer end a chunked read early
 with partial data. `matter-codec` gains the strict-close check they share,
 `matter-ota`'s Provider decoders use it too, and `matter-commissioning`'s
 response decoders and attestation parsers stop misreading an unknown
-container field.
+container field. The Certification Declaration verifier also rejects an
+`authorized_paa_list` that is not an Array, which used to drop the CD's PAA
+restriction, and other misshapen fields, as chip does.
 `matter-codec`, `matter-transport` and `matter-commissioning` add public API,
 only additively, so each affected crate needs only a patch release:
 
@@ -534,8 +538,12 @@ published release, `0.1.0` through `0.18.1`.
 
 - `ReplayWindow` trusted a peer's first counter, whatever it was, so a
   secure session accepted a first message with counter 0. Secure-session
-  counters start at 1 or higher (Matter 1.4 Core §4.6.1.1), and chip never
-  accepts 0 on one. `PairingSession::ActivateSecureSession` syncs each new
+  counters start at 1 or higher (Matter 1.4 Core §4.6.1.1), and the spec
+  states the reception rule directly: once a session is established the
+  Node "SHALL initialize the Message Reception State … and set the
+  synchronized max_message_counter of the peer to 0" (§4.14.1.2 for PASE;
+  §4.14.2.3 says the same for CASE, after Sigma3 and on resumption). chip
+  never accepts 0 on one. `PairingSession::ActivateSecureSession` syncs each new
   session's reception state at 0 (`SetCounter(kInitialSyncValue)`), so
   `VerifyEncryptedUnicast` classifies 0 as a duplicate: as the max counter
   at first, then as a seen in-window counter or a before-window counter
@@ -815,6 +823,14 @@ published release, `0.1.0` through `0.18.1`.
   - bytes after the CD's top-level structure (`ExitContainer` then
     `VerifyEndOfContainer`). End of input inside the structure was already
     an error.
+- The attestation-elements parser now rejects a known field (tags 1 to 4)
+  in the wrong shape, and a timestamp above `u32::MAX`, as chip's
+  `DeconstructAttestationElements` does (`GetByteView` or `Get` fails,
+  `DeviceAttestationConstructor.cpp:120-133`). It used to ignore the
+  misshapen field, so one followed by a well-formed field with the same
+  tag was accepted. The device signs this blob, so it gained nothing. chip
+  also requires the context tags in ascending order, starting with tag 1;
+  we still do not.
 - The attestation-elements parser still ignores bytes after its structure,
   as chip's `DeconstructAttestationElements` does.
 - Exploiting any CD case needs a CD signed by a trusted CD signer, since

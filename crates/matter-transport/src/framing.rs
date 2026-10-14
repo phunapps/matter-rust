@@ -258,11 +258,11 @@ pub fn decode_header(bytes: &[u8]) -> Result<(SecuredMessageHeader, &[u8])> {
 /// recorded.
 ///
 /// A new window starts synced at counter 0, so 0 is the highest and counts
-/// as seen, and a peer's counter 0 is always rejected (§4.14.1.2 for PASE
-/// and §4.14.2.3 for CASE set the peer's synchronized `max_message_counter`
-/// to 0). A secure session's counters
-/// start at 1 or higher (§4.6.1.1), and chip starts every secure session's
-/// reception state the same way (`PeerMessageCounter::SetCounter(
+/// as seen, and a peer's counter 0 is always rejected. §4.14.1.2 (PASE) and
+/// §4.14.2.3 (CASE) set the peer's synchronized `max_message_counter` to 0
+/// when a session is established, a secure session's counters start at 1
+/// or higher (§4.6.1.1), and chip starts every secure session's reception
+/// state the same way (`PeerMessageCounter::SetCounter(
 /// kInitialSyncValue)` in `PairingSession::ActivateSecureSession`). Every
 /// counter from 1 up is accepted as a first counter.
 #[derive(Debug, Clone)]
@@ -1873,7 +1873,8 @@ mod tests {
         }
 
         /// A peer's first counter 0 is rejected. Secure-session counters
-        /// start at 1 or higher (spec §4.6.1.1), and chip starts the
+        /// start at 1 or higher (spec §4.6.1.1), the spec syncs the peer's
+        /// `max_message_counter` at 0 (§4.14.1.2, §4.14.2.3), and chip starts the
         /// reception state synced at 0 (`PeerMessageCounter::SetCounter(
         /// kInitialSyncValue)`), so 0 is its max counter: a duplicate.
         #[test]

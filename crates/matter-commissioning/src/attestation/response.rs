@@ -164,7 +164,8 @@ pub struct AttestationElementsFields {
 /// fields above) are skipped so forward-compatible devices do not
 /// regress here. An unknown container is skipped whole, nested
 /// containers included, so none of its members is read as a top-level
-/// field. Bytes after the outer structure's end are ignored, as chip's
+/// field. A known field (tags 1-4) in the wrong shape, or a timestamp
+/// above `u32::MAX`, is rejected, as chip rejects it. Bytes after the outer structure's end are ignored, as chip's
 /// `DeconstructAttestationElements` ignores them.
 ///
 /// # Errors
@@ -173,6 +174,11 @@ pub struct AttestationElementsFields {
 /// the three required fields is missing, if the TLV outer shape isn't
 /// an anonymous structure, if the nonce isn't exactly 32 bytes, or if
 /// a required field appears more than once.
+#[allow(
+    clippy::match_same_arms,
+    reason = "the end-of-input arm and the misshapen-field arm both reject the \
+     elements, but for different reasons that each carry their own comment."
+)]
 pub fn extract_attestation_elements_fields(
     tlv: &[u8],
 ) -> Result<AttestationElementsFields, AttestationError> {
@@ -227,8 +233,30 @@ pub fn extract_attestation_elements_fields(
                 if ts.is_some() {
                     return Err(AttestationError::ResponseElementsMalformed);
                 }
+                // chip reads it as a `uint32_t` (`Get(timestamp)`), which
+                // fails above `u32::MAX`.
+                u32::try_from(v).map_err(|_| AttestationError::ResponseElementsMalformed)?;
                 ts = Some(v);
             }
+            // firmware_information: an octet string, otherwise ignored.
+            Some(Element::Scalar {
+                tag: Tag::Context(4),
+                value: Value::Bytes(_),
+            }) => {}
+            // A known field (tags 1-4) in any other shape rejects the
+            // elements, as chip's `GetByteView` / `Get` fails on the wrong
+            // type (`DeviceAttestationConstructor.cpp:120-133`). The
+            // well-formed shapes matched the arms above.
+            Some(
+                Element::ContainerStart {
+                    tag: Tag::Context(1..=4),
+                    ..
+                }
+                | Element::Scalar {
+                    tag: Tag::Context(1..=4),
+                    ..
+                },
+            ) => return Err(AttestationError::ResponseElementsMalformed),
             // An unknown container (a future field, or a known tag in the
             // wrong shape) is skipped whole, at any depth, so its members are
             // never read as top-level fields. This is what chip's
@@ -522,6 +550,58 @@ mod tests {
         assert_eq!(fields.certification_declaration, vec![0xCD, 0xCD]);
         assert_eq!(fields.attestation_nonce, nonce);
         assert_eq!(fields.timestamp_epoch_seconds, 0x42);
+    }
+
+    /// A known field in the wrong shape rejects the elements, as chip's
+    /// `DeconstructAttestationElements` rejects it (`GetByteView` or `Get`
+    /// fails on the wrong type; `DeviceAttestationConstructor.cpp:120-133`,
+    /// the same at master 5cd2917a and v1.4.2.0). chip reads the timestamp
+    /// as a `uint32_t`, so one above `u32::MAX` is rejected too.
+    /// Before the fix it was ignored, so a misshapen field followed by a
+    /// well-formed one with the same tag was accepted.
+    #[test]
+    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    fn extract_attestation_elements_fields_rejects_a_misshapen_known_field() {
+        use matter_codec::Tag;
+        type Decoy = fn(&mut matter_codec::TlvWriter<'_>);
+        let nonce = [0xAB_u8; 32];
+        let cases: [(&str, Decoy); 6] = [
+            ("cd as a container", |w| {
+                w.start_structure(Tag::Context(1)).unwrap();
+                w.end_container().unwrap();
+            }),
+            ("nonce as an integer", |w| {
+                w.put_uint(Tag::Context(2), 7).unwrap();
+            }),
+            ("timestamp as bytes", |w| {
+                w.put_bytes(Tag::Context(3), &[1, 2]).unwrap();
+            }),
+            ("timestamp signed", |w| {
+                w.put_int(Tag::Context(3), 7).unwrap();
+            }),
+            ("firmware_information as an integer", |w| {
+                w.put_uint(Tag::Context(4), 7).unwrap();
+            }),
+            ("timestamp above u32", |w| {
+                w.put_uint(Tag::Context(3), u64::from(u32::MAX) + 1)
+                    .unwrap();
+            }),
+        ];
+        for (what, decoy) in cases {
+            let tlv = elements_with_decoy(Some((&[0xCD], &nonce, 7)), decoy);
+            assert!(
+                matches!(
+                    extract_attestation_elements_fields(&tlv),
+                    Err(AttestationError::ResponseElementsMalformed)
+                ),
+                "{what} must be rejected"
+            );
+        }
+        // A well-formed firmware_information is still accepted (and ignored).
+        let tlv = elements_with_decoy(Some((&[0xCD], &nonce, 7)), |w| {
+            w.put_bytes(Tag::Context(4), &[0xF0]).unwrap();
+        });
+        assert!(extract_attestation_elements_fields(&tlv).is_ok());
     }
 
     /// Bytes after the outer structure's close are ignored, as chip's

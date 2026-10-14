@@ -145,7 +145,9 @@ fn encode_outbound_then_decode_inbound_roundtrip() {
 
 /// A secure session rejects a peer message counter of 0, and still accepts
 /// counter 1. Secure-session counters start at 1 or higher (Matter 1.4
-/// §4.6.1.1), and chip starts each secure session's reception state synced
+/// §4.6.1.1), the spec sets the peer's synchronized `max_message_counter`
+/// to 0 when a session is established (§4.14.1.2 for PASE, §4.14.2.3 for
+/// CASE), and chip starts each secure session's reception state synced
 /// at 0 (`PairingSession::ActivateSecureSession` →
 /// `SetCounter(kInitialSyncValue)`), so its `VerifyEncryptedUnicast` treats
 /// counter 0 as a duplicate. Before the fix the first counter, 0 included,
