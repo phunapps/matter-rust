@@ -249,10 +249,18 @@ published release, `0.1.0` through `0.18.1`.
   ACK on the exchange the message arrived on, and the OTA provider server's
   replies on the requestor's exchange. So an answer to the device's
   exchange carries `I=0` and that exchange's ACK, and never ours.
-- Not covered: an MRP expiry (`MrpEvent::Expired`) is still routed by
-  exchange id, since the event carries no role (see the transport entry).
-  It can misattribute only when one of our reliable answers on a device's
-  exchange expires while a request of ours with the same id is pending.
+- An MRP expiry is matched by message counter too. `MrpEvent::Expired`
+  names the exchange by id alone, so when one of our reliable answers on a
+  device's exchange expired while a request of ours with the same id was
+  pending, the actor took the expiry as the request's own. A request not yet
+  retried then took the reconnect-and-re-send-once path, re-sending a
+  request the device had already received: a toggle or a door-lock command
+  could run twice, the hazard #119 and #126 exist to prevent. The actor now
+  records the counter of the last reliable message it sent on each pending
+  exchange (the request, a timed action, a write chunk, a read-chunk or
+  priming `StatusResponse`, a reconnect re-send) and treats an expiry as the
+  request's own only when the counter matches; any other expiry is logged
+  at debug and dropped. No API change.
 - Affected: every published release through `0.18.1` (the pending table has
   matched by id since it was written, before `0.1.0`). Requires
   `matter-transport` 0.7.4.
@@ -367,6 +375,9 @@ published release, `0.1.0` through `0.18.1`.
   buffered ACK; its documentation now says so and points at
   `SessionManager::abort_exchange`. `SessionManager::remove` and the session
   table's eviction still drop a session's owed ACKs.
+- These four methods, the `_with_role` variants of the first two and the
+  two `MrpState` halves are `#[must_use]`: dropping the returned events
+  loses the ACKs in them for good.
 - Additive only: new methods, no new types or variants.
 
 ### matter-transport: Fixed — an owed ACK is no longer dropped
@@ -450,7 +461,10 @@ published release, `0.1.0` through `0.18.1`.
   share an owed ACK, a displaced ACK, a retransmit or a table slot, and each
   is reclaimed when its own work is done; the reclaim still runs off the
   send, not the ACK drain. An inbound ACK still clears a retransmit by the
-  acknowledged counter alone, as §4.12.5.2.1 specifies.
+  acknowledged counter alone, as §4.12.5.2.1 specifies, and if it rode the
+  other exchange with the same id, the exchange it completes is reclaimed
+  too (otherwise each such ACK, which chip and matter.js never send, would
+  leak a slot).
 - Added (additive): `SessionManager::encode_outbound_with_role`,
   `finish_exchange_with_role` and `abort_exchange_with_role` name an
   existing exchange by its id and `is_local_initiator`.
@@ -468,8 +482,10 @@ published release, `0.1.0` through `0.18.1`.
 - Not covered: the `exchange_id` in `MrpEvent::Retransmit`,
   `SendStandaloneAck` and `Expired` (and in `MrpTimerEvent`) still has no
   role, because adding a field to those variants would break exhaustive
-  patterns. The packets they carry are built for the right exchange; only a
-  caller that routes `Expired` by id can confuse two exchanges.
+  patterns. The packets they carry are built for the right exchange; a
+  caller that routes `Expired` to its own requests should match the event's
+  `counter` against the counter of its last reliable send on the exchange,
+  as `matter-controller` 0.18.2 does, rather than the id alone.
 - Affected: every published release, `0.1.0` through `0.7.3`; the table has
   been keyed by id since MRP was written, before `0.1.0`. It takes a 16-bit
   id collision with a live exchange of the peer's, so it is rare.
@@ -606,14 +622,16 @@ published release, `0.1.0` through `0.18.1`.
 - Affected: every published release through `0.10.0`. Requires
   `matter-transport` 0.7.4.
 
-### matter-commissioning: Fixed — a response is matched by exchange id and role
+### matter-commissioning: Fixed — a response is matched by session, exchange id and role
 
-- `secured_round_trip` and `secured_read` took any message on the session
-  with their exchange id as the response. A device that starts an exchange
-  of its own with the same id (each side allocates its own ids, Matter 1.4
-  Core §4.10.2) sends with `I` set, which makes it a different exchange
-  (§4.10.5.1), so its message could be returned as the response.
-- Both now require `I` clear as well. The `StatusResponse` that asks for the
+- `secured_round_trip` and `secured_read` took any message with their
+  exchange id as the response, on any of the manager's sessions. A device
+  that starts an exchange of its own with the same id (each side allocates
+  its own ids, Matter 1.4 Core §4.10.2) sends with `I` set, which makes it a
+  different exchange (§4.10.5.1), so its message could be returned as the
+  response; so could a message with our id on another session.
+- Both now require the session, the exchange id and `I` clear, as chip's
+  `ExchangeContext::MatchExchange` does. The `StatusResponse` that asks for the
   next read chunk and the end-of-exchange ACK flush name our exchange with
   its role (`encode_outbound_with_role`, `finish_exchange_with_role`), so a
   device exchange with the same id keeps its own owed ACK.
