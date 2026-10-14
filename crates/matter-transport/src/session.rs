@@ -28,7 +28,8 @@ use crate::framing::{
     SecuredMessageFlags, SecuredMessageHeader, SecurityFlags, SessionId,
 };
 use crate::mrp::{
-    InboundOutcome, MrpConfig, MrpEvent, MrpFlags, MrpProvenance, MrpState, MrpTimerEvent,
+    ExchangeKey, InboundOutcome, MrpConfig, MrpEvent, MrpFlags, MrpProvenance, MrpState,
+    MrpTimerEvent,
 };
 use crate::protocol_header::{build_standalone_ack_header, encode_protocol_header, ProtocolId};
 
@@ -508,6 +509,27 @@ fn seed_message_counter() -> u32 {
     initial_counter_from_drbg(bytes)
 }
 
+/// Which exchange [`SessionManager::encode_on`] sends on.
+#[derive(Debug, Clone, Copy)]
+enum OutboundExchange {
+    /// A new exchange we start, on the node's next exchange id.
+    New,
+    /// An existing exchange named by id alone ([`MrpState::resolve`] picks
+    /// the role).
+    ById(u16),
+    /// An existing exchange named by id and role.
+    Exact(ExchangeKey),
+}
+
+/// Which existing exchange the finish and abort methods end.
+#[derive(Debug, Clone, Copy)]
+enum ExchangeTarget {
+    /// Named by id alone ([`MrpState::resolve`] picks the role).
+    ById(u16),
+    /// Named by id and role.
+    Exact(ExchangeKey),
+}
+
 impl Default for SessionManager {
     fn default() -> Self {
         Self::new()
@@ -853,6 +875,18 @@ impl SessionManager {
 
     /// Encode an outbound Matter message via the named session.
     ///
+    /// `exchange_id` is `None` to start a new exchange (we are its
+    /// initiator, so the message carries the `I` flag), or `Some(id)` to
+    /// send on an existing one. An id alone names one exchange unless both
+    /// sides have started an exchange with it, which Matter allows (each
+    /// node allocates its own ids, Matter 1.4 Core §4.10.2). Then `Some(id)`
+    /// means the exchange **we** started. Otherwise it means the exchange
+    /// the session holds with that id, and an id it does not hold is the
+    /// peer's (`I=0`). To name the exchange without that ambiguity (to answer
+    /// the peer's exchange after a collision, or to continue one of ours
+    /// that has already been reclaimed), use
+    /// [`Self::encode_outbound_with_role`].
+    ///
     /// The pipeline is:
     /// 1. MRP builds the wire payload (protocol header || `app_payload`),
     ///    on a new exchange id if `exchange_id` is `None`, and copies into
@@ -892,16 +926,113 @@ impl SessionManager {
         mrp_flags: MrpFlags,
         now: Instant,
     ) -> Result<EncodeOutboundOutput> {
+        let target = match exchange_id {
+            None => OutboundExchange::New,
+            Some(id) => OutboundExchange::ById(id),
+        };
+        self.encode_on(
+            session_id,
+            target,
+            opcode,
+            protocol_id,
+            app_payload,
+            mrp_flags,
+            now,
+        )
+    }
+
+    /// [`Self::encode_outbound`] on an existing exchange named by its id
+    /// **and** its role: `is_local_initiator` is true for an exchange we
+    /// started and false for one the peer started.
+    ///
+    /// Matter identifies an exchange by {session, exchange id, role}
+    /// (Matter 1.4 Core §4.10.2-3), because an exchange we start and one the
+    /// peer starts may share an id. This is the form to use for a message on
+    /// an exchange you already know the role of:
+    ///
+    /// - a follow-up on an exchange we started (a timed action, the next
+    ///   chunk of a write, the `StatusResponse` that asks for the next read
+    ///   chunk): `true`, the [`EncodeOutboundOutput::is_local_initiator`] of
+    ///   the message that started it;
+    /// - an answer on an exchange the peer started: `false`, which is
+    ///   `!is_initiator` of the [`DecodeInboundOutput::AppMessage`] being
+    ///   answered.
+    ///
+    /// The message carries the `I` flag exactly when `is_local_initiator` is
+    /// true, and only the ACK owed on that exchange can ride it; an ACK owed
+    /// on the other exchange with the same id stays owed. Unlike
+    /// `encode_outbound(Some(id))`, this holds even after the exchange has
+    /// been reclaimed (see [`Self::finish_exchange`]): a follow-up on one of
+    /// ours still goes out with `I=1`.
+    ///
+    /// Nothing changes on error, exactly as for [`Self::encode_outbound`].
+    ///
+    /// # Errors
+    ///
+    /// As for [`Self::encode_outbound`]: [`Error::UnknownSession`],
+    /// [`Error::CounterOverflow`], [`Error::PayloadTooLarge`] and
+    /// [`Error::Crypto`].
+    #[allow(clippy::too_many_arguments)] // Threaded protocol-header inputs.
+    pub fn encode_outbound_with_role(
+        &mut self,
+        session_id: SessionId,
+        exchange_id: u16,
+        is_local_initiator: bool,
+        opcode: u8,
+        protocol_id: ProtocolId,
+        app_payload: &[u8],
+        mrp_flags: MrpFlags,
+        now: Instant,
+    ) -> Result<EncodeOutboundOutput> {
+        self.encode_on(
+            session_id,
+            OutboundExchange::Exact(ExchangeKey {
+                id: exchange_id,
+                is_local_initiator,
+            }),
+            opcode,
+            protocol_id,
+            app_payload,
+            mrp_flags,
+            now,
+        )
+    }
+
+    /// The pipeline behind [`Self::encode_outbound`] and
+    /// [`Self::encode_outbound_with_role`]; `target` says which exchange the
+    /// message goes on.
+    #[allow(clippy::too_many_arguments)] // Threaded protocol-header inputs.
+    fn encode_on(
+        &mut self,
+        session_id: SessionId,
+        target: OutboundExchange,
+        opcode: u8,
+        protocol_id: ProtocolId,
+        app_payload: &[u8],
+        mrp_flags: MrpFlags,
+        now: Instant,
+    ) -> Result<EncodeOutboundOutput> {
         // A fresh exchange takes the next id from the node-wide counter (spec
         // §4.10.2), which lives on the manager, not the session. It is only
         // read here and spent in step 3, so a failed send spends no id.
-        let is_new_local_exchange = exchange_id.is_none();
-        let exchange_id = exchange_id.unwrap_or(self.next_exchange_id);
+        let next_exchange_id = self.next_exchange_id;
 
         let session = self
             .sessions
             .get_mut(&session_id)
             .ok_or(Error::UnknownSession(session_id.0))?;
+
+        let (exchange, is_new_local_exchange) = match target {
+            OutboundExchange::New => (
+                ExchangeKey {
+                    id: next_exchange_id,
+                    is_local_initiator: true,
+                },
+                true,
+            ),
+            OutboundExchange::ById(id) => (session.mrp.resolve(id), false),
+            OutboundExchange::Exact(exchange) => (exchange, false),
+        };
 
         if session.outbound_counter == u32::MAX {
             return Err(Error::CounterOverflow);
@@ -916,14 +1047,13 @@ impl SessionManager {
             reliable: mrp_flags.reliable && !session.transport_reliable,
         };
 
-        // 1. MRP builds the wire payload (protocol header || app_payload),
-        //    changing nothing. A freshly allocated id is ours, so it sets `I`;
-        //    a caller-supplied one continues an existing exchange.
+        // 1. MRP builds the wire payload (protocol header || app_payload) on
+        //    `exchange`, changing nothing. The key's role sets the `I` flag
+        //    and picks which owed ACK, if any, can ride.
         let prepared = session.mrp.build_outbound(
             opcode,
             protocol_id,
-            exchange_id,
-            is_new_local_exchange,
+            exchange,
             app_payload,
             effective_mrp_flags,
         );
@@ -973,9 +1103,9 @@ impl SessionManager {
         } else {
             Vec::new()
         };
-        session.mrp.mark_packet_sent(
+        session.mrp.mark_packet_sent_on(
             counter,
-            prepared.exchange_id,
+            prepared.exchange(),
             retransmit_copy,
             effective_mrp_flags.reliable,
             now,
@@ -1054,8 +1184,18 @@ impl SessionManager {
                 // undo that here rather than threading the flag through MRP.
                 // Defensive only — a well-behaved BTP peer never sets R.
                 if session.transport_reliable {
-                    if let InboundOutcome::AppMessage { exchange_id, .. } = &outcome {
-                        session.mrp.cancel_pending_outbound_ack(*exchange_id);
+                    if let InboundOutcome::AppMessage {
+                        exchange_id,
+                        is_initiator,
+                        ..
+                    } = &outcome
+                    {
+                        session
+                            .mrp
+                            .cancel_pending_outbound_ack(ExchangeKey::of_inbound(
+                                *exchange_id,
+                                *is_initiator,
+                            ));
                     }
                 }
                 Ok(match outcome {
@@ -1245,27 +1385,83 @@ impl SessionManager {
     /// [`MrpEvent::SessionCounterExhausted`] if the counter is spent. Empty
     /// when nothing is owed, the session is unknown, or the session runs over
     /// a reliable transport (BTP never buffers an MRP ACK).
+    ///
+    /// `exchange_id` means the exchange we started if the session holds one
+    /// with this id, and otherwise the peer's, as for
+    /// [`Self::encode_outbound`]; [`Self::finish_exchange_with_role`] names
+    /// the role explicitly.
     pub fn finish_exchange(&mut self, session_id: SessionId, exchange_id: u16) -> Vec<MrpEvent> {
-        let Some(session) = self.sessions.get_mut(&session_id) else {
-            return Vec::new();
+        self.end_exchange(session_id, ExchangeTarget::ById(exchange_id), false)
+    }
+
+    /// [`Self::finish_exchange`] for the exchange named by its id **and**
+    /// its role (`is_local_initiator`: true for an exchange we started,
+    /// false for one the peer started), as
+    /// [`Self::encode_outbound_with_role`] names it. Only that exchange's
+    /// owed ACK is sent and only it is reclaimed; an exchange with the same
+    /// id and the other role is left alone.
+    pub fn finish_exchange_with_role(
+        &mut self,
+        session_id: SessionId,
+        exchange_id: u16,
+        is_local_initiator: bool,
+    ) -> Vec<MrpEvent> {
+        let exchange = ExchangeKey {
+            id: exchange_id,
+            is_local_initiator,
         };
-        let flushed = session.mrp.flush_exchange_acks(exchange_id);
-        flushed
-            .into_iter()
-            .filter_map(|event| Self::fold_timer_event(session_id, session, event))
-            .collect()
+        self.end_exchange(session_id, ExchangeTarget::Exact(exchange), false)
     }
 
     /// Abort an exchange the way chip's `Abort()` does: send the ACK it still
     /// owes first, exactly as [`Self::finish_exchange`], then drop our own
     /// pending retransmits on it ([`MrpState::close_exchange`]). For an
     /// exchange we are abandoning, such as a cancelled request.
+    ///
+    /// `exchange_id` names the exchange as for [`Self::finish_exchange`];
+    /// [`Self::abort_exchange_with_role`] names the role explicitly.
     pub fn abort_exchange(&mut self, session_id: SessionId, exchange_id: u16) -> Vec<MrpEvent> {
+        self.end_exchange(session_id, ExchangeTarget::ById(exchange_id), true)
+    }
+
+    /// [`Self::abort_exchange`] for the exchange named by its id **and** its
+    /// role, as [`Self::finish_exchange_with_role`] names it. Our
+    /// retransmits on an exchange with the same id and the other role keep
+    /// running.
+    pub fn abort_exchange_with_role(
+        &mut self,
+        session_id: SessionId,
+        exchange_id: u16,
+        is_local_initiator: bool,
+    ) -> Vec<MrpEvent> {
+        let exchange = ExchangeKey {
+            id: exchange_id,
+            is_local_initiator,
+        };
+        self.end_exchange(session_id, ExchangeTarget::Exact(exchange), true)
+    }
+
+    /// The body of the finish and abort methods: flush the exchange's owed
+    /// ACKs, then, for an abort, drop its retransmits and its entry.
+    fn end_exchange(
+        &mut self,
+        session_id: SessionId,
+        target: ExchangeTarget,
+        abort: bool,
+    ) -> Vec<MrpEvent> {
         let Some(session) = self.sessions.get_mut(&session_id) else {
             return Vec::new();
         };
-        let flushed = session.mrp.flush_exchange_acks(exchange_id);
-        session.mrp.close_exchange(exchange_id);
+        // Resolve once, before the flush can reclaim the entry that decides
+        // which exchange a bare id means.
+        let exchange = match target {
+            ExchangeTarget::ById(id) => session.mrp.resolve(id),
+            ExchangeTarget::Exact(exchange) => exchange,
+        };
+        let flushed = session.mrp.flush_exchange_acks_on(exchange);
+        if abort {
+            session.mrp.close_exchange_on(exchange);
+        }
         flushed
             .into_iter()
             .filter_map(|event| Self::fold_timer_event(session_id, session, event))
@@ -2463,6 +2659,376 @@ mod tests {
             ),
             "an authenticated reliable duplicate must be re-acked; got {second:?}"
         );
+    }
+
+    // --- Exchange identity: (exchange id, role), Matter 1.4 Core §4.10.2-3 ---
+    //
+    // An exchange we start and one the peer starts may carry the same id: each
+    // side allocates from its own counter. These tests force that collision
+    // and check that neither exchange takes the other's owed ACK or I flag.
+
+    /// The full protocol header of `packet`, decrypted with `receiver`'s keys
+    /// for session `sid`.
+    fn protocol_header_of(
+        receiver: &SessionManager,
+        sid: SessionId,
+        packet: &[u8],
+    ) -> crate::protocol_header::ProtocolHeader {
+        let session = receiver.get(sid).unwrap();
+        let (_, plaintext) = crate::framing::decode_secured(
+            packet,
+            &session.keys,
+            session.role,
+            &mut crate::framing::ReplayWindow::new(),
+            session.peer_nonce_node_id,
+        )
+        .unwrap();
+        crate::protocol_header::decode_protocol_header(&plaintext)
+            .unwrap()
+            .0
+    }
+
+    /// The standalone ACK packets among `events`.
+    fn standalone_acks(events: &[MrpEvent]) -> Vec<&[u8]> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                MrpEvent::SendStandaloneAck { packet, .. } => Some(packet.as_slice()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Assert that `a` sends exactly one standalone ACK when the standalone-ACK
+    /// deadline passes, and that it acknowledges `request` on the PEER's
+    /// exchange: same id, `I=0`, `ack_counter` = the request's counter.
+    fn assert_owed_ack_goes_to_the_peers_exchange(
+        a: &mut SessionManager,
+        b: &SessionManager,
+        request: &EncodeOutboundOutput,
+        now: Instant,
+    ) {
+        let sid = SessionId(1);
+        let deadline = a.mrp_config(sid).unwrap().standalone_ack_deadline;
+        let events = a.handle_timeout(now + deadline);
+        let acks = standalone_acks(&events);
+        assert_eq!(
+            acks.len(),
+            1,
+            "the peer's exchange is still owed its ACK: {events:?}"
+        );
+        let header = protocol_header_of(b, sid, acks[0]);
+        assert_eq!(header.exchange_id, request.exchange_id);
+        assert!(
+            !header
+                .exchange_flags
+                .contains(crate::protocol_header::ExchangeFlags::INITIATOR),
+            "an ACK on the peer's exchange must carry I=0"
+        );
+        assert_eq!(header.ack_counter, Some(request.message_counter));
+    }
+
+    /// The peer starts exchange X and we owe it an ACK; our next new exchange
+    /// is then allocated the same id X. The new message must not carry (and
+    /// so drain) the ACK owed on the peer's exchange: it goes out with `I=1`,
+    /// so a chip peer matches it to a different exchange
+    /// (`ExchangeContext::MatchExchange`) and never sees the ACK.
+    #[test]
+    fn a_new_local_exchange_does_not_take_a_peer_exchanges_owed_ack() {
+        let sid = SessionId(1);
+        let now = Instant::now();
+        let im = ProtocolId::INTERACTION_MODEL;
+        let reliable = MrpFlags { reliable: true };
+        let (mut a, mut b) = paired_sessions();
+        let request = b
+            .encode_outbound(sid, None, 0x02, im, b"request", reliable, now)
+            .unwrap();
+        a.decode_inbound(&request.wire_bytes, now).unwrap();
+
+        a.next_exchange_id = request.exchange_id;
+        let ours = a
+            .encode_outbound(sid, None, 0x02, im, b"ours", reliable, now)
+            .unwrap();
+        assert_eq!(ours.exchange_id, request.exchange_id, "the ids collide");
+        assert!(ours.is_local_initiator);
+        assert!(
+            !ours.piggyback_acked,
+            "our new exchange took the ACK owed on the peer's exchange"
+        );
+        let header = protocol_header_of(&b, sid, &ours.wire_bytes);
+        assert!(header
+            .exchange_flags
+            .contains(crate::protocol_header::ExchangeFlags::INITIATOR));
+        assert_eq!(header.ack_counter, None);
+
+        assert_owed_ack_goes_to_the_peers_exchange(&mut a, &b, &request, now);
+    }
+
+    /// The other order: we start exchange X, then the peer starts its own
+    /// exchange that also has id X. A follow-up on OUR exchange must not
+    /// carry the ACK owed on the peer's.
+    #[test]
+    fn a_peer_exchange_reusing_our_id_keeps_its_ack_off_our_exchange() {
+        let sid = SessionId(1);
+        let now = Instant::now();
+        let im = ProtocolId::INTERACTION_MODEL;
+        let reliable = MrpFlags { reliable: true };
+        let (mut a, mut b) = paired_sessions();
+        let ours = a
+            .encode_outbound(sid, None, 0x0A, im, b"timed", reliable, now)
+            .unwrap();
+
+        b.next_exchange_id = ours.exchange_id;
+        let request = b
+            .encode_outbound(sid, None, 0x02, im, b"request", reliable, now)
+            .unwrap();
+        assert_eq!(request.exchange_id, ours.exchange_id, "the ids collide");
+        match a.decode_inbound(&request.wire_bytes, now).unwrap() {
+            DecodeInboundOutput::AppMessage { is_initiator, .. } => assert!(is_initiator),
+            other => panic!("expected the peer's request, got {other:?}"),
+        }
+
+        let follow_up = a
+            .encode_outbound(
+                sid,
+                Some(ours.exchange_id),
+                0x08,
+                im,
+                b"action",
+                reliable,
+                now,
+            )
+            .unwrap();
+        assert!(follow_up.is_local_initiator);
+        assert!(
+            !follow_up.piggyback_acked,
+            "our follow-up took the ACK owed on the peer's exchange"
+        );
+        let header = protocol_header_of(&b, sid, &follow_up.wire_bytes);
+        assert!(header
+            .exchange_flags
+            .contains(crate::protocol_header::ExchangeFlags::INITIATOR));
+        assert_eq!(header.ack_counter, None);
+
+        assert_owed_ack_goes_to_the_peers_exchange(&mut a, &b, &request, now);
+    }
+
+    /// Make `a` hold two exchanges with one id: one it started (`ours`, which
+    /// `b` has answered reliably, so `a` owes `b` an ACK there) and one `b`
+    /// started with the same id (`request`, also owed an ACK). Returns
+    /// `(ours, b's answer on ours, request)`.
+    fn collide(
+        a: &mut SessionManager,
+        b: &mut SessionManager,
+        now: Instant,
+    ) -> (
+        EncodeOutboundOutput,
+        EncodeOutboundOutput,
+        EncodeOutboundOutput,
+    ) {
+        let sid = SessionId(1);
+        let im = ProtocolId::INTERACTION_MODEL;
+        let reliable = MrpFlags { reliable: true };
+        let ours = a
+            .encode_outbound(sid, None, 0x02, im, b"ours", reliable, now)
+            .unwrap();
+        b.decode_inbound(&ours.wire_bytes, now).unwrap();
+        let answer = b
+            .encode_outbound_with_role(
+                sid,
+                ours.exchange_id,
+                false,
+                0x05,
+                im,
+                b"answer",
+                reliable,
+                now,
+            )
+            .unwrap();
+        a.decode_inbound(&answer.wire_bytes, now).unwrap();
+
+        b.next_exchange_id = ours.exchange_id;
+        let request = b
+            .encode_outbound(sid, None, 0x02, im, b"request", reliable, now)
+            .unwrap();
+        assert_eq!(request.exchange_id, ours.exchange_id, "the ids collide");
+        a.decode_inbound(&request.wire_bytes, now).unwrap();
+        assert_eq!(a.get(sid).unwrap().mrp.exchange_count(), 2);
+        (ours, answer, request)
+    }
+
+    /// With both exchanges live, the role-aware send reaches each one: our
+    /// follow-up carries `I=1` and the ACK for `b`'s answer; our answer to
+    /// `b`'s request carries `I=0` and that request's ACK. `b` matches each to
+    /// the exchange it belongs to.
+    #[test]
+    fn encode_outbound_with_role_reaches_either_exchange_after_a_collision() {
+        let sid = SessionId(1);
+        let now = Instant::now();
+        let im = ProtocolId::INTERACTION_MODEL;
+        let reliable = MrpFlags { reliable: true };
+        let (mut a, mut b) = paired_sessions();
+        let (ours, answer, request) = collide(&mut a, &mut b, now);
+        let id = ours.exchange_id;
+
+        let reply = a
+            .encode_outbound_with_role(sid, id, false, 0x05, im, b"reply", reliable, now)
+            .unwrap();
+        assert!(!reply.is_local_initiator);
+        assert!(reply.piggyback_acked);
+        let header = protocol_header_of(&b, sid, &reply.wire_bytes);
+        assert!(!header
+            .exchange_flags
+            .contains(crate::protocol_header::ExchangeFlags::INITIATOR));
+        assert_eq!(header.ack_counter, Some(request.message_counter));
+        match b.decode_inbound(&reply.wire_bytes, now).unwrap() {
+            DecodeInboundOutput::AppMessage { is_initiator, .. } => {
+                assert!(
+                    !is_initiator,
+                    "b must see the reply on the exchange it started"
+                );
+            }
+            other => panic!("expected the reply, got {other:?}"),
+        }
+
+        let follow_up = a
+            .encode_outbound_with_role(sid, id, true, 0x01, im, b"next", reliable, now)
+            .unwrap();
+        assert!(follow_up.is_local_initiator);
+        assert!(follow_up.piggyback_acked);
+        let header = protocol_header_of(&b, sid, &follow_up.wire_bytes);
+        assert!(header
+            .exchange_flags
+            .contains(crate::protocol_header::ExchangeFlags::INITIATOR));
+        assert_eq!(header.ack_counter, Some(answer.message_counter));
+        match b.decode_inbound(&follow_up.wire_bytes, now).unwrap() {
+            DecodeInboundOutput::AppMessage { is_initiator, .. } => {
+                assert!(
+                    is_initiator,
+                    "b must see the follow-up on the exchange a started"
+                );
+            }
+            other => panic!("expected the follow-up, got {other:?}"),
+        }
+    }
+
+    /// `finish_exchange_with_role` flushes and reclaims only the exchange it
+    /// names, in either order; the legacy `finish_exchange(id)` means ours
+    /// while ours is live.
+    #[test]
+    fn finish_exchange_with_role_flushes_only_the_named_exchange() {
+        use crate::protocol_header::ExchangeFlags;
+
+        let sid = SessionId(1);
+        let now = Instant::now();
+        // (use the legacy call for the first finish, finish ours first)
+        for (legacy, ours_first) in [(true, true), (false, true), (false, false)] {
+            let (mut a, mut b) = paired_sessions();
+            let (ours, answer, request) = collide(&mut a, &mut b, now);
+            let id = ours.exchange_id;
+            let case = format!("legacy={legacy} ours_first={ours_first}");
+
+            for (step, local) in [ours_first, !ours_first].into_iter().enumerate() {
+                let events = if legacy && step == 0 {
+                    a.finish_exchange(sid, id)
+                } else {
+                    a.finish_exchange_with_role(sid, id, local)
+                };
+                let acks = standalone_acks(&events);
+                assert_eq!(acks.len(), 1, "{case} step {step}");
+                let header = protocol_header_of(&b, sid, acks[0]);
+                assert_eq!(
+                    header.exchange_flags.contains(ExchangeFlags::INITIATOR),
+                    local,
+                    "{case} step {step}"
+                );
+                let owed = if local { &answer } else { &request };
+                assert_eq!(
+                    header.ack_counter,
+                    Some(owed.message_counter),
+                    "{case} step {step}"
+                );
+                assert_eq!(
+                    a.get(sid).unwrap().mrp.exchange_count(),
+                    1 - step,
+                    "{case} step {step}: only the finished exchange is reclaimed"
+                );
+            }
+        }
+    }
+
+    /// `abort_exchange_with_role` drops only the named exchange's
+    /// retransmits: aborting ours leaves our reliable answer on the peer's
+    /// exchange retransmitting, and the other way round.
+    #[test]
+    fn abort_exchange_with_role_keeps_the_other_exchanges_retransmit() {
+        let sid = SessionId(1);
+        let now = Instant::now();
+        let im = ProtocolId::INTERACTION_MODEL;
+        let reliable = MrpFlags { reliable: true };
+        for abort_ours in [true, false] {
+            let (mut a, mut b) = paired_sessions();
+            let (ours, _answer, _request) = collide(&mut a, &mut b, now);
+            let id = ours.exchange_id;
+            // Our two reliable messages in flight, one on each exchange.
+            let on_ours = a
+                .encode_outbound_with_role(sid, id, true, 0x01, im, b"next", reliable, now)
+                .unwrap();
+            let on_peers = a
+                .encode_outbound_with_role(sid, id, false, 0x05, im, b"reply", reliable, now)
+                .unwrap();
+
+            a.abort_exchange_with_role(sid, id, abort_ours);
+            let kept = if abort_ours { &on_peers } else { &on_ours };
+            let retransmits: Vec<MessageCounter> = a
+                .handle_timeout(now + std::time::Duration::from_secs(10))
+                .into_iter()
+                .filter_map(|e| match e {
+                    MrpEvent::Retransmit { counter, .. } => Some(counter),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                retransmits,
+                vec![kept.message_counter],
+                "abort_ours={abort_ours}: only the other exchange's retransmit survives"
+            );
+        }
+    }
+
+    /// The role-aware send keeps `I=1` on one of our exchanges even after it
+    /// has been reclaimed, where `encode_outbound(Some(id))` falls back to a
+    /// response (`I=0`), as documented on [`SessionManager::finish_exchange`].
+    #[test]
+    fn encode_outbound_with_role_keeps_i_on_a_reclaimed_exchange() {
+        let sid = SessionId(1);
+        let now = Instant::now();
+        let im = ProtocolId::INTERACTION_MODEL;
+        let (mut a, b) = paired_sessions();
+        let first = a
+            .encode_outbound(sid, None, 0x02, im, b"first", MrpFlags::default(), now)
+            .unwrap();
+        assert_eq!(
+            a.get(sid).unwrap().mrp.exchange_count(),
+            0,
+            "an unreliable send reclaims at once"
+        );
+        let again = a
+            .encode_outbound_with_role(
+                sid,
+                first.exchange_id,
+                true,
+                0x01,
+                im,
+                b"again",
+                MrpFlags::default(),
+                now,
+            )
+            .unwrap();
+        assert!(again.is_local_initiator);
+        assert!(protocol_header_of(&b, sid, &again.wire_bytes)
+            .exchange_flags
+            .contains(crate::protocol_header::ExchangeFlags::INITIATOR));
     }
 
     #[test]

@@ -8,7 +8,7 @@
 //! [`crate::protocol_header::build_standalone_ack_header`] +
 //! [`crate::framing::encode_secured`]).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use crate::error::{Error, Result};
@@ -18,7 +18,7 @@ use crate::protocol_header::{encode_protocol_header, ExchangeFlags, ProtocolHead
 /// Upper bound on the number of live exchanges tracked per session.
 ///
 /// `exchange_id` is a peer-controlled 16-bit field, so without a bound a
-/// long-lived session could accumulate one `ExchangeState` per distinct id
+/// long-lived session could accumulate one table entry per distinct id
 /// (up to 65 536) and never reclaim them — a slow memory-exhaustion denial
 /// of service. An
 /// exchange is reclaimed automatically once it goes idle (no pending
@@ -502,6 +502,16 @@ pub struct PreparedOutbound {
     pub piggyback_acked: bool,
 }
 
+impl PreparedOutbound {
+    /// The exchange this message was built for.
+    pub(crate) fn exchange(&self) -> ExchangeKey {
+        ExchangeKey {
+            id: self.exchange_id,
+            is_local_initiator: self.is_local_initiator,
+        }
+    }
+}
+
 /// Snapshot view returned by [`MrpState::check_duplicate_reliable`].
 pub struct RecentInboundView {
     /// Exchange the recently-cached reliable message belonged to.
@@ -510,35 +520,71 @@ pub struct RecentInboundView {
     pub is_local_initiator: bool,
 }
 
+/// Which exchange, within one session, a piece of MRP state belongs to: the
+/// exchange id together with which side started the exchange.
+///
+/// The id alone does not name an exchange. Each node allocates ids for the
+/// exchanges it starts from its own counter (Matter 1.4 Core §4.10.2), so an
+/// exchange we start and one the peer starts can carry the same id at the
+/// same time. The spec identifies an exchange by the tuple {Session Context,
+/// Exchange ID, Exchange Role} (§4.10.2, §4.10.3); the session is implied
+/// here, because each session owns its own [`MrpState`]. chip keys the same
+/// way (`ExchangeContext::MatchExchange` compares the id and the initiator
+/// role, `ExchangeContext.cpp:364-385` at master 5cd2917a, `:362-383` at
+/// v1.4.2.0), and so does matter.js 0.17.1 (`ExchangeManager.ts:136`,
+/// `:272-274`: a local exchange is indexed as `exchangeId | 0x10000`).
+///
+/// The derived `Ord` sorts by id, then the peer's exchange before ours
+/// (`false < true`). Every place that emits ACKs in a fixed order uses it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) struct ExchangeKey {
+    /// The exchange id carried in every message of the exchange.
+    pub(crate) id: u16,
+    /// Whether we started the exchange. Every message we send on it carries
+    /// the `I` flag exactly when this is true (§4.10.4).
+    pub(crate) is_local_initiator: bool,
+}
+
+impl ExchangeKey {
+    /// The exchange an inbound message belongs to: `I=1` from the peer means
+    /// the peer started it; `I=0` means we did (§4.10.5.1, criterion 3).
+    pub(crate) fn of_inbound(exchange_id: u16, peer_is_initiator: bool) -> Self {
+        Self {
+            id: exchange_id,
+            is_local_initiator: !peer_is_initiator,
+        }
+    }
+}
+
 /// Pending retransmit entry for one outbound reliable message.
 #[derive(Debug)]
 struct PendingAck {
     packet_bytes: Vec<u8>,
-    exchange_id: u16,
+    exchange: ExchangeKey,
     next_attempt: Instant,
     attempts_remaining: u8,
 }
 
 /// Buffered piggyback-ack for one exchange. Held in a per-exchange map
-/// (keyed by `exchange_id`) so concurrent reliable inbounds on different
+/// (keyed by [`ExchangeKey`]) so concurrent reliable inbounds on different
 /// exchanges never clobber each other's buffered ack. Each entry is either
 /// drained by the next outbound in the same exchange (cheap) or flushed as
-/// a standalone-ack when the 200ms deadline expires (fallback).
+/// a standalone-ack when the 200ms deadline expires (fallback). The `I`
+/// flag of the standalone ACK comes from the key.
 #[derive(Debug)]
 struct PendingOutboundAck {
     ack_counter: MessageCounter,
-    is_local_initiator: bool,
     deadline: Instant,
 }
 
 impl PendingOutboundAck {
-    /// This ACK as the timer event `SessionManager` turns into an encrypted
-    /// standalone-ACK packet.
-    fn fired(self, exchange_id: u16) -> MrpTimerEvent {
+    /// This ACK, owed on `exchange`, as the timer event `SessionManager`
+    /// turns into an encrypted standalone-ACK packet.
+    fn fired(self, exchange: ExchangeKey) -> MrpTimerEvent {
         MrpTimerEvent::StandaloneAckDeadlineFired {
-            exchange_id,
+            exchange_id: exchange.id,
             ack_counter: self.ack_counter,
-            is_local_initiator: self.is_local_initiator,
+            is_local_initiator: exchange.is_local_initiator,
         }
     }
 }
@@ -553,28 +599,26 @@ struct RecentInbound {
     is_local_initiator: bool,
 }
 
-/// Per-exchange state tracked across `prepare_outbound` /
-/// `process_inbound` calls. Currently only carries `is_local_initiator`,
-/// which determines the `I` flag for subsequent messages we send in this
-/// exchange.
-#[derive(Debug)]
-struct ExchangeState {
-    is_local_initiator: bool,
-}
-
 /// Per-session MRP state.
 #[derive(Debug)]
 pub struct MrpState {
+    /// Our unacknowledged reliable messages, by message counter. An inbound
+    /// ACK clears its entry by counter alone, as §4.12.5.2.1 says ("query
+    /// the retransmission table for the Acknowledgement Message Counter"):
+    /// our counter is unique within the session, so the counter names one
+    /// message whatever exchange the ACK arrives on.
     pending_acks: HashMap<MessageCounter, PendingAck>,
-    pending_outbound_acks: HashMap<u16, PendingOutboundAck>,
+    pending_outbound_acks: HashMap<ExchangeKey, PendingOutboundAck>,
     /// ACKs owed for reliable messages that a newer reliable message on the
     /// same exchange displaced from `pending_outbound_acks`, oldest first.
     /// Each is due at once (its deadline is the instant it was displaced), so
     /// the next [`Self::handle_timeout`] sends it ahead of every other ACK.
-    displaced_acks: Vec<(u16, PendingOutboundAck)>,
+    displaced_acks: Vec<(ExchangeKey, PendingOutboundAck)>,
     recent_reliable: [Option<RecentInbound>; 32],
     recent_next_slot: usize,
-    exchanges: HashMap<u16, ExchangeState>,
+    /// The live exchanges. Membership is what decides the `I` flag of a send
+    /// that names its exchange by id alone (see [`Self::resolve`]).
+    exchanges: HashSet<ExchangeKey>,
     last_outbound: Option<Instant>,
     /// Wall-clock of the most recent message RECEIVED from the peer, used to
     /// classify the peer as "active" (within `config.idle_threshold` = the
@@ -682,7 +726,7 @@ impl MrpState {
             displaced_acks: Vec::new(),
             recent_reliable: std::array::from_fn(|_| None),
             recent_next_slot: 0,
-            exchanges: HashMap::new(),
+            exchanges: HashSet::new(),
             last_outbound: None,
             last_peer_activity: None,
             jitter: 1,
@@ -712,12 +756,38 @@ impl MrpState {
     /// exactly that, and a per-session counter (which this type used to keep)
     /// does not satisfy it.
     pub fn note_local_exchange(&mut self, id: u16) {
-        self.exchanges.insert(
+        self.exchanges.insert(ExchangeKey {
             id,
-            ExchangeState {
-                is_local_initiator: true,
-            },
-        );
+            is_local_initiator: true,
+        });
+    }
+
+    /// The exchange a method that takes only an exchange id means.
+    ///
+    /// An id names one exchange unless both sides started an exchange with
+    /// it (see [`ExchangeKey`]). This picks the exchange we started if the
+    /// table holds one with this id, and otherwise the peer's. An id the
+    /// table does not hold at all is treated as the peer's (we are
+    /// responding, `I=0`), which is what these methods did before the table
+    /// knew the role. Preferring ours keeps the result they gave after a
+    /// collision too: the single entry then always said "ours" once we had
+    /// sent on the id.
+    ///
+    /// [`SessionManager`](crate::SessionManager)'s `*_with_role` methods name
+    /// the role explicitly and never consult this.
+    pub(crate) fn resolve(&self, id: u16) -> ExchangeKey {
+        let ours = ExchangeKey {
+            id,
+            is_local_initiator: true,
+        };
+        if self.exchanges.contains(&ours) {
+            ours
+        } else {
+            ExchangeKey {
+                id,
+                is_local_initiator: false,
+            }
+        }
     }
 
     /// Build an outbound wire payload (encoded protocol header concatenated
@@ -726,13 +796,15 @@ impl MrpState {
     /// `is_local_initiator` comes from the exchange table: an id announced via
     /// [`Self::note_local_exchange`] is ours and sets the `I` flag; any other id
     /// (a peer-assigned one, or one used without a prior inbound) is recorded as
-    /// a response with `is_local_initiator = false`.
+    /// a response with `is_local_initiator = false`. If both an exchange we
+    /// started and one the peer started carry `exchange_id`, this sends on
+    /// ours; [`SessionManager::encode_outbound_with_role`](crate::SessionManager::encode_outbound_with_role)
+    /// can name either.
     ///
-    /// When this exchange's buffered piggyback ack is drained, the outgoing
-    /// header carries `A=1` and `ack_counter = pending.ack_counter`. The drain
-    /// path's `is_local_initiator` is guaranteed to agree with the
-    /// exchange-table lookup because both were populated from the same
-    /// `!peer_is_initiator` computation during `process_inbound`.
+    /// When the chosen exchange's buffered piggyback ack is drained, the
+    /// outgoing header carries `A=1` and `ack_counter = pending.ack_counter`.
+    /// Only that exchange's ACK can ride: an ACK owed on the other exchange
+    /// with the same id stays owed.
     ///
     /// This records the exchange and drains the ACK at once, before the
     /// caller has framed anything; a caller whose framing then fails cannot
@@ -758,8 +830,7 @@ impl MrpState {
         let prepared = self.build_outbound(
             opcode,
             protocol_id,
-            exchange_id,
-            false,
+            self.resolve(exchange_id),
             app_payload,
             mrp_flags,
         );
@@ -767,41 +838,36 @@ impl MrpState {
         Ok(prepared)
     }
 
-    /// Build the wire payload [`Self::prepare_outbound`] would, changing
-    /// nothing: the exchange is not recorded and its owed ACK, if any, is
-    /// copied into the header but stays owed. Pair it with
-    /// [`Self::commit_outbound`] once the message is certain to be sent.
+    /// Build the wire payload for a message on `exchange`, changing nothing:
+    /// the exchange is not recorded and its owed ACK, if any, is copied into
+    /// the header but stays owed. Pair it with [`Self::commit_outbound`] once
+    /// the message is certain to be sent.
     ///
-    /// `new_local_exchange` is true for an id the caller has just allocated
-    /// for an exchange we start: it sets the `I` flag whatever the table holds
-    /// for that id, as [`Self::note_local_exchange`] followed by
-    /// [`Self::prepare_outbound`] does. Otherwise the table decides, and an id
-    /// it does not hold is a response (`I=0`).
+    /// The caller names the exchange in full, so the `I` flag is
+    /// `exchange.is_local_initiator` whatever the table holds: for a fresh id
+    /// the caller has just allocated for an exchange we start, for a
+    /// follow-up on one of ours (even one already reclaimed), or for an
+    /// answer on the peer's. [`Self::resolve`] gives the key a method that
+    /// takes only an id means.
     pub(crate) fn build_outbound(
         &self,
         opcode: u8,
         protocol_id: ProtocolId,
-        exchange_id: u16,
-        new_local_exchange: bool,
+        exchange: ExchangeKey,
         app_payload: &[u8],
         mrp_flags: MrpFlags,
     ) -> PreparedOutbound {
-        // Resolve is_local_initiator via the exchange table. An id we have not
-        // seen means we are responding (safe default: I=0); a locally-initiated
-        // exchange is flagged by the caller, because the id itself is allocated
-        // one level up, from the per-node counter the spec requires
-        // (`SessionManager::encode_outbound`).
-        let is_local_initiator = new_local_exchange
-            || self
-                .exchanges
-                .get(&exchange_id)
-                .is_some_and(|state| state.is_local_initiator);
+        let ExchangeKey {
+            id: exchange_id,
+            is_local_initiator,
+        } = exchange;
 
         // Copy the buffered piggyback for THIS exchange, if any, leaving it
         // buffered: `commit_outbound` drains it once the send is certain.
-        // Other exchanges' buffered acks are untouched.
+        // Other exchanges' buffered acks are untouched, including one owed
+        // on the other exchange that shares this id.
         let (ack_flag, ack_counter, piggyback_acked) =
-            if let Some(p) = self.pending_outbound_acks.get(&exchange_id) {
+            if let Some(p) = self.pending_outbound_acks.get(&exchange) {
                 (ExchangeFlags::ACK, Some(p.ack_counter), true)
             } else {
                 (ExchangeFlags::empty(), None, false)
@@ -842,17 +908,14 @@ impl MrpState {
     /// commit, so the ACK drained is the one the header carries. The caller
     /// then calls [`Self::mark_packet_sent`].
     pub(crate) fn commit_outbound(&mut self, prepared: &PreparedOutbound) {
-        // For an existing entry this rewrites the flag the build just read
-        // from it; for a fresh local exchange it records `I=1`, and for an id
-        // the table did not hold it records a response (`I=0`).
-        self.exchanges.insert(
-            prepared.exchange_id,
-            ExchangeState {
-                is_local_initiator: prepared.is_local_initiator,
-            },
-        );
+        // Record the exchange the message was built for: a fresh local one,
+        // a reclaimed one we are continuing, or a response. An exchange with
+        // the same id and the other role is a different entry and is not
+        // touched.
+        let exchange = prepared.exchange();
+        self.exchanges.insert(exchange);
         if prepared.piggyback_acked {
-            self.pending_outbound_acks.remove(&prepared.exchange_id);
+            self.pending_outbound_acks.remove(&exchange);
         }
     }
 
@@ -866,10 +929,29 @@ impl MrpState {
     /// (`is_peer_active`) — and the idle base (`initial_idle`, SII) otherwise.
     /// Selection is off the peer's activity, NOT our own outbound timing
     /// (MRP-1); subsequent retransmits re-evaluate it in `handle_timeout`.
+    ///
+    /// `exchange_id` names the exchange as [`Self::prepare_outbound`] does:
+    /// ours if the table holds an exchange we started with this id, and
+    /// otherwise the peer's. That is the exchange the preceding
+    /// [`Self::prepare_outbound`] on the same id chose.
     pub fn mark_packet_sent(
         &mut self,
         counter: MessageCounter,
         exchange_id: u16,
+        packet_bytes: Vec<u8>,
+        reliable: bool,
+        now: Instant,
+    ) {
+        let exchange = self.resolve(exchange_id);
+        self.mark_packet_sent_on(counter, exchange, packet_bytes, reliable, now);
+    }
+
+    /// [`Self::mark_packet_sent`] for the exchange named in full, the one
+    /// the message was built for ([`PreparedOutbound::exchange`]).
+    pub(crate) fn mark_packet_sent_on(
+        &mut self,
+        counter: MessageCounter,
+        exchange: ExchangeKey,
         packet_bytes: Vec<u8>,
         reliable: bool,
         now: Instant,
@@ -888,7 +970,7 @@ impl MrpState {
             // Hanging it off the send, not the ack drain (`commit_outbound`),
             // also covers an answer sent after the standalone-ack deadline
             // already flushed the ack (nothing left to drain, entry re-created).
-            self.reclaim_if_idle(exchange_id);
+            self.reclaim_if_idle(exchange);
             return;
         }
 
@@ -905,7 +987,7 @@ impl MrpState {
             counter,
             PendingAck {
                 packet_bytes,
-                exchange_id,
+                exchange,
                 next_attempt,
                 attempts_remaining: self.config.max_transmissions.saturating_sub(1),
             },
@@ -950,7 +1032,7 @@ impl MrpState {
         let mut to_remove = Vec::new();
         // Exchanges whose live work cleared this tick (an expired retransmit
         // or a drained buffered ack); each is reclaimed if it ends up idle.
-        let mut reclaim_candidates: Vec<u16> = Vec::new();
+        let mut reclaim_candidates: Vec<ExchangeKey> = Vec::new();
 
         // Re-evaluate the peer's active/idle state ONCE for this tick, exactly
         // as chip re-evaluates `IsPeerActive` on every retransmit scheduling:
@@ -966,15 +1048,15 @@ impl MrpState {
             }
             if pending.attempts_remaining == 0 {
                 events.push(MrpTimerEvent::Expired {
-                    exchange_id: pending.exchange_id,
+                    exchange_id: pending.exchange.id,
                     counter: *counter,
                 });
                 to_remove.push(*counter);
-                reclaim_candidates.push(pending.exchange_id);
+                reclaim_candidates.push(pending.exchange);
                 continue;
             }
             events.push(MrpTimerEvent::Retransmit {
-                exchange_id: pending.exchange_id,
+                exchange_id: pending.exchange.id,
                 counter: *counter,
                 packet: pending.packet_bytes.clone(),
             });
@@ -1000,12 +1082,12 @@ impl MrpState {
 
         // Displaced ACKs first: each is older than the ACK that displaced it.
         let mut still_waiting = Vec::new();
-        for (exchange_id, p) in std::mem::take(&mut self.displaced_acks) {
+        for (exchange, p) in std::mem::take(&mut self.displaced_acks) {
             if p.deadline <= now {
-                events.push(p.fired(exchange_id));
-                reclaim_candidates.push(exchange_id);
+                events.push(p.fired(exchange));
+                reclaim_candidates.push(exchange);
             } else {
-                still_waiting.push((exchange_id, p));
+                still_waiting.push((exchange, p));
             }
         }
         self.displaced_acks = still_waiting;
@@ -1013,26 +1095,27 @@ impl MrpState {
         // Standalone-ack deadline: flush every buffered piggyback whose
         // deadline has passed before the next outbound in its exchange,
         // emitting one standalone-ack per due exchange.
-        let mut due_exchanges: Vec<u16> = self
+        let mut due_exchanges: Vec<ExchangeKey> = self
             .pending_outbound_acks
             .iter()
             .filter(|(_, p)| p.deadline <= now)
-            .map(|(id, _)| *id)
+            .map(|(exchange, _)| *exchange)
             .collect();
         // Deterministic emission order — HashMap iteration order is
-        // unspecified; sorting keeps event ordering stable for callers/tests.
+        // unspecified; sorting (by id, then the peer's exchange before ours)
+        // keeps event ordering stable for callers/tests.
         due_exchanges.sort_unstable();
-        for exchange_id in due_exchanges {
-            if let Some(p) = self.pending_outbound_acks.remove(&exchange_id) {
-                events.push(p.fired(exchange_id));
-                reclaim_candidates.push(exchange_id);
+        for exchange in due_exchanges {
+            if let Some(p) = self.pending_outbound_acks.remove(&exchange) {
+                events.push(p.fired(exchange));
+                reclaim_candidates.push(exchange);
             }
         }
 
         // Reclaim any exchange whose last piece of live work cleared this
         // tick and is now idle (no pending retransmit, no ACK still owed).
-        for exchange_id in reclaim_candidates {
-            self.reclaim_if_idle(exchange_id);
+        for exchange in reclaim_candidates {
+            self.reclaim_if_idle(exchange);
         }
 
         events
@@ -1084,6 +1167,11 @@ impl MrpState {
         let exchange_id = header.exchange_id;
         let peer_is_initiator = header.exchange_flags.contains(ExchangeFlags::INITIATOR);
         let we_are_initiator = !peer_is_initiator;
+        // Match the message to its exchange by id AND role (§4.10.5.1): `I=1`
+        // belongs to an exchange the peer started, `I=0` to one we started.
+        // A peer exchange that reuses the id of one of ours is a different
+        // exchange, with its own owed ACK.
+        let exchange = ExchangeKey::of_inbound(exchange_id, peer_is_initiator);
 
         // Record the exchange on first sight, bounding the table so a peer
         // cannot grow it without limit via fresh, peer-controlled
@@ -1091,16 +1179,11 @@ impl MrpState {
         // at the cap, reject the message rather than insert. Messages on
         // exchanges we already track are always accepted (they cost no new
         // slot), so the cap never interferes with established traffic.
-        if !self.exchanges.contains_key(&exchange_id) {
+        if !self.exchanges.contains(&exchange) {
             if self.exchanges.len() >= MAX_EXCHANGES_PER_SESSION {
                 return Err(Error::ExchangeTableFull);
             }
-            self.exchanges.insert(
-                exchange_id,
-                ExchangeState {
-                    is_local_initiator: we_are_initiator,
-                },
-            );
+            self.exchanges.insert(exchange);
         }
 
         if header.exchange_flags.contains(ExchangeFlags::ACK) {
@@ -1117,7 +1200,7 @@ impl MrpState {
                 // A pure ack completes the round-trip from our side — the
                 // pending retransmit just cleared above. Reclaim the
                 // exchange if nothing else keeps it live.
-                self.reclaim_if_idle(exchange_id);
+                self.reclaim_if_idle(exchange);
                 return Ok(InboundOutcome::AckOnly {
                     exchange_id,
                     acked_counter: header.ack_counter.unwrap_or(MessageCounter(0)),
@@ -1126,22 +1209,21 @@ impl MrpState {
         }
 
         if header.exchange_flags.contains(ExchangeFlags::RELIABLE) {
-            // Buffer this exchange's piggyback ack. Keyed by exchange_id so a
-            // concurrent reliable inbound on a different exchange never
-            // clobbers this one. A second reliable message on the SAME
+            // Buffer this exchange's piggyback ack. Keyed by exchange (id and
+            // role) so a concurrent reliable inbound on a different exchange,
+            // including one that shares this id, never clobbers this one. A second reliable message on the SAME
             // exchange displaces the first one's ack: owe that one at once
             // rather than lose it (chip `ReliableMessageContext.cpp:158-166`,
             // "forcing tx of solitary ack"; matter.js
             // `MessageExchange.ts:426-431`).
             let fresh = PendingOutboundAck {
                 ack_counter: peer_counter,
-                is_local_initiator: we_are_initiator,
                 deadline: now + self.config.standalone_ack_deadline,
             };
-            if let Some(older) = self.pending_outbound_acks.insert(exchange_id, fresh) {
+            if let Some(older) = self.pending_outbound_acks.insert(exchange, fresh) {
                 if self.displaced_acks.len() < MAX_DISPLACED_ACKS {
                     self.displaced_acks.push((
-                        exchange_id,
+                        exchange,
                         PendingOutboundAck {
                             deadline: now,
                             ..older
@@ -1154,6 +1236,7 @@ impl MrpState {
                     tracing::debug!(
                         target: "matter_transport::mrp",
                         exchange_id,
+                        is_local_initiator = we_are_initiator,
                         dropped_ack_counter = older.ack_counter.0,
                         "displaced-ACK queue full; dropping the displaced ACK"
                     );
@@ -1171,7 +1254,7 @@ impl MrpState {
         // If a piggybacked ack cleared this exchange's last pending
         // retransmit and the inbound was not itself reliable (so it buffered
         // no outbound ack), the exchange is now idle and can be reclaimed.
-        self.reclaim_if_idle(exchange_id);
+        self.reclaim_if_idle(exchange);
 
         Ok(InboundOutcome::AppMessage {
             exchange_id,
@@ -1183,16 +1266,17 @@ impl MrpState {
     }
 
     /// Cancel a pending piggyback/standalone-ack registration for
-    /// `exchange_id`, if any.
+    /// `exchange`, if any.
     ///
     /// Used by [`crate::session::SessionManager::decode_inbound`] when the
     /// owning session's `transport_reliable` flag is set: the underlying
     /// transport (BTP) already guarantees ordered, reliable delivery, so no
     /// local ack bookkeeping should be armed — defensively, even if a
     /// (possibly buggy) peer sets the R flag on an inbound message.
-    pub(crate) fn cancel_pending_outbound_ack(&mut self, exchange_id: u16) {
-        self.pending_outbound_acks.remove(&exchange_id);
-        self.displaced_acks.retain(|(id, _)| *id != exchange_id);
+    pub(crate) fn cancel_pending_outbound_ack(&mut self, exchange: ExchangeKey) {
+        self.pending_outbound_acks.remove(&exchange);
+        self.displaced_acks
+            .retain(|(owed_on, _)| *owed_on != exchange);
     }
 
     /// Look up `peer_counter` in the 32-entry recent-reliable cache.
@@ -1231,12 +1315,24 @@ impl MrpState {
     /// preserved: a late peer retransmit of a request from the now-closed
     /// exchange should still trigger the ack-resend path rather than
     /// surfacing as a fresh application message.
+    ///
+    /// `exchange_id` means the exchange we started if the table holds one
+    /// with this id, and otherwise the peer's; an exchange with the same id
+    /// and the other role is left alone.
+    /// [`SessionManager::abort_exchange_with_role`](crate::SessionManager::abort_exchange_with_role)
+    /// can name either.
     pub fn close_exchange(&mut self, exchange_id: u16) {
-        self.exchanges.remove(&exchange_id);
-        self.pending_acks
-            .retain(|_, p| p.exchange_id != exchange_id);
-        self.pending_outbound_acks.remove(&exchange_id);
-        self.displaced_acks.retain(|(id, _)| *id != exchange_id);
+        let exchange = self.resolve(exchange_id);
+        self.close_exchange_on(exchange);
+    }
+
+    /// [`Self::close_exchange`] for the exchange named in full.
+    pub(crate) fn close_exchange_on(&mut self, exchange: ExchangeKey) {
+        self.exchanges.remove(&exchange);
+        self.pending_acks.retain(|_, p| p.exchange != exchange);
+        self.pending_outbound_acks.remove(&exchange);
+        self.displaced_acks
+            .retain(|(owed_on, _)| *owed_on != exchange);
     }
 
     /// Take every ACK `exchange_id` still owes (a displaced one first, then its
@@ -1260,34 +1356,50 @@ impl MrpState {
     /// id re-creates it as peer-initiated and the message goes out with
     /// `I=0`. With nothing buffered it returns an empty `Vec`, so a second
     /// call is harmless.
+    ///
+    /// `exchange_id` means the exchange we started if the table holds one
+    /// with this id, and otherwise the peer's; an ACK owed on an exchange
+    /// with the same id and the other role stays owed.
+    /// [`SessionManager::finish_exchange_with_role`](crate::SessionManager::finish_exchange_with_role)
+    /// can name either.
     pub fn flush_exchange_acks(&mut self, exchange_id: u16) -> Vec<MrpTimerEvent> {
+        let exchange = self.resolve(exchange_id);
+        self.flush_exchange_acks_on(exchange)
+    }
+
+    /// [`Self::flush_exchange_acks`] for the exchange named in full.
+    pub(crate) fn flush_exchange_acks_on(&mut self, exchange: ExchangeKey) -> Vec<MrpTimerEvent> {
         let (mine, others): (Vec<_>, Vec<_>) = std::mem::take(&mut self.displaced_acks)
             .into_iter()
-            .partition(|(id, _)| *id == exchange_id);
+            .partition(|(owed_on, _)| *owed_on == exchange);
         self.displaced_acks = others;
-        let mut events: Vec<MrpTimerEvent> = mine.into_iter().map(|(id, p)| p.fired(id)).collect();
-        if let Some(p) = self.pending_outbound_acks.remove(&exchange_id) {
-            events.push(p.fired(exchange_id));
+        let mut events: Vec<MrpTimerEvent> = mine
+            .into_iter()
+            .map(|(owed_on, p)| p.fired(owed_on))
+            .collect();
+        if let Some(p) = self.pending_outbound_acks.remove(&exchange) {
+            events.push(p.fired(exchange));
         }
-        self.reclaim_if_idle(exchange_id);
+        self.reclaim_if_idle(exchange);
         events
     }
 
     /// [`Self::flush_exchange_acks`] for every exchange that owes an ACK, in
-    /// ascending exchange-id order (the order [`Self::handle_timeout`] uses).
-    /// For a session that is going away.
+    /// ascending exchange-id order (the order [`Self::handle_timeout`] uses;
+    /// where an exchange we started and one the peer started share an id,
+    /// the peer's comes first). For a session that is going away.
     pub fn flush_all_acks(&mut self) -> Vec<MrpTimerEvent> {
-        let mut exchange_ids: Vec<u16> = self
+        let mut exchanges: Vec<ExchangeKey> = self
             .pending_outbound_acks
             .keys()
             .copied()
-            .chain(self.displaced_acks.iter().map(|(id, _)| *id))
+            .chain(self.displaced_acks.iter().map(|(owed_on, _)| *owed_on))
             .collect();
-        exchange_ids.sort_unstable();
-        exchange_ids.dedup();
+        exchanges.sort_unstable();
+        exchanges.dedup();
         let mut events = Vec::new();
-        for exchange_id in exchange_ids {
-            events.extend(self.flush_exchange_acks(exchange_id));
+        for exchange in exchanges {
+            events.extend(self.flush_exchange_acks_on(exchange));
         }
         events
     }
@@ -1315,48 +1427,48 @@ impl MrpState {
     /// - Without the reclaim, a caller that never finishes the exchange
     ///   would leave an idle entry in the exchange table for good.
     pub(crate) fn forget_ack_for(&mut self, counter: MessageCounter) {
-        let mut exchanges: Vec<u16> = self
+        let mut exchanges: Vec<ExchangeKey> = self
             .pending_outbound_acks
             .iter()
             .filter(|(_, p)| p.ack_counter == counter)
-            .map(|(id, _)| *id)
+            .map(|(exchange, _)| *exchange)
             .collect();
-        for exchange_id in &exchanges {
-            self.pending_outbound_acks.remove(exchange_id);
+        for exchange in &exchanges {
+            self.pending_outbound_acks.remove(exchange);
         }
         exchanges.extend(
             self.displaced_acks
                 .iter()
                 .filter(|(_, p)| p.ack_counter == counter)
-                .map(|(id, _)| *id),
+                .map(|(owed_on, _)| *owed_on),
         );
         self.displaced_acks
             .retain(|(_, p)| p.ack_counter != counter);
-        for exchange_id in exchanges {
-            self.reclaim_if_idle(exchange_id);
+        for exchange in exchanges {
+            self.reclaim_if_idle(exchange);
         }
     }
 
-    /// Returns `true` if `exchange_id` has no live work attached: no pending
+    /// Returns `true` if `exchange` has no live work attached: no pending
     /// retransmit, no buffered outbound (piggyback) ack and no displaced ACK.
-    /// Such an exchange is genuinely complete and its [`ExchangeState`] can be
-    /// reclaimed.
+    /// Such an exchange is genuinely complete and its table entry can be
+    /// reclaimed. Work on the other exchange with the same id does not count.
     ///
     /// `recent_reliable` entries are intentionally NOT consulted: they are a
     /// fixed-size ring buffer (bounded memory) whose dedup-resend semantics
     /// must outlive the exchange, exactly as [`Self::close_exchange`]
     /// preserves them.
-    fn exchange_is_idle(&self, exchange_id: u16) -> bool {
-        let has_pending_retransmit = self
-            .pending_acks
-            .values()
-            .any(|p| p.exchange_id == exchange_id);
-        let has_buffered_ack = self.pending_outbound_acks.contains_key(&exchange_id)
-            || self.displaced_acks.iter().any(|(id, _)| *id == exchange_id);
+    fn exchange_is_idle(&self, exchange: ExchangeKey) -> bool {
+        let has_pending_retransmit = self.pending_acks.values().any(|p| p.exchange == exchange);
+        let has_buffered_ack = self.pending_outbound_acks.contains_key(&exchange)
+            || self
+                .displaced_acks
+                .iter()
+                .any(|(owed_on, _)| *owed_on == exchange);
         !has_pending_retransmit && !has_buffered_ack
     }
 
-    /// Reclaim `exchange_id`'s [`ExchangeState`] if it is now idle (see
+    /// Reclaim `exchange`'s table entry if it is now idle (see
     /// [`Self::exchange_is_idle`]). Called at each point where an exchange's
     /// last piece of live work clears (an ack is received, a retransmit
     /// expires, a buffered or displaced ack is flushed as a standalone ack or
@@ -1364,9 +1476,9 @@ impl MrpState {
     /// nothing will ack — is sent), so completed exchanges
     /// are evicted automatically rather than depending on a caller invoking
     /// [`Self::close_exchange`].
-    fn reclaim_if_idle(&mut self, exchange_id: u16) {
-        if self.exchange_is_idle(exchange_id) {
-            self.exchanges.remove(&exchange_id);
+    fn reclaim_if_idle(&mut self, exchange: ExchangeKey) {
+        if self.exchange_is_idle(exchange) {
+            self.exchanges.remove(&exchange);
         }
     }
 
@@ -1664,6 +1776,14 @@ mod tests {
     const TEST_LOCAL_EXCHANGE: u16 = 1;
 
     impl MrpState {
+        /// Whether the exchange table holds the exchange `id` with this role.
+        fn holds(&self, id: u16, is_local_initiator: bool) -> bool {
+            self.exchanges.contains(&ExchangeKey {
+                id,
+                is_local_initiator,
+            })
+        }
+
         /// Test shim reproducing the old `prepare_outbound(.., None, ..)`
         /// behaviour: mark a locally-initiated exchange, then prepare on it.
         ///
@@ -1680,7 +1800,7 @@ mod tests {
             mrp_flags: MrpFlags,
             now: Instant,
         ) -> Result<PreparedOutbound> {
-            if !self.exchanges.contains_key(&TEST_LOCAL_EXCHANGE) {
+            if !self.holds(TEST_LOCAL_EXCHANGE, true) {
                 self.note_local_exchange(TEST_LOCAL_EXCHANGE);
             }
             self.prepare_outbound(
@@ -2745,7 +2865,7 @@ mod tests {
             now,
         );
         assert!(
-            mrp.exchanges.contains_key(&prepared.exchange_id),
+            mrp.exchanges.contains(&prepared.exchange()),
             "exchange recorded while round-trip is in flight"
         );
 
@@ -2760,7 +2880,7 @@ mod tests {
         mrp.process_inbound(ack, MessageCounter(50), now).unwrap();
 
         assert!(
-            !mrp.exchanges.contains_key(&prepared.exchange_id),
+            !mrp.exchanges.contains(&prepared.exchange()),
             "completed exchange must be reclaimed once idle"
         );
         assert!(mrp.exchanges.is_empty(), "exchange table shrank to empty");
@@ -2804,7 +2924,7 @@ mod tests {
             .unwrap();
 
         assert!(
-            mrp.exchanges.contains_key(&prepared.exchange_id),
+            mrp.exchanges.contains(&prepared.exchange()),
             "exchange with a pending retransmit must not be reclaimed"
         );
     }
@@ -2827,7 +2947,7 @@ mod tests {
         mrp.process_inbound(inbound, MessageCounter(100), now)
             .unwrap();
         assert!(
-            mrp.exchanges.contains_key(&0x4242),
+            mrp.holds(0x4242, false),
             "exchange with a buffered outbound ack stays live"
         );
 
@@ -2835,7 +2955,7 @@ mod tests {
         // drains and nothing else is pending, the exchange is reclaimed.
         mrp.handle_timeout(now + Duration::from_millis(200));
         assert!(
-            !mrp.exchanges.contains_key(&0x4242),
+            !mrp.holds(0x4242, false),
             "exchange reclaimed once its buffered ack drains and it is idle"
         );
     }
@@ -2893,7 +3013,7 @@ mod tests {
         }
         assert_eq!(mrp.poll_timeout(), None, "nothing left for the timer");
         assert!(
-            !mrp.exchanges.contains_key(&0x4242),
+            !mrp.holds(0x4242, false),
             "the closed exchange is reclaimed"
         );
     }
@@ -2982,7 +3102,7 @@ mod tests {
             "our retransmit is still scheduled"
         );
         assert!(
-            mrp.exchanges.contains_key(&prepared.exchange_id),
+            mrp.exchanges.contains(&prepared.exchange()),
             "an exchange with a pending retransmit stays live"
         );
     }
@@ -3245,7 +3365,7 @@ mod tests {
 
         assert!(mrp.has_pending(), "the displaced ACK is still owed");
         assert!(
-            mrp.exchanges.contains_key(&0x4242),
+            mrp.holds(0x4242, false),
             "an exchange that still owes an ACK stays live"
         );
         assert_eq!(
@@ -3354,7 +3474,7 @@ mod tests {
             acked(mrp.flush_exchange_acks(0x10)),
             vec![(0x10, MessageCounter(1)), (0x10, MessageCounter(2))]
         );
-        assert!(mrp.exchanges.contains_key(&0x20));
+        assert!(mrp.holds(0x20, false));
         assert_eq!(
             acked(mrp.handle_timeout(now)),
             vec![(0x20, MessageCounter(3))]
@@ -3380,12 +3500,391 @@ mod tests {
                 .unwrap();
         }
         mrp.close_exchange(0x10);
-        mrp.cancel_pending_outbound_ack(0x20);
+        mrp.cancel_pending_outbound_ack(ExchangeKey::of_inbound(0x20, true));
 
         assert_eq!(mrp.poll_timeout(), None);
         assert_eq!(
             acked(mrp.handle_timeout(now + Duration::from_secs(1))),
             Vec::<(u16, MessageCounter)>::new()
+        );
+    }
+
+    // --- Exchange identity: (exchange id, role), Matter 1.4 Core §4.10 -----
+    //
+    // Both sides allocate exchange ids from their own counters, so an exchange
+    // we started and one the peer started can share an id. Each test below
+    // holds one of each on id 0x30 and checks that the two never share an
+    // owed ACK, a retransmit or a table entry.
+
+    const SHARED_ID: u16 = 0x30;
+
+    fn ours(id: u16) -> ExchangeKey {
+        ExchangeKey {
+            id,
+            is_local_initiator: true,
+        }
+    }
+
+    fn peers(id: u16) -> ExchangeKey {
+        ExchangeKey {
+            id,
+            is_local_initiator: false,
+        }
+    }
+
+    /// The peer starts exchange `id` with a reliable request (`I=1`), so we
+    /// owe it an ACK there.
+    fn owe_on_peers_exchange(mrp: &mut MrpState, id: u16, counter: u32, now: Instant) {
+        let inbound = build_inbound_payload(
+            ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+            0x02,
+            id,
+            None,
+            b"request",
+        );
+        mrp.process_inbound(inbound, MessageCounter(counter), now)
+            .unwrap();
+    }
+
+    /// The peer answers on OUR exchange `id` with a reliable response
+    /// (`I=0`), so we owe it an ACK there.
+    fn owe_on_our_exchange(mrp: &mut MrpState, id: u16, counter: u32, now: Instant) {
+        let inbound = build_inbound_payload(ExchangeFlags::RELIABLE, 0x05, id, None, b"response");
+        mrp.process_inbound(inbound, MessageCounter(counter), now)
+            .unwrap();
+    }
+
+    /// Standalone ACKs as `(exchange id, acked counter, I flag)`.
+    fn acks_with_role(events: Vec<MrpTimerEvent>) -> Vec<(u16, MessageCounter, bool)> {
+        events
+            .into_iter()
+            .map(|e| match e {
+                MrpTimerEvent::StandaloneAckDeadlineFired {
+                    exchange_id,
+                    ack_counter,
+                    is_local_initiator,
+                } => (exchange_id, ack_counter, is_local_initiator),
+                other => panic!("expected only standalone ACKs, got {other:?}"),
+            })
+            .collect()
+    }
+
+    /// Send a reliable message on `exchange` as `SessionManager` does
+    /// (build, commit, mark sent), under our message counter `counter`.
+    fn send_reliable_on(mrp: &mut MrpState, exchange: ExchangeKey, counter: u32, now: Instant) {
+        let prepared = mrp.build_outbound(
+            0x02,
+            ProtocolId::INTERACTION_MODEL,
+            exchange,
+            b"msg",
+            MrpFlags { reliable: true },
+        );
+        mrp.commit_outbound(&prepared);
+        mrp.mark_packet_sent_on(MessageCounter(counter), exchange, vec![0xEE], true, now);
+    }
+
+    /// Inbound matching (§4.10.5.1): `I=1` belongs to the peer's exchange and
+    /// `I=0` to ours, so a reliable message on each, with the same id, makes
+    /// two exchanges owing two ACKs. Neither displaces the other (the
+    /// displacement rule is per exchange, §4.12.5.2.2), and each ACK fires
+    /// with its own exchange's `I` flag, the peer's first.
+    #[test]
+    fn exchanges_sharing_an_id_owe_separate_acks() {
+        let mut mrp = MrpState::new(cfg());
+        let now = t0();
+        owe_on_peers_exchange(&mut mrp, SHARED_ID, 100, now);
+        owe_on_our_exchange(&mut mrp, SHARED_ID, 101, now);
+
+        assert!(mrp.holds(SHARED_ID, false) && mrp.holds(SHARED_ID, true));
+        assert_eq!(mrp.exchange_count(), 2);
+        assert!(
+            mrp.displaced_acks.is_empty(),
+            "a message on the other exchange displaced this one's ACK"
+        );
+        assert_eq!(
+            mrp.poll_timeout(),
+            Some(now + Duration::from_millis(200)),
+            "nothing is due at once"
+        );
+        assert_eq!(
+            acks_with_role(mrp.handle_timeout(now + Duration::from_millis(200))),
+            vec![
+                (SHARED_ID, MessageCounter(100), false),
+                (SHARED_ID, MessageCounter(101), true),
+            ]
+        );
+        assert_eq!(
+            mrp.exchange_count(),
+            0,
+            "both reclaimed once their ACKs went"
+        );
+    }
+
+    /// A send carries the ACK owed on its own exchange and never the one owed
+    /// on the other exchange with the same id, and its `I` flag follows its
+    /// own role.
+    #[test]
+    fn a_send_carries_only_its_own_exchanges_ack() {
+        let mut mrp = MrpState::new(cfg());
+        let now = t0();
+        owe_on_peers_exchange(&mut mrp, SHARED_ID, 100, now);
+        owe_on_our_exchange(&mut mrp, SHARED_ID, 101, now);
+
+        for (exchange, owed) in [(ours(SHARED_ID), 101), (peers(SHARED_ID), 100)] {
+            let prepared = mrp.build_outbound(
+                0x08,
+                ProtocolId::INTERACTION_MODEL,
+                exchange,
+                b"msg",
+                MrpFlags::default(),
+            );
+            let (header, _) = decode_protocol_header(&prepared.wire_payload).unwrap();
+            assert_eq!(
+                header.ack_counter,
+                Some(MessageCounter(owed)),
+                "{exchange:?}"
+            );
+            assert_eq!(
+                header.exchange_flags.contains(ExchangeFlags::INITIATOR),
+                exchange.is_local_initiator,
+                "{exchange:?}"
+            );
+            assert_eq!(prepared.exchange(), exchange);
+            mrp.commit_outbound(&prepared);
+            mrp.mark_packet_sent_on(MessageCounter(1), exchange, Vec::new(), false, now);
+        }
+        assert_eq!(
+            mrp.poll_timeout(),
+            None,
+            "both ACKs rode their own messages"
+        );
+        assert_eq!(mrp.exchange_count(), 0);
+    }
+
+    /// Flushing one exchange sends only its ACK and reclaims only it.
+    #[test]
+    fn flushing_one_exchange_leaves_the_other_with_the_same_id() {
+        let mut mrp = MrpState::new(cfg());
+        let now = t0();
+        owe_on_peers_exchange(&mut mrp, SHARED_ID, 100, now);
+        owe_on_our_exchange(&mut mrp, SHARED_ID, 101, now);
+
+        assert_eq!(
+            acks_with_role(mrp.flush_exchange_acks_on(ours(SHARED_ID))),
+            vec![(SHARED_ID, MessageCounter(101), true)]
+        );
+        assert!(!mrp.holds(SHARED_ID, true), "ours is reclaimed");
+        assert!(mrp.holds(SHARED_ID, false), "the peer's still owes its ACK");
+        assert_eq!(
+            acks_with_role(mrp.flush_exchange_acks_on(peers(SHARED_ID))),
+            vec![(SHARED_ID, MessageCounter(100), false)]
+        );
+        assert_eq!(mrp.exchange_count(), 0);
+    }
+
+    /// `flush_all_acks` takes every exchange, in key order: by id, the peer's
+    /// before ours.
+    #[test]
+    fn flush_all_acks_orders_exchanges_by_id_then_role() {
+        let mut mrp = MrpState::new(cfg());
+        let now = t0();
+        owe_on_our_exchange(&mut mrp, SHARED_ID, 101, now);
+        owe_on_peers_exchange(&mut mrp, SHARED_ID + 1, 102, now);
+        owe_on_peers_exchange(&mut mrp, SHARED_ID, 100, now);
+        assert_eq!(
+            acks_with_role(mrp.flush_all_acks()),
+            vec![
+                (SHARED_ID, MessageCounter(100), false),
+                (SHARED_ID, MessageCounter(101), true),
+                (SHARED_ID + 1, MessageCounter(102), false),
+            ]
+        );
+    }
+
+    /// Aborting one exchange drops only its retransmits; ours and the peer's
+    /// each have one, under different counters.
+    #[test]
+    fn closing_one_exchange_keeps_the_other_exchanges_retransmit() {
+        for (closed, kept_counter) in [(ours(SHARED_ID), 2), (peers(SHARED_ID), 1)] {
+            let mut mrp = MrpState::new(cfg());
+            let now = t0();
+            send_reliable_on(&mut mrp, ours(SHARED_ID), 1, now);
+            owe_on_peers_exchange(&mut mrp, SHARED_ID, 100, now);
+            send_reliable_on(&mut mrp, peers(SHARED_ID), 2, now);
+
+            mrp.close_exchange_on(closed);
+            assert!(!mrp.exchanges.contains(&closed), "{closed:?}");
+            let kept = ExchangeKey {
+                id: SHARED_ID,
+                is_local_initiator: !closed.is_local_initiator,
+            };
+            assert!(mrp.exchanges.contains(&kept), "{closed:?}");
+            let retransmits: Vec<MessageCounter> = mrp
+                .handle_timeout(now + Duration::from_secs(10))
+                .into_iter()
+                .filter_map(|e| match e {
+                    MrpTimerEvent::Retransmit { counter, .. } => Some(counter),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                retransmits,
+                vec![MessageCounter(kept_counter)],
+                "closing {closed:?} must leave the other exchange's retransmit"
+            );
+        }
+    }
+
+    /// An ACK completes our exchange and reclaims it; the peer's exchange
+    /// with the same id still owes an ACK and stays. Our unreliable answer
+    /// then drains that ACK and reclaims the peer's exchange too: the
+    /// reclaim hangs off the send, for the exchange the send was on.
+    #[test]
+    fn reclaim_follows_each_exchanges_own_work() {
+        let mut mrp = MrpState::new(cfg());
+        let now = t0();
+        send_reliable_on(&mut mrp, ours(SHARED_ID), 1, now);
+        owe_on_peers_exchange(&mut mrp, SHARED_ID, 100, now);
+        assert_eq!(mrp.exchange_count(), 2);
+
+        let ack = build_inbound_payload(
+            ExchangeFlags::ACK,
+            crate::protocol_header::opcode::secure_channel::STANDALONE_ACK,
+            SHARED_ID,
+            Some(MessageCounter(1)),
+            b"",
+        );
+        let outcome = mrp.process_inbound(ack, MessageCounter(101), now).unwrap();
+        assert!(matches!(outcome, InboundOutcome::AckOnly { .. }));
+        assert!(
+            !mrp.holds(SHARED_ID, true),
+            "our completed exchange is reclaimed"
+        );
+        assert!(mrp.holds(SHARED_ID, false), "the peer's still owes its ACK");
+
+        let answer = mrp.build_outbound(
+            0x05,
+            ProtocolId::INTERACTION_MODEL,
+            peers(SHARED_ID),
+            b"answer",
+            MrpFlags::default(),
+        );
+        assert!(answer.piggyback_acked);
+        mrp.commit_outbound(&answer);
+        mrp.mark_packet_sent_on(MessageCounter(2), answer.exchange(), Vec::new(), false, now);
+        assert_eq!(
+            mrp.exchange_count(),
+            0,
+            "the unreliable answer reclaims the peer's"
+        );
+    }
+
+    /// The other order: the peer's exchange goes idle first (our unreliable
+    /// answer drains its ACK) while our retransmit on the exchange with the
+    /// same id is still pending. Only ours has live work, so only ours stays.
+    #[test]
+    fn a_peers_exchange_is_reclaimed_while_ours_still_retransmits() {
+        let mut mrp = MrpState::new(cfg());
+        let now = t0();
+        send_reliable_on(&mut mrp, ours(SHARED_ID), 1, now);
+        owe_on_peers_exchange(&mut mrp, SHARED_ID, 100, now);
+
+        let answer = mrp.build_outbound(
+            0x05,
+            ProtocolId::INTERACTION_MODEL,
+            peers(SHARED_ID),
+            b"answer",
+            MrpFlags::default(),
+        );
+        mrp.commit_outbound(&answer);
+        mrp.mark_packet_sent_on(MessageCounter(2), answer.exchange(), Vec::new(), false, now);
+        assert!(!mrp.holds(SHARED_ID, false), "the peer's exchange is done");
+        assert!(mrp.holds(SHARED_ID, true), "ours still has a retransmit");
+        assert_eq!(mrp.exchange_count(), 1);
+    }
+
+    /// A displaced ACK belongs to its exchange: flushing ours does not take
+    /// the one displaced on the peer's exchange with the same id.
+    #[test]
+    fn a_displaced_ack_stays_with_its_own_exchange() {
+        let mut mrp = MrpState::new(cfg());
+        let now = t0();
+        owe_on_peers_exchange(&mut mrp, SHARED_ID, 100, now);
+        owe_on_peers_exchange(&mut mrp, SHARED_ID, 101, now);
+        owe_on_our_exchange(&mut mrp, SHARED_ID, 102, now);
+        assert_eq!(mrp.displaced_acks.len(), 1, "101 displaced 100");
+
+        assert_eq!(
+            acks_with_role(mrp.flush_exchange_acks_on(ours(SHARED_ID))),
+            vec![(SHARED_ID, MessageCounter(102), true)]
+        );
+        assert_eq!(
+            acks_with_role(mrp.flush_exchange_acks_on(peers(SHARED_ID))),
+            vec![
+                (SHARED_ID, MessageCounter(100), false),
+                (SHARED_ID, MessageCounter(101), false),
+            ]
+        );
+    }
+
+    /// A transport-reliable session cancels the ACK the inbound armed, and
+    /// only on the inbound's own exchange.
+    #[test]
+    fn cancelling_an_owed_ack_is_scoped_to_one_exchange() {
+        let mut mrp = MrpState::new(cfg());
+        let now = t0();
+        owe_on_peers_exchange(&mut mrp, SHARED_ID, 100, now);
+        owe_on_our_exchange(&mut mrp, SHARED_ID, 101, now);
+        mrp.cancel_pending_outbound_ack(ExchangeKey::of_inbound(SHARED_ID, true));
+        assert_eq!(
+            acks_with_role(mrp.flush_all_acks()),
+            vec![(SHARED_ID, MessageCounter(101), true)]
+        );
+    }
+
+    /// What the id-only public methods mean: the exchange we started if the
+    /// table holds one with the id, otherwise the peer's, including an id
+    /// the table does not hold at all (a response, `I=0`, as before roles
+    /// were tracked).
+    #[test]
+    fn an_id_alone_means_our_exchange_then_the_peers() {
+        let mut mrp = MrpState::new(cfg());
+        let now = t0();
+        assert_eq!(mrp.resolve(SHARED_ID), peers(SHARED_ID), "unknown id");
+        owe_on_peers_exchange(&mut mrp, SHARED_ID, 100, now);
+        assert_eq!(mrp.resolve(SHARED_ID), peers(SHARED_ID));
+        mrp.note_local_exchange(SHARED_ID);
+        assert_eq!(
+            mrp.resolve(SHARED_ID),
+            ours(SHARED_ID),
+            "ours wins a collision"
+        );
+
+        // So the legacy calls act on ours and leave the peer's ACK owed.
+        let prepared = mrp
+            .prepare_outbound(
+                0x02,
+                ProtocolId::INTERACTION_MODEL,
+                SHARED_ID,
+                b"ours",
+                MrpFlags::default(),
+                now,
+            )
+            .unwrap();
+        assert!(prepared.is_local_initiator);
+        assert!(
+            !prepared.piggyback_acked,
+            "the peer's ACK must not ride ours"
+        );
+        mrp.mark_packet_sent(MessageCounter(1), SHARED_ID, Vec::new(), false, now);
+        assert!(
+            !mrp.holds(SHARED_ID, true),
+            "the unreliable send reclaims ours"
+        );
+        assert_eq!(
+            acks_with_role(mrp.flush_exchange_acks(SHARED_ID)),
+            vec![(SHARED_ID, MessageCounter(100), false)],
+            "with ours gone, the id means the peer's"
         );
     }
 
