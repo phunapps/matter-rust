@@ -33,7 +33,10 @@ or never (the MRP entries, after the security entries in each crate's list).
 which could leave a session refusing every report the device sent, and
 starts each secure session's message counter at a random value, as the spec
 requires, instead of at 1; the controller's OTA provider server does the same
-for its handshake counter.
+for its handshake counter. Its MRP state now tells an exchange we started
+from one the peer started with the same exchange id, so neither can take the
+other's owed ACK, and the controller and commissioning match responses the
+same way.
 Commissioning now closes its own CASE session with a Secure Channel
 CloseSession, and both it and the controller honour one from the device.
 The Interaction Model parsers now reject a truncated message and bytes after
@@ -86,12 +89,14 @@ Dependency floors to raise at release (no `Cargo.toml` changes yet):
   `matter-commissioning` 0.10.1 and `matter-interaction` 0.4.3. Raise
   `matter-commissioning` in both `[dependencies]` and `[dev-dependencies]`.
   (0.7.4 for `SessionManager::finish_exchange`, `abort_exchange`,
-  `flush_pending_acks`, `flush_session_acks` and
+  `flush_pending_acks`, `flush_session_acks`, `encode_outbound_with_role`,
+  `finish_exchange_with_role`, `abort_exchange_with_role` and
   `secure_channel::is_close_session` too.)
 - `matter-commissioning` 0.10.1 requires `matter-interaction` 0.4.3,
   because it re-exports `InvokeResponse` and the whole crate (as `im`).
 - `matter-commissioning` 0.10.1 also requires `matter-transport` 0.7.4: its
-  exchange helpers call `SessionManager::finish_exchange` and
+  exchange helpers call `SessionManager::finish_exchange_with_role`,
+  `SessionManager::encode_outbound_with_role` and
   `secure_channel::is_close_session`, and `run_commission` calls
   `SessionManager::flush_pending_acks` and
   `secure_channel::encode_close_session` (and, with the `tracing` feature,
@@ -226,6 +231,31 @@ published release, `0.1.0` through `0.18.1`.
   "a failed send no longer leaks an exchange slot" below): an `invoke`,
   `invoke_tlv` or `write` too large to send no longer leaks a slot, so enough
   of them can no longer stop a node's subscription reports.
+
+### matter-controller: Fixed — a device exchange that reuses a request's exchange id no longer answers it
+
+- A pending request (a read, invoke, write or subscribe) was resolved by any
+  message on its session that carried its exchange id. Each side allocates
+  exchange ids for the exchanges it starts from its own counter, so a device
+  can start an exchange whose id equals one of ours (Matter 1.4 Core
+  §4.10.2). It sends with the `I` flag set, which makes it a different
+  exchange (§4.10.5.1; chip `ExchangeContext::MatchExchange`), but the actor
+  took, say, a subscription report on it as the response to a read.
+- A pending request now matches only a message with `I` clear; the
+  device's message takes the report or catch-all path. Every send, finish
+  and abort names its exchange's role through the new `matter-transport`
+  role-aware methods: follow-ups, chunk `StatusResponse`s, finishes and
+  aborts on a pending exchange as ours, a report's answer and the catch-all
+  ACK on the exchange the message arrived on, and the OTA provider server's
+  replies on the requestor's exchange. So an answer to the device's
+  exchange carries `I=0` and that exchange's ACK, and never ours.
+- Not covered: an MRP expiry (`MrpEvent::Expired`) is still routed by
+  exchange id, since the event carries no role (see the transport entry).
+  It can misattribute only when one of our reliable answers on a device's
+  exchange expires while a request of ours with the same id is pending.
+- Affected: every published release through `0.18.1` (the pending table has
+  matched by id since it was written, before `0.1.0`). Requires
+  `matter-transport` 0.7.4.
 
 ### matter-controller: Fixed — a CloseSession from the device closes the session
 
@@ -391,6 +421,59 @@ published release, `0.1.0` through `0.18.1`.
   before framing since then (in `MrpState::prepare_outbound` through 0.4.0,
   then, from 0.5.0, in `encode_outbound` through `note_local_exchange`).
 
+### matter-transport: Fixed — an exchange is identified by its id and its role
+
+- Each node allocates ids for the exchanges it starts from its own counter,
+  so an exchange we start and one the peer starts can carry the same id at
+  the same time. Matter 1.4 Core §4.10.2 and §4.10.3 identify an exchange by
+  {session, exchange id, role}. `MrpState` keyed its exchange table, the ACKs
+  it owed (buffered and displaced) and its retransmit entries by the id
+  alone. When the node's exchange-id counter handed out an id that the peer
+  was using on a live exchange that we owed an ACK:
+  - our new message, with `I=1`, carried and drained the ACK owed on the
+    peer's exchange. chip matches that message to a different exchange
+    (`ExchangeContext::MatchExchange`, `ExchangeContext.cpp:364-385` at
+    master 5cd2917a, `:362-383` at v1.4.2.0) and clears retransmits only on
+    the matched exchange (`ReliableMessageMgr::CheckAndRemRetransTable`), so
+    the ACK was lost and the peer retransmitted;
+  - the table entry now said "ours", so our answer on the peer's exchange
+    went out with `I=1` and no ACK, a chip peer took it for a new exchange,
+    and the peer's request was never acknowledged at all.
+
+  In the other order (the peer starts an exchange with the id of one of
+  ours), our next message on our own exchange carried the peer's ACK in the
+  same way.
+- All of it is now keyed by (exchange id, role), as in chip and in matter.js
+  (`ExchangeManager.ts` indexes a local exchange as `exchangeId | 0x10000`).
+  An inbound message with `I` set belongs to the peer's exchange and one
+  with `I` clear to ours (§4.10.5.1). Two exchanges that share an id never
+  share an owed ACK, a displaced ACK, a retransmit or a table slot, and each
+  is reclaimed when its own work is done; the reclaim still runs off the
+  send, not the ACK drain. An inbound ACK still clears a retransmit by the
+  acknowledged counter alone, as §4.12.5.2.1 specifies.
+- Added (additive): `SessionManager::encode_outbound_with_role`,
+  `finish_exchange_with_role` and `abort_exchange_with_role` name an
+  existing exchange by its id and `is_local_initiator`.
+  `encode_outbound_with_role` also keeps `I=1` on a follow-up to one of our
+  exchanges after it has been reclaimed, where `encode_outbound(Some(id))`
+  falls back to a response (`I=0`).
+- The methods that take only an id keep their signatures, and their
+  behaviour whenever the id names one exchange: `encode_outbound(.., Some(id),
+  ..)`, `finish_exchange`, `abort_exchange`, and `MrpState::prepare_outbound`,
+  `mark_packet_sent`, `flush_exchange_acks` and `close_exchange`. When the
+  session holds both an exchange we started and one the peer started with
+  that id, they now mean ours, and leave the peer's untouched; an id the
+  session does not hold is still a response. Every caller in this workspace
+  now uses the role-aware methods.
+- Not covered: the `exchange_id` in `MrpEvent::Retransmit`,
+  `SendStandaloneAck` and `Expired` (and in `MrpTimerEvent`) still has no
+  role, because adding a field to those variants would break exhaustive
+  patterns. The packets they carry are built for the right exchange; only a
+  caller that routes `Expired` by id can confuse two exchanges.
+- Affected: every published release, `0.1.0` through `0.7.3`; the table has
+  been keyed by id since MRP was written, before `0.1.0`. It takes a 16-bit
+  id collision with a live exchange of the peer's, so it is rare.
+
 ### matter-transport: Fixed — a secure session's message counter starts at a random value
 
 - Matter 1.4 Core §4.6.1.1 and §4.6.2 require every secure session's
@@ -520,6 +603,20 @@ published release, `0.1.0` through `0.18.1`.
   `commission_ble`'s CASE leg uses UDP. The flush before CASE that covered
   one instance of this stays as a guard; it normally returns at once, because
   nothing is owed by then.
+- Affected: every published release through `0.10.0`. Requires
+  `matter-transport` 0.7.4.
+
+### matter-commissioning: Fixed — a response is matched by exchange id and role
+
+- `secured_round_trip` and `secured_read` took any message on the session
+  with their exchange id as the response. A device that starts an exchange
+  of its own with the same id (each side allocates its own ids, Matter 1.4
+  Core §4.10.2) sends with `I` set, which makes it a different exchange
+  (§4.10.5.1), so its message could be returned as the response.
+- Both now require `I` clear as well. The `StatusResponse` that asks for the
+  next read chunk and the end-of-exchange ACK flush name our exchange with
+  its role (`encode_outbound_with_role`, `finish_exchange_with_role`), so a
+  device exchange with the same id keeps its own owed ACK.
 - Affected: every published release through `0.10.0`. Requires
   `matter-transport` 0.7.4.
 
