@@ -155,19 +155,22 @@ pub async fn secured_round_trip<T: AsyncDatagram>(
                     continue;
                 }
                 match decoded {
-                    // Our response arrives on our exchange: our id, and `I`
-                    // clear because we are its initiator. A message the device
-                    // starts carries `I=1` and is a different exchange even
-                    // when its id equals ours (Matter 1.4 Core §4.10.5.1;
-                    // chip `ExchangeContext::MatchExchange`).
+                    // Our response arrives on our exchange: our session, our
+                    // id, and `I` clear because we are its initiator
+                    // (Matter 1.4 Core §4.10.5.1; chip
+                    // `ExchangeContext::MatchExchange`). A message the device
+                    // starts carries `I=1`, and one on another session belongs
+                    // to that session: either is a different exchange even
+                    // when its id equals ours.
                     DecodeInboundOutput::AppMessage {
+                        session_id: msg_session,
                         exchange_id,
                         is_initiator: false,
                         payload,
                         protocol_id: msg_protocol_id,
                         opcode: msg_opcode,
                         ..
-                    } if exchange_id == our_exchange => {
+                    } if msg_session == session_id && exchange_id == our_exchange => {
                         // M6 wire-trace capture: feeds JsonlLayer / cargo xtask trace-diff.
                         #[cfg(feature = "tracing")]
                         tracing::debug!(
@@ -368,14 +371,15 @@ pub async fn secured_read<T: AsyncDatagram>(
                     continue;
                 }
                 match decoded {
-                    // Our exchange only: our id with `I` clear, as in
-                    // `secured_round_trip`.
+                    // Our exchange only: our session and id with `I` clear,
+                    // as in `secured_round_trip`.
                     DecodeInboundOutput::AppMessage {
+                        session_id: msg_session,
                         exchange_id,
                         is_initiator: false,
                         payload,
                         ..
-                    } if exchange_id == our_exchange => {
+                    } if msg_session == session_id && exchange_id == our_exchange => {
                         // Enforce all three read caps BEFORE parsing the chunk —
                         // in particular the per-chunk cap bounds a lone oversized
                         // blob up front rather than parsing it first.
@@ -1269,6 +1273,99 @@ mod tests {
         dev.register_pase(k(0x10), SessionRole::Responder, 1, PeerHint::default());
         dev.register_pase(k(0x20), SessionRole::Responder, 2, PeerHint::default());
         (ctrl, dev)
+    }
+
+    /// A message with our exchange id and `I` clear, but on ANOTHER of our
+    /// sessions, is not our response: an exchange belongs to one session
+    /// (Matter 1.4 Core §4.10.5.1 criterion 1; chip `MatchExchange` checks
+    /// `mSession.Contains(session)`). The response is the one on our session.
+    #[tokio::test]
+    async fn secured_round_trip_ignores_our_exchange_id_on_another_session() {
+        let (mut ctrl, mut dev) = two_paired_sessions();
+        let ours = matter_transport::SessionId(1);
+        let other = matter_transport::SessionId(2);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let (dev_addr, ctrl_addr) = (dev_io.local_addr(), ctrl_io.local_addr());
+        let controller = secured_round_trip(
+            &ctrl_io,
+            &mut ctrl,
+            ours,
+            dev_addr,
+            0x08,
+            ProtocolId::INTERACTION_MODEL,
+            b"req",
+        );
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, .. } =
+                dev.decode_inbound(&pkt, Instant::now()).unwrap()
+            else {
+                panic!("expected the request");
+            };
+            for (session, payload) in [(other, b"wrong-session".as_slice()), (ours, b"resp")] {
+                let out = dev
+                    .encode_outbound_with_role(
+                        session,
+                        exchange_id,
+                        false,
+                        0x09,
+                        ProtocolId::INTERACTION_MODEL,
+                        payload,
+                        MrpFlags { reliable: false },
+                        Instant::now(),
+                    )
+                    .unwrap();
+                dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+            }
+        };
+        let (got, ()) = tokio::join!(controller, device);
+        assert_eq!(got.unwrap().payload, b"resp");
+    }
+
+    /// [`secured_read`] applies the same session check to its chunks.
+    #[tokio::test]
+    async fn secured_read_ignores_our_exchange_id_on_another_session() {
+        let (mut ctrl, mut dev) = two_paired_sessions();
+        let ours = matter_transport::SessionId(1);
+        let other = matter_transport::SessionId(2);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let (dev_addr, ctrl_addr) = (dev_io.local_addr(), ctrl_io.local_addr());
+        let wrong = report_data(1, 6, 0, 0, false);
+        let right = report_data(1, 6, 0, 1, false);
+        let controller = secured_read(
+            &ctrl_io,
+            &mut ctrl,
+            ours,
+            dev_addr,
+            0x02,
+            ProtocolId::INTERACTION_MODEL,
+            b"read",
+        );
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, .. } =
+                dev.decode_inbound(&pkt, Instant::now()).unwrap()
+            else {
+                panic!("expected the read");
+            };
+            for (session, payload) in [(other, &wrong), (ours, &right)] {
+                let out = dev
+                    .encode_outbound_with_role(
+                        session,
+                        exchange_id,
+                        false,
+                        0x05,
+                        ProtocolId::INTERACTION_MODEL,
+                        payload,
+                        MrpFlags { reliable: false },
+                        Instant::now(),
+                    )
+                    .unwrap();
+                dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+            }
+        };
+        let (got, ()) = tokio::join!(controller, device);
+        assert_eq!(got.unwrap(), vec![right.clone()]);
     }
 
     /// The device closes the session instead of answering: the helper
