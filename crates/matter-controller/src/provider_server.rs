@@ -825,6 +825,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
             }
             if let DecodeInboundOutput::AppMessage {
                 exchange_id,
+                is_initiator,
                 opcode,
                 payload,
                 ..
@@ -836,9 +837,12 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                 }
                 let parsed = parse_invoke_request(&payload)?;
                 let response = handler(&parsed);
-                let out = sessions.encode_outbound(
+                // Answer on the exchange the request arrived on (the
+                // requestor's, `I=0` from us, when it set `I`).
+                let out = sessions.encode_outbound_with_role(
                     sid,
-                    Some(exchange_id),
+                    exchange_id,
+                    !is_initiator,
                     OP_INVOKE_RESPONSE,
                     ProtocolId::INTERACTION_MODEL,
                     &response,
@@ -980,6 +984,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                 };
                 let DecodeInboundOutput::AppMessage {
                     exchange_id,
+                    is_initiator,
                     protocol_id,
                     opcode,
                     payload,
@@ -1050,9 +1055,10 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                             },
                             ImStatus::Success,
                         );
-                        let out = sessions.encode_outbound(
+                        let out = sessions.encode_outbound_with_role(
                             sid,
-                            Some(exchange_id),
+                            exchange_id,
+                            !is_initiator,
                             OP_INVOKE_RESPONSE,
                             ProtocolId::INTERACTION_MODEL,
                             &r,
@@ -1067,9 +1073,10 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                             cmd.path.command
                         )));
                     };
-                    let out = sessions.encode_outbound(
+                    let out = sessions.encode_outbound_with_role(
                         sid,
-                        Some(exchange_id),
+                        exchange_id,
+                        !is_initiator,
                         OP_INVOKE_RESPONSE,
                         ProtocolId::INTERACTION_MODEL,
                         &response,
@@ -1134,9 +1141,10 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                             // otherwise stalls the transfer forever. chip sends
                             // every BDX message with kExpectResponse / never
                             // kNoAutoRequestAck (AsyncTransferFacilitator.cpp:127).
-                            let w = sessions.encode_outbound(
+                            let w = sessions.encode_outbound_with_role(
                                 sid,
-                                Some(exchange_id),
+                                exchange_id,
+                                !is_initiator,
                                 out.message_type.to_u8(),
                                 ProtocolId::BDX,
                                 &out.payload,
@@ -1156,9 +1164,10 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                                 ProtocolId::BDX,
                                 code.to_u16(),
                             );
-                            if let Ok(w) = sessions.encode_outbound(
+                            if let Ok(w) = sessions.encode_outbound_with_role(
                                 sid,
-                                Some(exchange_id),
+                                exchange_id,
+                                !is_initiator,
                                 OP_STATUS_REPORT,
                                 ProtocolId::SECURE_CHANNEL,
                                 &body,

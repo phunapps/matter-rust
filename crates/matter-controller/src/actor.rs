@@ -1456,6 +1456,11 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     /// In-flight round-trips/reads/subscribe-handshakes, keyed by
     /// `(session, exchange)`. Resolved by [`Self::handle_inbound`], or failed
     /// by [`Self::drive_response_deadlines`] if the device never answers.
+    ///
+    /// Every entry is an exchange WE started (its id comes from
+    /// `encode_outbound(.., None, ..)` in [`Self::send_request`]), so the key
+    /// leaves out the role: only a message with the `I` flag clear can belong
+    /// to one, and every send or flush on a pending exchange names it as ours.
     pending: HashMap<(SessionId, u16), Pending>,
     /// How long an operational request may wait for its response before
     /// [`Self::drive_response_deadlines`] fails it. See
@@ -6285,7 +6290,13 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     self.on_peer_close_session(session_id).await;
                     return;
                 }
-                if self.pending.contains_key(&(session_id, exchange_id)) {
+                // Pending ops are exchanges we started, so only a message with
+                // `I` clear can answer one. A device that starts its own
+                // exchange with the same id (legal: each side allocates its own
+                // ids, Matter 1.4 Core §4.10.2) sends `I=1`, and that is a
+                // different exchange (§4.10.5.1; chip
+                // `ExchangeContext::MatchExchange`).
+                if !is_initiator && self.pending.contains_key(&(session_id, exchange_id)) {
                     self.resolve_pending(session_id, exchange_id, protocol_id, opcode, payload)
                         .await;
                     // chip's `ExchangeContext::MessageHandled`: once the
@@ -6300,15 +6311,17 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                         self.finish_exchange(session_id, exchange_id, from).await;
                     }
                 } else if opcode == OP_REPORT_DATA && protocol_id == ProtocolId::INTERACTION_MODEL {
-                    self.deliver_report(session_id, exchange_id, from, &payload)
+                    self.deliver_report(session_id, exchange_id, !is_initiator, from, &payload)
                         .await;
                 } else {
                     // A message no handler wants. chip, with no delegate for
                     // an exchange, flushes its ACK at once
                     // (`ExchangeContext.cpp:556-562` at master 5cd2917a,
                     // `:549-554` at v1.4.2.0); so do we, rather than leave it
-                    // to the 200 ms timer.
-                    self.finish_exchange(session_id, exchange_id, from).await;
+                    // to the 200 ms timer. On the exchange it arrived on: the
+                    // device's if it set `I`, ours otherwise.
+                    self.finish_exchange_as(session_id, exchange_id, !is_initiator, from)
+                        .await;
                 }
             }
             DecodeInboundOutput::DuplicateReliableAckResent { ack_packet, .. } => {
@@ -6614,9 +6627,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         opcode: u8,
         payload: &[u8],
     ) -> Result<(), Error> {
-        let out = self.sessions.encode_outbound(
+        // A pending exchange, so one we started (`I=1`).
+        let out = self.sessions.encode_outbound_with_role(
             sid,
-            Some(exchange),
+            exchange,
+            true,
             opcode,
             ProtocolId::INTERACTION_MODEL,
             payload,
@@ -6639,9 +6654,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         peer: SocketAddr,
     ) -> Result<(), Error> {
         let status = matter_interaction::build_status_response(0);
-        let out = self.sessions.encode_outbound(
+        // The read is a pending exchange, so one we started (`I=1`).
+        let out = self.sessions.encode_outbound_with_role(
             sid,
-            Some(exchange),
+            exchange,
+            true,
             OP_STATUS_RESPONSE,
             ProtocolId::INTERACTION_MODEL,
             &status,
@@ -6677,17 +6694,22 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// retransmission matches nothing yet, draws `InvalidSubscription`, and so
     /// tears that fresh subscription down; it comes back through liveness and
     /// resubscribe.
+    ///
+    /// `is_local_initiator` is the role of the exchange the report arrived on
+    /// (false for the usual device-initiated report), so every answer goes
+    /// back on that exchange and no other with the same id.
     async fn deliver_report(
         &mut self,
         session_id: SessionId,
         exchange_id: u16,
+        is_local_initiator: bool,
         from: SocketAddr,
         payload: &[u8],
     ) {
         let (mut rd, wire_sub_id, sub_id) = match self.match_report(session_id, from, payload) {
             Ok(matched) => matched,
             Err(stray) => {
-                self.answer_stray_report(session_id, exchange_id, from, stray)
+                self.answer_stray_report(session_id, exchange_id, is_local_initiator, from, stray)
                     .await;
                 return;
             }
@@ -6735,6 +6757,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             self.answer_stray_report(
                 session_id,
                 exchange_id,
+                is_local_initiator,
                 from,
                 StrayReport {
                     subscription_id: Some(wire_sub_id),
@@ -6745,7 +6768,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             .await;
             return;
         }
-        let _ = self.send_status_ack(session_id, exchange_id, peer).await;
+        let _ = self
+            .send_status_ack(session_id, exchange_id, is_local_initiator, peer)
+            .await;
     }
 
     /// Parse a steady-state report and find the subscription it belongs to
@@ -6854,12 +6879,13 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     }
 
     /// Answer a steady-state report that cannot be delivered with
-    /// `StatusResponse(stray.status)` on its own exchange, and log why
-    /// (spec §4.7).
+    /// `StatusResponse(stray.status)` on its own exchange (`exchange_id` with
+    /// role `is_local_initiator`), and log why (spec §4.7).
     async fn answer_stray_report(
         &mut self,
         session_id: SessionId,
         exchange_id: u16,
+        is_local_initiator: bool,
         peer: SocketAddr,
         stray: StrayReport,
     ) {
@@ -6882,7 +6908,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             "answering a report that cannot be delivered",
         );
         let _ = self
-            .send_status(session_id, exchange_id, peer, status)
+            .send_status(session_id, exchange_id, is_local_initiator, peer, status)
             .await;
     }
 
@@ -7062,7 +7088,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             }
         };
         if let Some(peer) = self.pending.get(&key).map(|p| p.peer) {
-            let _ = self.send_status_ack(key.0, key.1, peer).await;
+            // A priming report arrives on our subscribe exchange.
+            let _ = self.send_status_ack(key.0, key.1, true, peer).await;
         }
         if let Some(Pending {
             reply: PendingReply::Subscribe {
@@ -7182,19 +7209,23 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     }
 
     /// Send an application `StatusResponse` carrying `status` on an existing
-    /// exchange; it also piggybacks the MRP ack for what arrived there. Sent
+    /// exchange, `exchange` with role `is_local_initiator` (false for a
+    /// device-initiated report, true for a priming report on our subscribe
+    /// exchange); it also piggybacks the MRP ack for what arrived there. Sent
     /// reliably, for the reason given on [`Self::send_status_ack`].
     async fn send_status(
         &mut self,
         sid: SessionId,
         exchange: u16,
+        is_local_initiator: bool,
         peer: SocketAddr,
         status: u8,
     ) -> Result<(), Error> {
         let payload = matter_interaction::build_status_response(status);
-        let out = self.sessions.encode_outbound(
+        let out = self.sessions.encode_outbound_with_role(
             sid,
-            Some(exchange),
+            exchange,
+            is_local_initiator,
             OP_STATUS_RESPONSE,
             ProtocolId::INTERACTION_MODEL,
             &payload,
@@ -7226,9 +7257,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         &mut self,
         sid: SessionId,
         exchange: u16,
+        is_local_initiator: bool,
         peer: SocketAddr,
     ) -> Result<(), Error> {
-        self.send_status(sid, exchange, peer, 0).await
+        self.send_status(sid, exchange, is_local_initiator, peer, 0)
+            .await
     }
 
     /// Close `exchange` on `sid` the way chip's `ExchangeContext::DoClose`
@@ -7254,17 +7287,39 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// the session's latest peer address, which it updates from every inbound
     /// message on the session, before decrypting it (`SessionManager.cpp`
     /// `:902-905` at master 5cd2917a, `:911-914` at v1.4.2.0).
+    ///
+    /// `exchange` is one we started: every caller but the catch-all in
+    /// [`Self::handle_inbound`] closes a pending op, and pending ops are
+    /// always ours. A device exchange that reuses the id keeps its own ACK.
     async fn finish_exchange(&mut self, sid: SessionId, exchange: u16, peer: SocketAddr) {
-        for event in self.sessions.finish_exchange(sid, exchange) {
+        self.finish_exchange_as(sid, exchange, true, peer).await;
+    }
+
+    /// [`Self::finish_exchange`] for an exchange of either role:
+    /// `is_local_initiator` is true for one we started, false for one the
+    /// device started.
+    async fn finish_exchange_as(
+        &mut self,
+        sid: SessionId,
+        exchange: u16,
+        is_local_initiator: bool,
+        peer: SocketAddr,
+    ) {
+        for event in self
+            .sessions
+            .finish_exchange_with_role(sid, exchange, is_local_initiator)
+        {
             self.send_ack_event(event, Some(peer)).await;
         }
     }
 
     /// [`Self::finish_exchange`] with abort semantics (chip's `Abort()` →
     /// `DoClose(true)`): send the exchange's owed ACK, then drop our own
-    /// retransmits on it. For an exchange we are abandoning.
+    /// retransmits on it. For an exchange we are abandoning, which is always
+    /// one we started (a pending op), so the device's exchange with the same
+    /// id, if any, keeps its retransmits.
     async fn abort_exchange(&mut self, sid: SessionId, exchange: u16, peer: SocketAddr) {
-        for event in self.sessions.abort_exchange(sid, exchange) {
+        for event in self.sessions.abort_exchange_with_role(sid, exchange, true) {
             self.send_ack_event(event, Some(peer)).await;
         }
     }
@@ -7737,7 +7792,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         if cause.arrived_on_the_wire() {
             // Best effort: the attempt is over whether or not the device hears it.
             let _ = self
-                .send_status(key.0, key.1, pending.peer, IM_STATUS_INVALID_ACTION)
+                .send_status(key.0, key.1, true, pending.peer, IM_STATUS_INVALID_ACTION)
                 .await;
         }
         // Only subscribe pendings are ever handed here.
@@ -23383,6 +23438,144 @@ mod tests {
         w.actor.handle_inbound(&reply.wire_bytes, from).await;
         assert!(w.actor.sessions.get(w.sid).is_some());
         assert!(w.actor.cache.contains_key(&(fabric_id, 0x42)));
+    }
+
+    /// A device that starts its own exchange with the id of one of our
+    /// pending requests (legal: each side allocates its own exchange ids,
+    /// Matter 1.4 Core §4.10.2) sends `I=1`, so its message belongs to a
+    /// different exchange (§4.10.5.1). It must not answer the pending request,
+    /// and the ACK it is owed goes back on the device's exchange. The real
+    /// response (`I=0`) then resolves the request.
+    #[tokio::test]
+    async fn a_device_exchange_reusing_a_pending_id_does_not_answer_it() {
+        let mut w = wired_actor();
+        w.route_node(0x42);
+        let im = ProtocolId::INTERACTION_MODEL;
+        let reliable = MrpFlags { reliable: true };
+        let ours = w
+            .actor
+            .sessions
+            .encode_outbound(
+                w.sid,
+                None,
+                0x08,
+                im,
+                &[0x15, 0x18],
+                reliable,
+                Instant::now(),
+            )
+            .unwrap();
+        w.device
+            .decode_inbound(&ours.wire_bytes, Instant::now())
+            .unwrap();
+        let (reply, mut reply_rx) = oneshot::channel();
+        w.seed(ours.exchange_id, 0x08, PendingReply::RoundTrip(reply));
+        let from = w.dev.local_addr();
+
+        let theirs = w
+            .device
+            .encode_outbound_with_role(
+                w.dev_sid,
+                ours.exchange_id,
+                true,
+                0x09,
+                im,
+                b"not-yours",
+                reliable,
+                Instant::now(),
+            )
+            .unwrap();
+        w.actor.handle_inbound(&theirs.wire_bytes, from).await;
+        assert!(
+            matches!(
+                reply_rx.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ),
+            "the device's own exchange answered our request"
+        );
+        assert_eq!(w.actor.pending.len(), 1);
+        assert_eq!(
+            w.next_frame(SENT_WITHIN).await,
+            Some(Sent::Ack {
+                exchange: ours.exchange_id,
+                counter: theirs.message_counter,
+            }),
+            "the device's message is ACKed at once, on its exchange"
+        );
+
+        let response = w
+            .device
+            .encode_outbound_with_role(
+                w.dev_sid,
+                ours.exchange_id,
+                false,
+                0x09,
+                im,
+                b"yours",
+                reliable,
+                Instant::now(),
+            )
+            .unwrap();
+        w.actor.handle_inbound(&response.wire_bytes, from).await;
+        assert_eq!(reply_rx.try_recv().unwrap().unwrap(), b"yours");
+        assert_eq!(w.actor.pending.len(), 0);
+    }
+
+    /// The report path of the same collision: a `ReportData` the device sends
+    /// on its own exchange, with the id of our pending request, is answered on
+    /// the device's exchange (`I=0` from us), not on ours.
+    #[tokio::test]
+    async fn a_report_on_a_device_exchange_reusing_a_pending_id_is_answered_there() {
+        let mut w = wired_actor();
+        w.route_node(0x42);
+        let im = ProtocolId::INTERACTION_MODEL;
+        let reliable = MrpFlags { reliable: true };
+        let ours = w
+            .actor
+            .sessions
+            .encode_outbound(
+                w.sid,
+                None,
+                0x02,
+                im,
+                &[0x15, 0x18],
+                reliable,
+                Instant::now(),
+            )
+            .unwrap();
+        w.device
+            .decode_inbound(&ours.wire_bytes, Instant::now())
+            .unwrap();
+        let (reply, _reply_rx) = oneshot::channel();
+        w.seed(ours.exchange_id, 0x02, PendingReply::RoundTrip(reply));
+
+        // No subscription matches, so the actor answers InvalidSubscription.
+        let report = build_report_data(1, 0x06, 0x0000, &matter_codec::Value::Bool(true));
+        let theirs = w
+            .device
+            .encode_outbound_with_role(
+                w.dev_sid,
+                ours.exchange_id,
+                true,
+                OP_REPORT_DATA,
+                im,
+                &report,
+                reliable,
+                Instant::now(),
+            )
+            .unwrap();
+        let from = w.dev.local_addr();
+        w.actor.handle_inbound(&theirs.wire_bytes, from).await;
+        assert_eq!(
+            w.next_frame(SENT_WITHIN).await,
+            Some(Sent::App {
+                exchange: ours.exchange_id,
+                opcode: OP_STATUS_RESPONSE,
+                actor_initiated: false,
+            }),
+            "the answer must go on the device's exchange"
+        );
+        assert_eq!(w.actor.pending.len(), 1, "our request is still pending");
     }
 
     /// Guard: another Secure Channel status report on a new exchange
