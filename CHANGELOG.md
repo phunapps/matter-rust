@@ -56,7 +56,9 @@ provisional elements, choice groups and field dependencies.
 | `matter-commissioning` | 0.10.1 | **0.10.2** | dev-dependency only: it moves to `matter-clusters` 0.6.0; the library is unchanged |
 | `matter-controller` | 0.18.2 | **0.18.3** | its private dependencies move to `matter-clusters` 0.6 and `matter-ota` 0.6; no public API change |
 
-Publish in this order; each needs the one before it on crates.io:
+Publish in this order: `matter-ota` and `matter-commissioning` need
+`matter-clusters` 0.6.0 on crates.io, and `matter-controller` needs
+`matter-clusters` and `matter-ota`.
 
 1. `matter-clusters` 0.6.0.
 2. `matter-ota` 0.6.0.
@@ -359,8 +361,10 @@ The codegen now generates only what a client can use:
   `AttributeValuePairStruct`'s eight value fields are each an `Option`;
   exactly one should be set (its rustdoc says so; chip's server refuses a
   pair without exactly one). `encode_add_scene` is pinned against a
-  matter.js byte vector. chip's zap and controller codegen still mark the
-  cluster provisional; the Matter 1.4.2 specification does not (revision 1
+  matter.js byte vector. chip's zap, its controller codegen and v1.4.2.0's
+  `data_model/1.4.2` XML (at the cluster id; chip's current copy does not)
+  still mark the cluster provisional; the Matter 1.4.2 specification does
+  not (revision 1
   removed the provisional status), so its module docs carry chip's
   provisional note rather than the specification's.
 
@@ -710,7 +714,8 @@ catalogue codes that mix sizes and voltages, so no one word fits them all.
 
 New `matter_clusters::types::Secret<T>`: a wrapper whose `Debug` prints the
 quoted placeholder `"<redacted>"` and that has no `Display`; `new`, `expose`,
-`into_inner` and `From<T>`. It guards logs only: the value is not zeroed, and
+`into_inner`, `From<T>`, and derived `Clone`, `PartialEq` and `Eq` (`==` is
+not constant-time). It guards logs only: the value is not zeroed, and
 the payload an encoder returns carries it in clear.
 
 Every request argument that carries a secret now takes it as `&Secret<T>`
@@ -832,6 +837,11 @@ patch release. It still requires `matter-commissioning` 0.10.1 and accepts
 semver does not cover: `ProviderServer::serve_ota_once` takes a
 `matter_ota::ImageOffer`, now `matter-ota` 0.6's.
 
+`matter-clusters` 0.6 is a dependency even with default features off. A crate
+that also depends on `matter-clusters` 0.5 directly builds both 0.5 and 0.6
+after `cargo update`, until it moves to 0.6 too; no type crosses the
+boundary, so nothing breaks.
+
 ## Security and MRP patches — 2026-10-15 (matter-codec 0.3.2, matter-crypto 0.5.1, matter-interaction 0.4.3, matter-transport 0.7.4, matter-ota 0.5.2, matter-commissioning 0.10.1, matter-controller 0.18.2)
 
 These fixes stop secrets reaching logs through `{:?}` and
@@ -891,7 +901,7 @@ publish the rest in dependency order:
 6. `matter-controller` 0.18.2, which depends on all of them.
 
 None of these crates' public APIs uses a `matter-clusters` 0.6.0-only type, so
-they can ship ahead of the 0.6.0 release below. `matter-transport`,
+they can ship ahead of the 0.6.0 release above. `matter-transport`,
 `matter-interaction` and `matter-crypto` do not depend on `matter-clusters` at
 all, and neither does `matter-codec`. `matter-controller` uses only
 `matter_clusters::gen` paths that exist in 0.5.0. `matter-ota` 0.5.2 uses
