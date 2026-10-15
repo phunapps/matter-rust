@@ -1675,9 +1675,13 @@ WindowCovering 8 → 6, Thermostat 10 → 9, DoorLock 10 → 9 and the ten
 concentration-measurement clusters 4 → 3. A device reports its own revision
 in the global `ClusterRevision` attribute; where the model's revision is
 higher, the constant's rustdoc says the module follows the model for what
-changed after 1.4.2. Identify is 6 (chip's current 1.4.2 data model and
-matter.js); chip's v1.4.2.0 SDK, and the copy of the 1.4.2 data model at that
-tag, say 5. The revisions are frozen in the repository
+changed after 1.4.2. The constant is the specification's revision, not what
+a given device reports: chip's v1.4.2.0 SDK builds 20 of these clusters at a
+different revision (most lower, such as DoorLock 7 and OperationalState 1;
+ValveConfigurationAndControl and ElectricalEnergyMeasurement at 2, one
+higher), and that tag's copy of the 1.4.2 data model has Identify at 5, where
+chip's current copy and matter.js have 6. Read `ClusterRevision` from the
+device before relying on an element a later revision added. The revisions are frozen in the repository
 (`xtask/scripts/dump-model/chip-1.4.2.json`, written by
 `scripts/chip-facts.py`), so generating needs no chip checkout.
 
