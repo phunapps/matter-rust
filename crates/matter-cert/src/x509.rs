@@ -60,13 +60,12 @@ const OID_MATTER_FABRIC_ID: ObjectIdentifier =
 /// Operational-certificate attribute: Matter NOC CASE Authenticated Tag.
 const OID_MATTER_NOC_CAT: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.1.6");
 
-/// Operational-certificate attribute: Matter VVS id.
+/// Operational-certificate attribute: Matter VVS (VID Verification Signer) id.
 ///
-/// Present in matter.js (arc `.1.7`, and in chip as
-/// `MatterVidVerificationSignerId`) but unused here: no `DnAttribute`
-/// variant maps to it. Included for completeness; used in Vendor
-/// Verification Service certificates introduced in a later Matter
-/// specification revision.
+/// Present in matter.js (`vvsId`, arc `.1.7`, DN tag 23) and in chip as
+/// `MatterVidVerificationSignerId`, but unused here: no `DnAttribute`
+/// variant maps to it. Included for completeness; used in VID Verification
+/// Signer (VVS) certificates, which Matter 1.4.2 introduced.
 /// Forward-looking: consumed when `DnAttribute` adds a `VvsId` variant.
 #[allow(dead_code)]
 const OID_MATTER_VVS_ID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.1.7");

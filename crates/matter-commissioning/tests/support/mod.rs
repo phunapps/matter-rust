@@ -1065,16 +1065,18 @@ pub fn build_report_data(reports: &[(matter_commissioning::im::AttributePath, &[
 /// Reply from the mock device for one IM round-trip.
 ///
 /// `Command(fields_tlv)` carries the anonymous-tagged command-fields TLV blob
-/// that the responder loop (`run_mock_device`) passes to [`build_invoke_response`]. The
-/// blob is what the Commissioner's per-`Expectation` decoder in
+/// that the responder loop (`run_mock_device`) passes to
+/// [`build_invoke_response`]. The blob is what the Commissioner's per-`Expectation` decoder in
 /// `handle_response` reads (e.g. `decode_arm_fail_safe_response`,
 /// `decode_noc_response`, etc.).
 ///
 /// `Status(status_code)` signals that the device should reply with a bare
-/// `CommandStatusIB` (no payload). The responder loop calls [`build_invoke_status_response`]
-/// for this variant. `AddTrustedRootCertificate` (0x003E/0x0B) uses this because
-/// the Commissioner's `Expectation::AddTrustedRootResponse` handler checks
-/// `payload.first() == Some(&0u8)` — a single 0-byte "signal", not a TLV struct.
+/// `CommandStatusIB` (no payload). The responder loop calls
+/// [`build_invoke_status_response`] for this variant.
+/// `AddTrustedRootCertificate` (0x003E/0x0B) uses this because the
+/// Commissioner's `Expectation::AddTrustedRootResponse` handler checks
+/// `payload.first() == Some(&0u8)` — a single 0-byte "signal", not a TLV
+/// struct.
 ///
 /// `StatusSignal(byte)` is reserved for the AddTrustedRoot fast path where
 /// `on_response(Expectation::AddTrustedRootResponse, &[0x00])` is called
@@ -1089,8 +1091,8 @@ pub enum DeviceReply {
 
 /// Map a single incoming `InvokeRequest` to the mock device's Ethernet-path reply.
 ///
-/// The returned [`DeviceReply`] is what the responder loop (`run_mock_device`) uses to build
-/// the outgoing `InvokeResponseMessage`.
+/// The returned [`DeviceReply`] is what the responder loop (`run_mock_device`)
+/// uses to build the outgoing `InvokeResponseMessage`.
 ///
 /// # Cluster / command coverage (Ethernet happy path)
 ///
@@ -1305,7 +1307,8 @@ pub fn respond(
         // AddTrustedRootCertificate (0x003E/0x0B) → bare IM status (no response command)
         // Commissioner handler (Expectation::AddTrustedRootResponse):
         //   checks: payload.first() == Some(&0u8)  — the driver passes &[0x00] for success.
-        //   The responder loop sees Status(0) and calls build_invoke_status_response + then signals
+        //   The responder loop sees Status(0) and calls
+        //   build_invoke_status_response + then signals
         //   on_response(AddTrustedRootResponse, &[0x00]).
         (0x003E, 0x0B) => DeviceReply::Status(0),
 
@@ -1426,8 +1429,8 @@ pub fn respond_read_attribute_thread(
 /// Ethernet-path attribute value TLV.
 ///
 /// The returned `Vec<u8>` is an **anonymous-tagged** TLV element (scalar or
-/// struct) that the responder loop passes to [`build_report_data`] as the `value_tlv`
-/// entry.  The driver's `extract_read_payload` re-encodes the value into the
+/// struct) that the responder loop passes to [`build_report_data`] as the
+/// `value_tlv` entry.  The driver's `extract_read_payload` re-encodes the value into the
 /// format `Commissioner::on_response` expects for each `Expectation`.
 ///
 /// # Attribute coverage

@@ -32,8 +32,8 @@ pub const STREAM_PEER: SocketAddr =
 /// the invoke is **not** `NetworkCommissioning::ConnectNetwork`. With MRP off
 /// over BTP (BTP provides its own reliability), nothing at the exchange layer
 /// ever times out, so this wrapper is the only guard against an unbounded hang
-/// if the device stops responding. 30 s matches the unsecured PASE path's response window and
-/// chip's BTP-ack-derived exchange response timeout.
+/// if the device stops responding. 30 s matches the unsecured PASE path's
+/// response window and chip's BTP-ack-derived exchange response timeout.
 const RESPONSE_DEADLINE: Duration = Duration::from_secs(30);
 
 /// Fallback response deadline for `NetworkCommissioning::ConnectNetwork` on
@@ -580,8 +580,8 @@ pub(crate) async fn rollback<T: AsyncDatagram>(
 ///
 /// The mapping of a `DriverError` result to
 /// `on_response(Expectation::CaseFailed, &[])` is the **caller's** job
-/// (the poll loop, `run_poll_loop`) — this function simply returns the `Result` so the
-/// caller can choose how to handle it.
+/// (the poll loop, `run_poll_loop`) — this function simply returns the
+/// `Result` so the caller can choose how to handle it.
 ///
 /// # Errors
 ///

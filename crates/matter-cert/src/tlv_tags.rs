@@ -39,9 +39,10 @@ pub(crate) const DN_MATTER_ICAC_ID: u8 = 19;
 pub(crate) const DN_MATTER_RCAC_ID: u8 = 20;
 pub(crate) const DN_MATTER_FABRIC_ID: u8 = 21;
 pub(crate) const DN_MATTER_NOC_CAT: u8 = 22;
-// Tags 23-26 (vid/pid) are not declared: their meaning has not been
-// cross-verified against matter.js, so the decoder keeps them untyped
-// (`DnAttribute::Other`).
+// Tag 23 is matter-vvs-id (chip `MatterVidVerificationSignerId`, matter.js
+// `vvsId`, OID 1.3.6.1.4.1.37244.1.7); 24-26 are assigned by neither
+// reference. None is declared: no `DnAttribute` variant maps to them, so the
+// decoder keeps them untyped (`DnAttribute::Other`).
 
 // --- Algorithm identifiers (spec §6.5.2) ---
 pub(crate) const SIG_ALGORITHM_ECDSA_SHA256: u8 = 1;

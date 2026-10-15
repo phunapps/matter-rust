@@ -83,7 +83,7 @@ pub enum DnAttribute {
 
     /// Forward-compatibility fallback for spec-defined attributes
     /// the typed variants above don't enumerate yet (e.g., tag 18
-    /// matter-firmware-signing-id, tags 23-26 vid/pid variants).
+    /// matter-firmware-signing-id, tag 23 matter-vvs-id, tags 24-26).
     Other {
         /// Context tag number from the wire.
         tag: u8,
@@ -278,8 +278,9 @@ pub(crate) fn decode_attribute(tag: u8, value: Value) -> Result<DnAttribute> {
         }
 
         // Other variants are spec-defined-but-not-typed (e.g., tag 18,
-        // tags 23-26). These tags have no explicit typed variant above,
-        // so any TLV scalar value type is preserved as-is.
+        // tag 23 matter-vvs-id, tags 24-26). These tags have no explicit
+        // typed variant above, so any TLV scalar value type is preserved
+        // as-is.
         // is_untyped_dn_tag guards against routing a wrong-typed value
         // for a known tag (e.g., Uint for DN_COMMON_NAME) through here.
         (n, Value::Utf8(s)) if is_untyped_dn_tag(n) => Ok(A::Other {
@@ -365,8 +366,9 @@ const fn is_dn_tag(tag: u8) -> bool {
 /// we accept any TLV scalar value type and preserve it as
 /// [`DnAttribute::Other`].
 ///
-/// Currently: tag 18 (matter-firmware-signing-id) and tags 23-26
-/// (vid/pid variants pending matter.js cross-verification).
+/// Currently: tag 18 (matter-firmware-signing-id), tag 23 (matter-vvs-id,
+/// the VID Verification Signer id) and tags 24-26 (assigned by neither chip
+/// nor matter.js).
 const fn is_untyped_dn_tag(tag: u8) -> bool {
     matches!(tag, 18 | 23..=26)
 }

@@ -107,11 +107,10 @@ pub enum Stage {
 /// Happy-path successor of `current`. Returns `None` for terminal
 /// stages (`Cleanup`, `Failed`).
 ///
-/// Used by [`super::Commissioner`] to advance the cursor after a stage
-/// completes successfully. Errors at any stage transition the cursor
-/// directly to [`Stage::Failed`] rather than calling this function.
-// Only this module's tests call it today (`Commissioner::advance` is passed
-// the next stage explicitly), hence the dead-code allow.
+/// Encodes the happy-path order (exercised by this module's tests);
+/// `Commissioner::advance` is passed its next stage explicitly. Errors at
+/// any stage transition the cursor directly to [`Stage::Failed`].
+// Only this module's tests call it, hence the dead-code allow.
 #[allow(dead_code)]
 #[allow(unreachable_pub)]
 #[must_use]

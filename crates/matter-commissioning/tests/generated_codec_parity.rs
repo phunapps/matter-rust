@@ -4,10 +4,10 @@
 //! `matter-commissioning` drives commissioning with its own hand-written
 //! subset of these two clusters (`matter_commissioning::clusters`), and keeps
 //! it (the generated clusters are codecs only; consolidating the two is
-//! deferred). `matter-clusters` now
-//! also generates both clusters in full. The two must never disagree on the
-//! wire, so this test pins every command the commissioning flow sends: the
-//! same inputs give the same bytes from both encoders. Those commands are
+//! deferred). `matter-clusters` now also generates both clusters in full.
+//! The two must never disagree on the wire, so this test pins every command
+//! the commissioning flow sends: the same inputs give the same bytes from
+//! both encoders. Those commands are
 //! `ArmFailSafe` (arm, extend, and the `(0, 0)` disarm), `SetRegulatoryConfig`,
 //! `AddOrUpdateWiFiNetwork`, `AddOrUpdateThreadNetwork`, `ConnectNetwork` (SSID
 //! or Extended PAN ID) and `CommissioningComplete`. The flow does not send

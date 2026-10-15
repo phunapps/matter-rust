@@ -439,8 +439,9 @@ impl Commissioner {
     /// Consumed by the driver ([`crate::driver::commission`]) to size the
     /// BLE-path `ConnectNetwork` response deadline from the same value that
     /// [`Self::network_enable_failsafe_seconds`] uses for the failsafe
-    /// extension (both must be sized from `ConnectMaxTimeSeconds`, so the
-    /// deadline never fires before the failsafe extension would expire).
+    /// extension (both are sized from it when the device reports it, so the
+    /// deadline never fires before the extension would expire; an unreported
+    /// value leaves the fixed 60 s deadline).
     ///
     /// Driver-only, like its setter.
     #[cfg(feature = "driver")]
