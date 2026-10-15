@@ -556,9 +556,8 @@ impl BtpSession {
     }
 
     /// Mark that an acknowledgement is due. Immediately when the local receive
-    /// window has reached the immediate-ack threshold (and nothing outbound is
-    /// pending to piggyback on); otherwise on the 2.5 s send-ack timer. The
-    /// earliest of any already-armed deadline is kept.
+    /// window has reached the immediate-ack threshold; otherwise on the 2.5 s
+    /// send-ack timer. The earliest of any already-armed deadline is kept.
     fn arm_ack_timer(&mut self, now: Instant) {
         // Queued outbound data does not suppress the immediate deadline here:
         // a data fragment that leaves through `next_gatt_write` first
@@ -898,11 +897,10 @@ mod tests {
         assert_eq!(pkt, vec![0x08, 0x00, 0x00]);
     }
 
-    // Regression: a standalone ack we emit registers
-    // itself as an outstanding TX fragment (full GetAndIncrementNextTxSeqNum), so
-    // (a) a valid inbound ack for that seq is accepted rather than hitting
-    // expecting_ack==false -> InvalidAck, and (b) it is subject to the 15 s
-    // ack-timeout.
+    // Regression: a standalone ack we emit registers itself as an outstanding
+    // TX fragment (full GetAndIncrementNextTxSeqNum), so (a) a valid inbound
+    // ack for that seq is accepted rather than hitting expecting_ack==false ->
+    // InvalidAck, and (b) it is subject to the 15 s ack-timeout.
     #[test]
     fn emitted_standalone_ack_is_registered_as_outstanding_tx() {
         let t0 = Instant::now();
@@ -1199,11 +1197,11 @@ mod tests {
 
     // ---- standalone-ack flow control ----------------------------------------
 
-    // Regression: chip routes standalone acks through
-    // DriveSending -> DoSendStandAloneAck -> SendCharacteristic, gated on GATT-op
-    // in flight. A due send-ack timer with a GATT write outstanding must DEFER
-    // (emit nothing, leave the ack pending, keep the timer due), then deliver on
-    // the next handle_timeout once gatt_write_completed frees the slot.
+    // Regression: chip routes standalone acks through DriveSending ->
+    // DoSendStandAloneAck -> SendCharacteristic, gated on GATT-op in flight. A
+    // due send-ack timer with a GATT write outstanding must DEFER (emit
+    // nothing, leave the ack pending, keep the timer due), then deliver on the
+    // next handle_timeout once gatt_write_completed frees the slot.
     #[test]
     fn standalone_ack_deferred_while_gatt_in_flight_then_emitted() {
         let t0 = Instant::now();

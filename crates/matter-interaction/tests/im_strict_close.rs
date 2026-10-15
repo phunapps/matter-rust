@@ -165,7 +165,7 @@ fn parse_report_data_is_strict() {
     }
 }
 
-/// The review's motivating case: a non-final chunk cut just before its
+/// The motivating case: a non-final chunk cut just before its
 /// end-of-container must not decode as a final chunk.
 #[test]
 fn a_truncated_non_final_chunk_is_not_read_as_the_last() {
@@ -176,7 +176,7 @@ fn a_truncated_non_final_chunk_is_not_read_as_the_last() {
         parse_report_data(&first[..first.len() - 1]),
         Err(ImError::Codec(CodecError::UnclosedContainer))
     ));
-    // The bare struct header the review found accepted as an empty report.
+    // A bare struct header must not be accepted as an empty report.
     assert!(matches!(
         parse_report_data(&[0x15]),
         Err(ImError::Codec(CodecError::UnclosedContainer))

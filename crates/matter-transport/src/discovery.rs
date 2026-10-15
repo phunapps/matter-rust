@@ -476,9 +476,9 @@ mod tests {
         );
     }
 
-    /// `requery` is additive — an implementation
-    /// written before it existed keeps compiling — and the default does
-    /// nothing at all: it calls back into no method of the implementation.
+    /// `requery` is additive — an implementation written before it existed
+    /// keeps compiling — and the default does nothing at all: it calls back
+    /// into no method of the implementation.
     #[test]
     fn default_requery_does_nothing() {
         struct PreRequeryDiscovery {

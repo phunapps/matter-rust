@@ -15,9 +15,7 @@ all proven by synthetic forward-compat fixtures (commits
 `143a2c15`..`6179aa31`). **M9-G-d resolved the actor async re-architecture**
 (off-loop connect + spawned commission, `bc309e39`..`143180cd` — no inline
 CASE handshake left). **The matter-codec per-element budget perf follow-up
-closed 2026-07-12** (byte-bound fast path; see the entry below). Audit
-backlog (uncommitted, local): `docs/audit/2026-06-12-backlog.md` +
-`2026-06-12-findings.json`.
+closed 2026-07-12** (byte-bound fast path; see the entry below).
 
 ### matter-codec per-element budget check has a measurable decode cost
 
@@ -175,7 +173,8 @@ until after 1.0.
 
 ### Real-device MRP timing tests (M6)
 
-**Status:** deferred from M5.3 per Q5 design choice.
+**Status:** deferred from M5.3: its loopback test deliberately asserts no
+retransmit timing (CI flake risk).
 
 **Why it matters:** M5.2's simulated-clock tests cover the MRP state
 machine exhaustively. M5.3's loopback test verifies the full stack on
@@ -203,8 +202,8 @@ time.
 long-lived `SessionRegistry` mapping `SessionId → (PeerAddress,
 peer_info, last_seen)` with lifecycle management
 (register-on-session-establish, evict-on-session-close, refresh-on-
-mDNS-update). M8 spec defines the exact shape; M6 may foreshadow with
-a smaller commissioning-scope map.
+mDNS-update). M6 may foreshadow it with a smaller commissioning-scope
+map.
 
 ### mDNS loopback interop in CI
 
@@ -546,7 +545,7 @@ the Pi with `MATTER_BLE_SCAN_TRACE=1`:
 - **1 D-Bus name query**
 
 So query cost is bounded by caching rather than by advertisement rate, which is
-what §5.2 set out to show. But it was the **positive** cache that did it, and
+what the measurement set out to show. But it was the **positive** cache that did it, and
 that cache pre-dates phase 5.
 
 **The finding: `local_name` is effectively never `None` on `BlueZ`.** The C6

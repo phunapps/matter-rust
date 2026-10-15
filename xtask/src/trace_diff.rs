@@ -2260,7 +2260,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Item 4: run() returns Err("divergences found") when an UNCLASSIFIED
+    // run() returns Err("divergences found") when an UNCLASSIFIED
     // field differs between the two traces.
     //
     // We build two otherwise-identical dialogues but give the InvokeResponse
@@ -2361,12 +2361,12 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Item 5a: run() returns Ok when a CLASSIFIED-variance field differs.
+    // run() returns Ok when a CLASSIFIED-variance field differs.
     //
     // PBKDFParamRequest ctx-1 (initiatorRandom) is class Random: same length,
     // different bytes → MATCH* verdict. run() must succeed (Ok).
     //
-    // Item 5b: run() returns Ok when one trace has extra messages AFTER the
+    // run() returns Ok when one trace has extra messages AFTER the
     // CommissioningComplete InvokeResponse (tail is ignored).
     //
     // Combined into one test for brevity.

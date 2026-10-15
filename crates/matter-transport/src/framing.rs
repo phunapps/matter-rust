@@ -735,8 +735,8 @@ pub fn encode_group_secured_with_privacy_key(
 
     // Reuse the shared AES-CCM routine — never hand-roll the cipher. One
     // `SessionAead` per call: group sends have no `Session` to hang a cached
-    // cipher off, so the key schedule is built here (caller-supplied caching
-    // is a later task).
+    // cipher off, so the key schedule is built here (it is not cached across
+    // calls).
     let ciphertext = matter_crypto::aead::SessionAead::new(operational_group_key)
         .encrypt(&nonce, &aad, &plaintext)?;
 

@@ -3,8 +3,8 @@
 //! Each row loads a (PAA, PAI, DAC) triple from
 //! `test-vectors/certs/attestation/negative/<name>/`, builds a
 //! `PaaTrustStore` that's either anchor-matched or deliberately not,
-//! and asserts `verify_chain` returns the spec-mandated
-//! `AttestationError` variant.
+//! and asserts `verify_chain` returns the `AttestationError` variant
+//! that failure maps to.
 //!
 //! The 8 fixtures form a negative-path matrix: one per chain-validation
 //! failure mode, each paired with the variant it must yield.

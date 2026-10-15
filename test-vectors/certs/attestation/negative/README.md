@@ -24,7 +24,7 @@ MatterTime::from_unix_secs(1_800_000_000)`.
 | `dac-with-ca-bit/` | DAC `BasicConstraints.cA = true` (forbidden on leaf) | `BasicConstraintsViolation` |
 | `wrong-eku/` | DAC EKU contains `id-kp-serverAuth` instead of `id-kp-clientAuth` | `InvalidChain` (webpki rejects with `RequiredEkuNotFound`) |
 
-> Note: the M6.2 spec originally specified a `missing-eku` fixture
+> Note: there is no `missing-eku` fixture
 > ("DAC lacks `id-kp-clientAuth` EKU"). webpki (correctly, per RFC
 > 5280 §4.2.1.12) treats an absent EKU extension as unconstrained
 > — no required-EKU check fires. So this fixture instead has an

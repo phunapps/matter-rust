@@ -812,12 +812,11 @@ impl Discovery for MdnsSdDiscovery {
     /// Each handle buffers at most `FOUND_BUFFER_CAP` (256) names, oldest
     /// dropped, so a handle whose owner never calls this costs bounded memory.
     ///
-    /// One imprecision is accepted: mdns-sd also
-    /// sends `ServiceRemoved` when an instance's SRV or address records expire
-    /// while its PTR is still cached, so the next [`Discovery::requery`]
-    /// replays that PTR and it is reported once more. For the controller that
-    /// is at most one spurious advert pull per outage, bounded by its 30 s
-    /// cooldown, in the safe direction.
+    /// One imprecision is accepted: mdns-sd also sends `ServiceRemoved` when an
+    /// instance's SRV or address records expire while its PTR is still cached,
+    /// so the next [`Discovery::requery`] replays that PTR and it is reported
+    /// once more. For the controller that is at most one spurious advert pull
+    /// per outage, bounded by its 30 s cooldown, in the safe direction.
     fn poll_found(&mut self, handle: QueryHandle) -> Vec<String> {
         let Some(service_type) = self.handle_types.get(&handle).cloned() else {
             return Vec::new();
@@ -2054,10 +2053,10 @@ mod tests {
     // Replay suppression (`present`).
     // ---------------------------------------------------------------------
 
-    /// A found instance is reported once; a second
-    /// `ServiceFound` with no `ServiceRemoved` between is a re-delivery of a
-    /// PTR the daemon already held, not a new one; after a removal, a found
-    /// event is a genuine return and is reported again.
+    /// A found instance is reported once; a second `ServiceFound` with no
+    /// `ServiceRemoved` between is a re-delivery of a PTR the daemon already
+    /// held, not a new one; after a removal, a found event is a genuine return
+    /// and is reported again.
     #[test]
     fn a_found_instance_is_reported_again_only_after_it_was_removed() {
         let fullname = "present-a._matter._tcp.local.";
@@ -2079,10 +2078,9 @@ mod tests {
         d.stop_query(h);
     }
 
-    /// A replayed PTR (a requery replays every cached
-    /// one) reaches no handle as a found event, while its resolved record is
-    /// still re-delivered by `poll_results` (latest-wins consumers are
-    /// unaffected).
+    /// A replayed PTR (a requery replays every cached one) reaches no handle as
+    /// a found event, while its resolved record is still re-delivered by
+    /// `poll_results` (latest-wins consumers are unaffected).
     #[test]
     fn a_replayed_found_event_is_reported_to_no_handle() {
         let fullname = "replay-a._matter._tcp.local.";
@@ -2118,9 +2116,9 @@ mod tests {
         d.stop_query(second);
     }
 
-    /// `present` is keyed verbatim, matching mdns-sd's
-    /// case-sensitive PTR alias comparison (`dns_parser.rs` 876-878): two
-    /// spellings are two cache entries there and two entries here.
+    /// `present` is keyed verbatim, matching mdns-sd's case-sensitive PTR alias
+    /// comparison (`dns_parser.rs` 876-878): two spellings are two cache
+    /// entries there and two entries here.
     #[test]
     fn present_instance_keys_are_case_sensitive_like_mdns_sd() {
         let upper = "CASE-TEST._matter._tcp.local.";
@@ -2191,11 +2189,11 @@ mod tests {
         ServiceEvent::SearchStarted(TEST_SUBTYPE.to_string())
     }
 
-    /// What the old receiver holds is applied before
-    /// anything after the new receiver's `SearchStarted`. The device left (its
-    /// PTR expired: `ServiceRemoved` to the old listener) and was back by the
-    /// time the daemon ran the browse (a genuine `ServiceFound` on the new
-    /// one): the return must be reported, not suppressed as a replay.
+    /// What the old receiver holds is applied before anything after the new
+    /// receiver's `SearchStarted`. The device left (its PTR expired:
+    /// `ServiceRemoved` to the old listener) and was back by the time the
+    /// daemon ran the browse (a genuine `ServiceFound` on the new one): the
+    /// return must be reported, not suppressed as a replay.
     #[test]
     fn requery_applies_the_retiring_receiver_before_the_new_one() {
         let fullname = "requery-a._matter._tcp.local.";
@@ -2227,11 +2225,11 @@ mod tests {
         );
     }
 
-    /// The daemon sends a removal to the old listener AFTER
-    /// step 1 of a drain read it empty, then runs the browse command before
-    /// step 2 reads the new receiver. Step 3 drains the old receiver once more
-    /// at the switch point; without it the removal is dropped with the old
-    /// receiver and the instance's genuine return is suppressed for good.
+    /// The daemon sends a removal to the old listener AFTER step 1 of a drain
+    /// read it empty, then runs the browse command before step 2 reads the new
+    /// receiver. Step 3 drains the old receiver once more at the switch point;
+    /// without it the removal is dropped with the old receiver and the
+    /// instance's genuine return is suppressed for good.
     #[test]
     fn requery_keeps_a_removal_sent_just_before_the_switch() {
         let fullname = "requery-race._matter._tcp.local.";
@@ -2261,11 +2259,11 @@ mod tests {
         );
     }
 
-    /// While the new receiver is empty the daemon has
-    /// not run the browse command, so the old receiver is still the live
-    /// listener: it is kept and drained, and a removal it carries then is
-    /// applied, not lost. It is dropped once the new receiver's
-    /// `SearchStarted` arrives, and the instance's later return is reported.
+    /// While the new receiver is empty the daemon has not run the browse
+    /// command, so the old receiver is still the live listener: it is kept and
+    /// drained, and a removal it carries then is applied, not lost. It is
+    /// dropped once the new receiver's `SearchStarted` arrives, and the
+    /// instance's later return is reported.
     #[test]
     fn requery_keeps_the_old_receiver_until_the_new_one_speaks() {
         let fullname = "requery-kept._matter._tcp.local.";
@@ -2335,11 +2333,10 @@ mod tests {
         );
     }
 
-    /// An accepted imprecision, pinned: mdns-sd also
-    /// reports `ServiceRemoved` when only an instance's SRV/addresses expire
-    /// while its PTR stays cached. The next requery replays that PTR, and it
-    /// is reported as found once — and only once: the requery after that
-    /// replays it again, suppressed.
+    /// An accepted imprecision, pinned: mdns-sd also reports `ServiceRemoved`
+    /// when only an instance's SRV/addresses expire while its PTR stays cached.
+    /// The next requery replays that PTR, and it is reported as found once —
+    /// and only once: the requery after that replays it again, suppressed.
     #[test]
     fn requery_after_an_srv_expiry_reports_the_instance_once() {
         let fullname = "requery-s1._matter._tcp.local.";
@@ -2380,10 +2377,10 @@ mod tests {
         );
     }
 
-    /// A requery while a swap is
-    /// still pending (no drain has seen the new receiver's first event) is a
-    /// no-op — a second `browse` would retire the not-yet-live receiver and
-    /// drop the live one. Per-handle buffers survive the swap untouched.
+    /// A requery while a swap is still pending (no drain has seen the new
+    /// receiver's first event) is a no-op — a second `browse` would retire the
+    /// not-yet-live receiver and drop the live one. Per-handle buffers survive
+    /// the swap untouched.
     #[test]
     fn requery_while_a_switch_is_pending_is_a_no_op() {
         let mut d = MdnsSdDiscovery::new().unwrap();
@@ -2410,8 +2407,8 @@ mod tests {
         assert_eq!(d.browses.len(), 0);
     }
 
-    /// `requery` on an unknown or stopped handle does
-    /// nothing (no browse is opened or re-opened).
+    /// `requery` on an unknown or stopped handle does nothing (no browse is
+    /// opened or re-opened).
     #[test]
     fn requery_on_an_unknown_or_stopped_handle_is_a_no_op() {
         let mut d = MdnsSdDiscovery::new().unwrap();

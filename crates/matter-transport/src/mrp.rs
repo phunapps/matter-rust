@@ -589,7 +589,7 @@ impl PendingOutboundAck {
 
 /// Cache entry for a recently-seen reliable inbound, kept in a 32-slot
 /// ring buffer for duplicate-reliable detection (Matter Core Spec §4.12.6
-/// dedup-resend path; M5.2 design Q5).
+/// dedup-resend path).
 #[derive(Debug)]
 struct RecentInbound {
     exchange_id: u16,

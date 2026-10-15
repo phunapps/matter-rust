@@ -4,10 +4,10 @@ Wire vectors for the `OtaSoftwareUpdateProvider` (0x0029) command path: the
 Provider's `QueryImage` → `QueryImageResponse`, `ApplyUpdateRequest` →
 `ApplyUpdateResponse`, and `NotifyUpdateApplied` exchange.
 
-## Status: roundtrip-floor (F1), live oracle pending (F4)
+## Status: roundtrip floor (F1); the live oracle is F4's end-to-end test
 
-There are **no chip-captured binary vectors in this directory yet**, and that is
-deliberate. The F1 phase proves the *mechanism* and freezes a **roundtrip-floor**
+This directory holds only this README: there are **no chip-captured binary
+vectors**, and that is deliberate. The F1 phase proves the *mechanism* and freezes a **roundtrip-floor**
 vector in code — see
 [`crates/matter-ota/tests/byte_parity.rs`](../../crates/matter-ota/tests/byte_parity.rs).
 Those frozen command-fields hex strings are emitted by our own client+server
@@ -18,8 +18,10 @@ independent oracle.
 
 ### Why not chip-captured vectors at F1
 
-The **live `ota-requestor-app` is the PRIMARY wire oracle**, and it arrives in
-phase **F4** (end-to-end via the H6 multi-DUT harness). A real requestor rejects
+The **live `ota-requestor-app` is the PRIMARY wire oracle**, run by F4's
+end-to-end test
+([`crates/integration-tests/tests/ota_flow.rs`](../../crates/integration-tests/tests/ota_flow.rs),
+launched by `just integration-ota`). A real requestor rejects
 a malformed `QueryImageResponse` or BDX block, so a successful
 announce → query → BDX download → apply is itself strong wire evidence.
 
@@ -30,10 +32,11 @@ decrypted-payload extraction path. No connectedhomeip checkout is present in the
 F1 build environment, so this is impractical here, and F1 deliberately **falls
 back to the roundtrip floor**.
 
-### What F4 adds here
+### Upgrading to chip bytes
 
-When F4 runs the live requestor, capture the decoded command-fields TLV the chip
-apps log at high verbosity and drop them in as `query_image.json` /
+The chip capture was never made. To replace the floor, capture the decoded
+command-fields TLV the chip apps log at high verbosity while the live test runs,
+and drop them in as `query_image.json` /
 `query_image_response.json` (hex string + a provenance note), then upgrade
 `byte_parity.rs` to assert against the chip bytes instead of the self-generated
 floor.

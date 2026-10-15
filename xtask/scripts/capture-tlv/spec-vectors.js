@@ -22,7 +22,7 @@ import {
 //   TlvVoid.encode(null)      — ValidationDatatypeMismatchError
 //   TlvVoid.encode(undefined) — returns Uint8Array(0) [], not Uint8Array.of(0x14)
 //   TlvAny.encode(null)       — ValidationDatatypeMismatchError
-// The null vector will be added in a later task once a working codec is found.
+// A null vector waits for a matter.js codec that encodes a standalone null.
 
 const u8 = (...n) => Uint8Array.of(...n);
 

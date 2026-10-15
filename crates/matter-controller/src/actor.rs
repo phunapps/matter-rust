@@ -692,9 +692,8 @@ struct SubEntry {
     liveness_deadline: Instant,
 }
 
-/// A steady-state report that cannot be delivered: the
-/// subscription id it carried, if any, why (for the log), and the IM status it
-/// is answered with.
+/// A steady-state report that cannot be delivered: the subscription id it
+/// carried, if any, why (for the log), and the IM status it is answered with.
 struct StrayReport {
     subscription_id: Option<u32>,
     reason: &'static str,
@@ -1511,8 +1510,7 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     /// rejected with `NEEDS_TIMED_INTERACTION` — a write/invoke to one of these
     /// skips the (wasted) plain attempt and goes straight to a timed interaction.
     /// Populated on a `0xc6` rejection; covers manufacturer/ungenerated clusters
-    /// and survives for the controller's lifetime (a cache learned from
-    /// `NEEDS_TIMED_INTERACTION` rejections).
+    /// and survives for the controller's lifetime.
     timed_paths: std::collections::HashSet<(u32, u32)>,
     /// Sender half of the spawned-commission completions channel: cloned into
     /// each [`Self::spawn_commission`] task.
@@ -4245,8 +4243,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     }
 
     /// The `KeepSubscriptions` flag for a `SubscribeRequest` to `node_id`:
-    /// `true` iff this controller holds **another** subscription
-    /// to the node — any but `excluding` — that is
+    /// `true` iff this controller holds **another** subscription to the node —
+    /// any but `excluding` — that is
     ///
     /// - established (`subscriptions`), its consumer still listening;
     /// - in a resubscribe episode ([`Self::resubscribe_episode_entries`]:
@@ -4592,15 +4590,14 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// Run after every route-only eviction — [`Self::check_liveness`], both
     /// branches of [`Self::on_pending_timeout`] — and after
     /// [`Self::find_report_subscription`] re-keys a subscription away from a
-    /// session. Left alone, such
-    /// orphans would linger until the session table's cap, whose
-    /// oldest-idle-first eviction takes long-lived subscription sessions (idle
-    /// between reports) before the newer orphans. What this cannot see is
-    /// MRP-only traffic on the session (acks to reports, answers to stray
-    /// reports); dropping that with no subscription left is harmless — a device
-    /// still reporting there gets no ack and closes its subscription itself. A
-    /// later MRP retransmit for a removed session finds no peer and is skipped;
-    /// a later expiry finds no pending and returns.
+    /// session. Left alone, such orphans would linger until the session table's
+    /// cap, whose oldest-idle-first eviction takes long-lived subscription
+    /// sessions (idle between reports) before the newer orphans. What this
+    /// cannot see is MRP-only traffic on the session (acks to reports, answers
+    /// to stray reports); dropping that with no subscription left is harmless —
+    /// a device still reporting there gets no ack and closes its subscription
+    /// itself. A later MRP retransmit for a removed session finds no peer and
+    /// is skipped; a later expiry finds no pending and returns.
     ///
     /// The session's owed ACKs are sent first ([`Self::release_session`]).
     fn remove_session_if_orphaned(&mut self, sid: SessionId) -> bool {
@@ -5251,13 +5248,13 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// partial read/subscribe accumulation from the first attempt; a send
     /// failure fails the op's caller.
     ///
-    /// A subscribe is re-encoded, not replayed: its
-    /// `KeepSubscriptions` is recomputed now — the one baked in at the first
-    /// send may have been `false` with a sibling established since, and
-    /// replaying it would terminate that sibling — and its event filters are
-    /// bumped to the delivery watermark, since priming events from the failed
-    /// first attempt are already in the caller's channel. The new bytes are
-    /// stored back as the request.
+    /// A subscribe is re-encoded, not replayed: its `KeepSubscriptions` is
+    /// recomputed now — the one baked in at the first send may have been
+    /// `false` with a sibling established since, and replaying it would
+    /// terminate that sibling — and its event filters are bumped to the
+    /// delivery watermark, since priming events from the failed first attempt
+    /// are already in the caller's channel. The new bytes are stored back as
+    /// the request.
     async fn resume_resend_pending(&mut self, mut p: Pending, sid: SessionId, peer: SocketAddr) {
         if let PendingReply::Subscribe {
             sub_id,
@@ -6860,8 +6857,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         Ok((rd, wire_sub_id, sub_id))
     }
 
-    /// The subscription a steady-state report belongs to, re-keyed
-    /// to `session_id` when it was established on another session.
+    /// The subscription a steady-state report belongs to, re-keyed to
+    /// `session_id` when it was established on another session.
     ///
     /// 1. An exact `(session, subscription id)` hit in `sub_index`.
     /// 2. Otherwise (fabric, node, subscription id), as chip finds a report's
@@ -7206,9 +7203,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         };
         // The episode (if this was one) ends here, established — and only
         // here. A failed attempt stays in its episode, so its advert cooldown
-        // stamp must survive the failure; removing it
-        // before the parse let a device that keeps answering with a malformed
-        // response be advert-pulled on every advert.
+        // stamp must survive the failure; removing it before the parse let a
+        // device that keeps answering with a malformed response be
+        // advert-pulled on every advert.
         self.resubscribe_pulled_at.remove(&sub_id);
         // Liveness uses the *negotiated* max interval (the device's agreed
         // reporting cadence); a resubscribe re-requests the caller's
@@ -7743,7 +7740,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         // A resubscribe attempt (no oneshot reply) reschedules on the backoff
         // rather than failing — chip retries forever. An INITIAL subscribe
         // (reply `Some`) does not come here: it falls through to the
-        // reconnect-and-re-send-once path below, as every other op does.
+        // reconnect-and-re-send-once path below, as in 0.16.
         if matches!(&p.reply, PendingReply::Subscribe { reply: None, .. }) {
             // A consumer that dropped both receivers evicts nothing: its attempt
             // is dropped below, and the route may still serve a sibling
@@ -7755,13 +7752,13 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             // The attempt timed out — the cached session is likely dead (most
             // commonly a device reboot, which invalidates CASE). Drop the
             // ROUTE so the next attempt runs a fresh handshake, as the
-            // round-trip branch below does; leave the session
-            // registered — other subscriptions and in-flight invokes may still
-            // be using it, and if it is dead they exhaust on their own and
-            // reconnect through that branch. Only if the cache still holds the
-            // expired session: a sibling may already have replaced it with a
-            // healthy one. With the route kept, `handle_connect_done` strands
-            // nothing (it strands only when the cache still holds the old route).
+            // round-trip branch below does; leave the session registered —
+            // other subscriptions and in-flight invokes may still be using it,
+            // and if it is dead they exhaust on their own and reconnect through
+            // that branch. Only if the cache still holds the expired session: a
+            // sibling may already have replaced it with a healthy one. With the
+            // route kept, `handle_connect_done` strands nothing (it strands
+            // only when the cache still holds the old route).
             if !consumer_gone {
                 if let Ok(fabric_id) = self.sole_fabric().map(|f| f.fabric_id) {
                     self.evict_cached_route_if(fabric_id, p.node_id, session_id);
@@ -7854,9 +7851,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     ///   attempt can fail mid-priming, after some priming events already
     ///   reached the consumer, and the next attempt's priming dump must not
     ///   replay them. The episode continues, so the advert cooldown stamp stays.
-    ///   Retrying a rejection forever, including effectively
-    ///   permanent statuses, is deliberate chip parity; the backoff spaces the
-    ///   retries out to at most one per ~92 min.
+    ///   Retrying a rejection forever, including effectively permanent
+    ///   statuses, is deliberate chip parity; the backoff spaces the retries
+    ///   out to at most one per ~92 min.
     /// - **Consumer gone** (a resubscribe whose consumer dropped both
     ///   receivers): dropped with its cooldown stamp; nothing is rescheduled
     ///   (a backstop: the `Drop` cancel is a lossy `try_send`).
@@ -8005,11 +8002,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// retransmissions, or the response deadline, on a session that has most
     /// likely died. This is chip's `TriggerResubscriptionForLivenessTimeout`,
     /// which marks the timed-out subscription's own session defunct and
-    /// resubscribes with `reestablishCASE`. Like chip there is no
-    /// sibling guard; a route a newer session already replaced is spared, as
-    /// chip spares sessions with newer peer activity. The session stays
-    /// registered for siblings and in-flight work — chip's "defunct" is soft
-    /// too — and is removed once nothing references it
+    /// resubscribes with `reestablishCASE`. Like chip there is no sibling
+    /// guard; a route a newer session already replaced is spared, as chip
+    /// spares sessions with newer peer activity. The session stays registered
+    /// for siblings and in-flight work — chip's "defunct" is soft too — and is
+    /// removed once nothing references it
     /// ([`Self::remove_session_if_orphaned`]). That test runs after
     /// `begin_resubscribe` has removed this subscription, one subscription at a
     /// time, so the last of several stale siblings on a session removes it.
@@ -9311,8 +9308,8 @@ mod tests {
         assert!(actor.subscriptions.is_empty());
     }
 
-    /// Regression: a connect that completes AFTER the node was
-    /// forgotten (or was never commissioned) must NOT resurrect a `DeviceEntry`.
+    /// Regression: a connect that completes AFTER the node was forgotten (or
+    /// was never commissioned) must NOT resurrect a `DeviceEntry`.
     /// `upsert_device` is update-only — the corrupt zeroed-NOC-key placeholder
     /// it used to push would otherwise re-add a device the caller forgot (and
     /// persist a bogus key). We drive `upsert_device` directly, which is the
@@ -14055,11 +14052,11 @@ mod tests {
         }
     }
 
-    /// Pure helper contract: with no watermark the
-    /// caller's filters pass through unchanged; with a watermark, empty
-    /// caller filters (the only in-tree case — `Node::subscribe` sends none)
-    /// become a single minimal filter, and any existing filter's `event_min`
-    /// is bumped up to (never down from) `watermark + 1`.
+    /// Pure helper contract: with no watermark the caller's filters pass
+    /// through unchanged; with a watermark, empty caller filters (the only
+    /// in-tree case — `Node::subscribe` sends none) become a single minimal
+    /// filter, and any existing filter's `event_min` is bumped up to (never
+    /// down from) `watermark + 1`.
     #[test]
     fn bump_event_filters_injects_and_bumps() {
         use matter_interaction::EventFilter;
@@ -14088,9 +14085,9 @@ mod tests {
     }
 
     /// `ReportSink::try_send_event` must update `max_event_delivered` on every
-    /// attempted delivery — including a drop on a full buffer: a
-    /// dropped event must not be replayed late by a resubscribe either. A
-    /// lower event number than already seen must never regress the watermark.
+    /// attempted delivery — including a drop on a full buffer: a dropped event
+    /// must not be replayed late by a resubscribe either. A lower event number
+    /// than already seen must never regress the watermark.
     #[test]
     fn report_sink_tracks_max_event_delivered() {
         // Cap-1 report channel, mirroring the real construction site, so the
@@ -14882,8 +14879,8 @@ mod tests {
         );
     }
 
-    /// `fail_connect_waiters` hands its own error to the
-    /// reschedule (and so to the failure log).
+    /// `fail_connect_waiters` hands its own error to the reschedule (and so to
+    /// the failure log).
     #[test]
     fn reschedule_cause_from_a_failed_connect_is_the_connect_error() {
         let mut actor = actor_with_one_fabric();
@@ -14897,8 +14894,8 @@ mod tests {
         assert_eq!(actor.resubscribes[0].retry_count, 4, "attempt 3 failed");
     }
 
-    /// A send failure in `resume_resubscribe` is no longer
-    /// discarded as `Err(_)`.
+    /// A send failure in `resume_resubscribe` is no longer discarded as
+    /// `Err(_)`.
     #[tokio::test]
     async fn reschedule_cause_from_a_failed_send_is_the_send_error() {
         let mut actor = actor_with_one_fabric();
@@ -14921,8 +14918,8 @@ mod tests {
         assert_eq!(actor.reschedule_causes, vec![(SubId(2), expected)]);
     }
 
-    /// With no sole fabric, `attempt_resubscribe` passes the
-    /// `sole_fabric()` error.
+    /// With no sole fabric, `attempt_resubscribe` passes the `sole_fabric()`
+    /// error.
     #[tokio::test]
     async fn reschedule_cause_without_a_fabric_is_the_fabric_error() {
         let (io, _peer) = InMemoryDatagram::pair();
@@ -14962,8 +14959,8 @@ mod tests {
         );
     }
 
-    /// The response-deadline caller names the deadline, through
-    /// the real `drive_response_deadlines` path.
+    /// The response-deadline caller names the deadline, through the real
+    /// `drive_response_deadlines` path.
     #[tokio::test]
     async fn reschedule_cause_on_response_deadline_names_the_deadline() {
         let mut actor = actor_with_one_fabric();
@@ -14998,8 +14995,8 @@ mod tests {
         );
     }
 
-    /// Forgetting a node deletes its resubscribe waiters, so it
-    /// must not first log them as "next attempt scheduled".
+    /// Forgetting a node deletes its resubscribe waiters, so it must not first
+    /// log them as "next attempt scheduled".
     #[tokio::test]
     async fn forget_node_does_not_reschedule_the_waiters_it_deletes() {
         let mut actor = actor_with_one_fabric();
@@ -19882,8 +19879,8 @@ mod tests {
     /// Note: `write_acl` hardcodes budget=800 which won't force multi-chunk in a
     /// unit test (that would need ~100 large ACL entries). We therefore test the
     /// multi-chunk path via `chunked_write` directly, using the same tiny budget
-    /// as `chunked_write_sends_all_chunks_one_exchange`. This
-    /// covers the end-to-end multi-chunk write path that `write_acl` delegates to.
+    /// as `chunked_write_sends_all_chunks_one_exchange`. This covers the
+    /// end-to-end multi-chunk write path that `write_acl` delegates to.
     #[tokio::test]
     async fn write_acl_multi_chunk_reassembles() {
         use matter_codec::{Tag, TlvWriter};
@@ -20719,9 +20716,9 @@ mod tests {
         )
     }
 
-    /// A connect that parks while a resubscribe episode waits
-    /// still gets its base-type fallback, and releasing it stops only the base:
-    /// the subtype browse stays, because it is the resubscribe watch.
+    /// A connect that parks while a resubscribe episode waits still gets its
+    /// base-type fallback, and releasing it stops only the base: the subtype
+    /// browse stays, because it is the resubscribe watch.
     #[tokio::test]
     async fn release_keeps_the_subtype_browse_while_a_resubscribe_episode_waits() {
         let (discovery, state) = watch_discovery();
@@ -20760,10 +20757,10 @@ mod tests {
         );
     }
 
-    /// Equal handles: a `Discovery` that keeps the trait
-    /// default hands back ONE handle for both browses. The base release must
-    /// not stop it while the watch holds it; it is stopped exactly once, when
-    /// the watch lets go (here: at shutdown).
+    /// Equal handles: a `Discovery` that keeps the trait default hands back ONE
+    /// handle for both browses. The base release must not stop it while the
+    /// watch holds it; it is stopped exactly once, when the watch lets go
+    /// (here: at shutdown).
     #[tokio::test]
     async fn a_handle_shared_by_both_browses_is_stopped_once_when_the_watch_lets_go() {
         let (discovery, state) = watch_discovery();
@@ -20800,9 +20797,8 @@ mod tests {
         );
     }
 
-    /// Shutdown releases the watch's browse even though
-    /// resubscribes are still queued — a caller-supplied daemon would
-    /// otherwise run it forever.
+    /// Shutdown releases the watch's browse even though resubscribes are still
+    /// queued — a caller-supplied daemon would otherwise run it forever.
     #[tokio::test]
     async fn shutdown_releases_the_watch_with_resubscribes_still_queued() {
         let (discovery, state) = watch_discovery();
@@ -20906,9 +20902,9 @@ mod tests {
         )
     }
 
-    /// The watch opens the SUBTYPE browse — never the
-    /// base type, never the base fallback — once an episode exists with
-    /// nothing parked, and records the fabric it was opened for.
+    /// The watch opens the SUBTYPE browse — never the base type, never the base
+    /// fallback — once an episode exists with nothing parked, and records the
+    /// fabric it was opened for.
     #[tokio::test]
     async fn watch_opens_only_the_subtype_browse_when_an_episode_begins() {
         let (discovery, state) = watch_discovery();
@@ -21104,10 +21100,10 @@ mod tests {
         assert_eq!(state.lock().unwrap().stops, vec![WATCH_SUBTYPE_HANDLE]);
     }
 
-    /// A subtype browse opened by `spawn_connect` (where most
-    /// episodes' first cache-miss connect opens it) carries its cfid, so the
-    /// reconcile step keeps it instead of closing and reopening it — every
-    /// reopen would re-flush found events.
+    /// A subtype browse opened by `spawn_connect` (where most episodes' first
+    /// cache-miss connect opens it) carries its cfid, so the reconcile step
+    /// keeps it instead of closing and reopening it — every reopen would
+    /// re-flush found events.
     #[tokio::test]
     async fn a_subtype_opened_by_spawn_connect_is_kept_not_reopened() {
         let (discovery, state) = watch_discovery();
@@ -21157,12 +21153,12 @@ mod tests {
         (actor, state, reports, ctrl)
     }
 
-    /// While the watch holds the subtype browse, a connect to
-    /// a healthy node whose record the actor no longer has cached gets the
-    /// fresh-browse replay a per-connect browse used to give it — through a
-    /// second, short-lived handle — and resolves in the immediate settle pass,
-    /// with no base-type fallback. The extra handle is drained (records AND
-    /// found events) and stopped; the watch handle is left alone.
+    /// While the watch holds the subtype browse, a connect to a healthy node
+    /// whose record the actor no longer has cached gets the fresh-browse replay
+    /// a per-connect browse used to give it — through a second, short-lived
+    /// handle — and resolves in the immediate settle pass, with no base-type
+    /// fallback. The extra handle is drained (records AND found events) and
+    /// stopped; the watch handle is left alone.
     #[tokio::test]
     async fn a_connect_behind_a_held_watch_resolves_from_the_replay_without_the_base_fallback() {
         let (mut actor, state, _reports, _ctrl) = held_watch_with_b_surfaced();
@@ -21204,9 +21200,9 @@ mod tests {
         assert_eq!(actor.resolve_query, None);
     }
 
-    /// Expired entry: a cached record older than
-    /// `SEEN_RECORD_TTL` counts as absent — the replay attach still happens and
-    /// the connect resolves off the refreshed entry.
+    /// Expired entry: a cached record older than `SEEN_RECORD_TTL` counts as
+    /// absent — the replay attach still happens and the connect resolves off
+    /// the refreshed entry.
     #[tokio::test]
     async fn a_connect_behind_a_held_watch_replays_when_the_cached_record_has_expired() {
         let (mut actor, state, _reports, _ctrl) = held_watch_with_b_surfaced();
@@ -21234,8 +21230,8 @@ mod tests {
         assert_eq!(s.stops, vec![WATCH_REPLAY_HANDLE]);
     }
 
-    /// Fresh entry: a record still inside `SEEN_RECORD_TTL`
-    /// needs no replay, so no second handle is attached.
+    /// Fresh entry: a record still inside `SEEN_RECORD_TTL` needs no replay, so
+    /// no second handle is attached.
     #[tokio::test]
     async fn a_connect_behind_a_held_watch_with_a_fresh_record_attaches_nothing() {
         let (mut actor, state, _reports, _ctrl) = held_watch_with_b_surfaced();
@@ -21292,9 +21288,9 @@ mod tests {
         assert_eq!(actor.pending_resolves.len(), 1, "C itself stays parked");
     }
 
-    /// Failed attach: a daemon that refuses the second handle
-    /// costs nothing but the replay — the connect parks on the held watch as
-    /// before, with the delayed base fallback armed, and nothing is stopped.
+    /// Failed attach: a daemon that refuses the second handle costs nothing but
+    /// the replay — the connect parks on the held watch as before, with the
+    /// delayed base fallback armed, and nothing is stopped.
     #[tokio::test]
     async fn a_failed_replay_attach_falls_through_to_the_parked_resolve() {
         let (mut actor, state, _reports, _ctrl) = held_watch_with_b_surfaced();
@@ -21317,8 +21313,8 @@ mod tests {
         assert_eq!(actor.resolve_query_fabric, Some(WATCH_SUBTYPE_HANDLE));
     }
 
-    /// Failing opens are retried no more often than
-    /// `WATCH_OPEN_RETRY`, and a later success clears the retry.
+    /// Failing opens are retried no more often than `WATCH_OPEN_RETRY`, and a
+    /// later success clears the retry.
     #[tokio::test]
     async fn a_failing_watch_open_is_retried_no_more_often_than_watch_open_retry() {
         let (discovery, state) = watch_discovery();
@@ -21348,8 +21344,8 @@ mod tests {
         assert!(actor.watch_open_retry_at.is_none());
     }
 
-    /// With only the watch open the loop wakes within ~1 s to
-    /// drain it; with nothing pending the deadline is unchanged.
+    /// With only the watch open the loop wakes within ~1 s to drain it; with
+    /// nothing pending the deadline is unchanged.
     #[tokio::test]
     async fn the_watch_alone_wakes_the_loop_about_once_a_second() {
         let (discovery, _state) = watch_discovery();
@@ -21372,9 +21368,9 @@ mod tests {
         );
     }
 
-    /// A failed-open retry counts toward the
-    /// deadline only while it is in the future AND could happen. A past-due or
-    /// impossible one (no sole fabric) would spin the overdue guard.
+    /// A failed-open retry counts toward the deadline only while it is in the
+    /// future AND could happen. A past-due or impossible one (no sole fabric)
+    /// would spin the overdue guard.
     #[tokio::test]
     async fn a_watch_open_retry_counts_only_while_it_can_still_happen() {
         let (discovery, state) = watch_discovery();
@@ -21403,9 +21399,9 @@ mod tests {
         );
     }
 
-    /// A held watch whose fabric is no longer the sole one is
-    /// closed (nothing parked) and reopened for the current fabric next pass;
-    /// with no sole fabric at all it stays closed.
+    /// A held watch whose fabric is no longer the sole one is closed (nothing
+    /// parked) and reopened for the current fabric next pass; with no sole
+    /// fabric at all it stays closed.
     #[tokio::test]
     async fn watch_follows_a_fabric_change() {
         let (discovery, state) = watch_discovery();
@@ -21505,8 +21501,8 @@ mod tests {
         (pr.retry_count, pr.attempt_at)
     }
 
-    /// The backoff of an attempt already on the wire is
-    /// reset, and nothing else happens — no queued copy, no second request.
+    /// The backoff of an attempt already on the wire is reset, and nothing else
+    /// happens — no queued copy, no second request.
     #[tokio::test]
     async fn a_pull_resets_an_in_flight_attempt_without_starting_another() {
         let mut actor = actor_with_one_fabric();
@@ -21526,8 +21522,8 @@ mod tests {
         actor.assert_pulled_at_within_episodes();
     }
 
-    /// Same for an attempt parked behind a connect —
-    /// and the reset is what makes its failure land on the short step.
+    /// Same for an attempt parked behind a connect — and the reset is what
+    /// makes its failure land on the short step.
     #[tokio::test]
     async fn a_pull_resets_a_connecting_attempt_without_starting_another() {
         let mut actor = actor_with_one_fabric();
@@ -21555,8 +21551,8 @@ mod tests {
         );
     }
 
-    /// The cooldown is on the actor, so it survives
-    /// `on_pending_timeout` rebuilding the `PendingResubscribe`.
+    /// The cooldown is on the actor, so it survives `on_pending_timeout`
+    /// rebuilding the `PendingResubscribe`.
     #[tokio::test]
     async fn the_advert_cooldown_survives_a_failed_attempt() {
         let mut actor = actor_with_one_fabric();
@@ -21593,8 +21589,8 @@ mod tests {
         actor.assert_pulled_at_within_episodes();
     }
 
-    /// Only eligible subscriptions of the node move, and the
-    /// count says exactly how many. The API then ignores only the cooldown.
+    /// Only eligible subscriptions of the node move, and the count says exactly
+    /// how many. The API then ignores only the cooldown.
     #[tokio::test]
     async fn a_pull_counts_only_eligible_subscriptions_of_the_node() {
         let mut actor = actor_with_one_fabric();
@@ -21646,8 +21642,8 @@ mod tests {
         actor.assert_pulled_at_within_episodes();
     }
 
-    /// A pull that moves a queued entry drops the idle
-    /// cached route, never the session itself.
+    /// A pull that moves a queued entry drops the idle cached route, never the
+    /// session itself.
     #[tokio::test]
     async fn a_pull_evicts_an_idle_cached_route_but_never_the_session() {
         let mut actor = actor_with_one_fabric();
@@ -21676,8 +21672,8 @@ mod tests {
         );
     }
 
-    /// A live subscription on the session means the node
-    /// is talking to us on it — keep the route.
+    /// A live subscription on the session means the node is talking to us on it
+    /// — keep the route.
     #[tokio::test]
     async fn a_pull_keeps_the_cached_route_while_a_live_subscription_rides_it() {
         let mut actor = actor_with_one_fabric();
@@ -21718,8 +21714,8 @@ mod tests {
         assert!(actor.cache.contains_key(&(fabric_id, 0x42)), "route kept");
     }
 
-    /// Only a pulled QUEUED entry evicts; an in-flight reset alone
-    /// leaves the route.
+    /// Only a pulled QUEUED entry evicts; an in-flight reset alone leaves the
+    /// route.
     #[tokio::test]
     async fn an_in_flight_reset_alone_does_not_evict_the_route() {
         let mut actor = actor_with_one_fabric();
@@ -21953,8 +21949,8 @@ mod tests {
         assert!(actor.pending_connects.is_empty());
     }
 
-    /// `Ok(0)` for a subscribed node, an unknown node, and a
-    /// commissioned node with no subscriptions.
+    /// `Ok(0)` for a subscribed node, an unknown node, and a commissioned node
+    /// with no subscriptions.
     #[tokio::test]
     async fn resubscribe_now_is_zero_when_nothing_waits() {
         let mut actor = actor_with_one_fabric();
@@ -22055,8 +22051,8 @@ mod tests {
         Instant::now() + ADVERT_QUIET_WINDOW + Duration::from_millis(1)
     }
 
-    /// A found event for the node, drained after the quiet window
-    /// on the real drive path, pulls its queued resubscribe forward.
+    /// A found event for the node, drained after the quiet window on the real
+    /// drive path, pulls its queued resubscribe forward.
     #[tokio::test]
     async fn an_advert_pulls_a_queued_resubscribe_forward() {
         let (discovery, state) = watch_discovery();
@@ -22077,9 +22073,8 @@ mod tests {
         assert!(at <= Instant::now());
     }
 
-    /// A resolved record without a found event (the base-stop
-    /// re-resolution) does not pull, and the base handle is never asked for
-    /// found events.
+    /// A resolved record without a found event (the base-stop re-resolution)
+    /// does not pull, and the base handle is never asked for found events.
     #[tokio::test]
     async fn only_found_events_on_the_subtype_handle_pull() {
         let (discovery, state) = watch_discovery();
@@ -22125,8 +22120,8 @@ mod tests {
         );
     }
 
-    /// A found event inside the quiet window is discarded — and
-    /// stays consumed — while one after it pulls.
+    /// A found event inside the quiet window is discarded — and stays consumed
+    /// — while one after it pulls.
     #[tokio::test]
     async fn found_events_inside_the_quiet_window_are_discarded() {
         let (discovery, state) = watch_discovery();
@@ -22148,8 +22143,8 @@ mod tests {
         assert_eq!(queued_state(&actor, 1).0, 0);
     }
 
-    /// The window also follows a subtype `spawn_connect` opened
-    /// (the shared helper).
+    /// The window also follows a subtype `spawn_connect` opened (the shared
+    /// helper).
     #[tokio::test]
     async fn the_quiet_window_also_follows_a_subtype_opened_by_spawn_connect() {
         let (discovery, state) = watch_discovery();
@@ -22214,8 +22209,7 @@ mod tests {
         assert_eq!(queued_state(&actor, 1).0, 0);
     }
 
-    /// Found events from a handle opened for another fabric
-    /// are never adverts.
+    /// Found events from a handle opened for another fabric are never adverts.
     #[tokio::test]
     async fn found_events_on_a_handle_opened_for_another_fabric_are_not_adverts() {
         let (discovery, state) = watch_discovery();
@@ -22233,8 +22227,8 @@ mod tests {
         assert_eq!(queued_state(&actor, 1).0, 5);
     }
 
-    /// With one handle serving both browses, found events
-    /// are never polled while both are held, and the API still works.
+    /// With one handle serving both browses, found events are never polled
+    /// while both are held, and the API still works.
     #[tokio::test]
     async fn equal_handles_poll_no_found_events_but_the_api_still_pulls() {
         let (discovery, state) = watch_discovery();
@@ -22274,8 +22268,8 @@ mod tests {
         );
     }
 
-    /// A `Discovery` that keeps the default `poll_found`
-    /// (here: `SubtypeOnlyDiscovery`) — no pull, no panic.
+    /// A `Discovery` that keeps the default `poll_found` (here:
+    /// `SubtypeOnlyDiscovery`) — no pull, no panic.
     #[tokio::test]
     async fn a_discovery_with_the_default_poll_found_never_pulls() {
         let discovery = SubtypeOnlyDiscovery {
@@ -22502,11 +22496,11 @@ mod tests {
         keep_endpoint_open(io);
     }
 
-    /// End to end over the loopback harness: a subscription goes
-    /// silent (liveness), its retry fails against the powered-off device and is
-    /// pushed 10 minutes out at a high retry count; the device re-announces (a
-    /// found event plus its record on the subtype browse) and the subscription
-    /// is re-established within seconds.
+    /// End to end over the loopback harness: a subscription goes silent
+    /// (liveness), its retry fails against the powered-off device and is pushed
+    /// 10 minutes out at a high retry count; the device re-announces (a found
+    /// event plus its record on the subtype browse) and the subscription is
+    /// re-established within seconds.
     #[tokio::test]
     #[allow(clippy::too_many_lines)] // one linear scenario: subscribe, outage, backoff, advert, recovery
     async fn an_operational_advert_reestablishes_a_backed_off_subscription() {
@@ -22721,10 +22715,10 @@ mod tests {
         rx.try_recv().ok().map(|result| result.map(|_| ()))
     }
 
-    /// A failed resubscribe attempt is rebuilt with its event
-    /// filters re-bumped to the delivery watermark, as `begin_resubscribe`
-    /// builds them — an attempt can fail after some priming events already
-    /// reached the consumer, and the next attempt must not replay them.
+    /// A failed resubscribe attempt is rebuilt with its event filters re-bumped
+    /// to the delivery watermark, as `begin_resubscribe` builds them — an
+    /// attempt can fail after some priming events already reached the consumer,
+    /// and the next attempt must not replay them.
     #[tokio::test]
     async fn a_failed_resubscribe_attempt_is_rebuilt_with_the_event_watermark() {
         let mut actor = actor_with_one_fabric();
@@ -22741,9 +22735,9 @@ mod tests {
         );
     }
 
-    /// A timed-out resubscribe whose consumer
-    /// dropped both receivers evicts nothing — not the route, not the session —
-    /// and is not rescheduled. The route may serve a sibling.
+    /// A timed-out resubscribe whose consumer dropped both receivers evicts
+    /// nothing — not the route, not the session — and is not rescheduled. The
+    /// route may serve a sibling.
     #[tokio::test]
     async fn a_timed_out_resubscribe_whose_consumer_is_gone_evicts_nothing() {
         let mut actor = actor_with_one_fabric();
@@ -22771,11 +22765,11 @@ mod tests {
         );
     }
 
-    /// An INITIAL subscribe whose MRP retransmissions
-    /// run out keeps its 0.16 recovery — the stale route is dropped and the
-    /// request is parked to be re-sent once on a fresh connect — and its caller
-    /// is not failed. Sending it through `fail_subscribe_attempt` would lose the
-    /// reconnect a stale cached session (common after a device reboot) needs.
+    /// An INITIAL subscribe whose MRP retransmissions run out keeps its 0.16
+    /// recovery — the stale route is dropped and the request is parked to be
+    /// re-sent once on a fresh connect — and its caller is not failed. Sending
+    /// it through `fail_subscribe_attempt` would lose the reconnect a stale
+    /// cached session (common after a device reboot) needs.
     #[tokio::test]
     async fn an_initial_subscribe_whose_mrp_exhausts_still_reconnects_and_resends_once() {
         let mut actor = actor_with_one_fabric();
@@ -22811,8 +22805,8 @@ mod tests {
         assert!(actor.resubscribes.is_empty());
     }
 
-    /// An INITIAL subscribe whose response deadline
-    /// passes still fails its caller with `ResponseTimeout`, as in 0.16.
+    /// An INITIAL subscribe whose response deadline passes still fails its
+    /// caller with `ResponseTimeout`, as in 0.16.
     #[tokio::test]
     async fn an_initial_subscribe_past_its_response_deadline_still_fails_with_response_timeout() {
         let mut actor = actor_with_one_fabric();
@@ -24828,10 +24822,10 @@ mod tests {
         peer.fabric_id = Some(fabric_id);
     }
 
-    /// A resubscribe whose `SubscribeResponse`
-    /// does not parse is answered `InvalidAction` and rescheduled — not dropped
-    /// — and keeps its advert cooldown stamp: a device that keeps answering
-    /// garbage must not be advert-pulled on every advert.
+    /// A resubscribe whose `SubscribeResponse` does not parse is answered
+    /// `InvalidAction` and rescheduled — not dropped — and keeps its advert
+    /// cooldown stamp: a device that keeps answering garbage must not be
+    /// advert-pulled on every advert.
     #[tokio::test]
     async fn a_garbage_subscribe_response_reschedules_the_resubscribe_and_keeps_its_cooldown() {
         let mut w = wired_actor();
@@ -24873,9 +24867,9 @@ mod tests {
         w.actor.assert_pulled_at_within_episodes();
     }
 
-    /// An initial subscribe whose `SubscribeResponse` does not
-    /// parse still fails with the parse error (as in 0.16), and now also
-    /// answers the device `InvalidAction`.
+    /// An initial subscribe whose `SubscribeResponse` does not parse still
+    /// fails with the parse error (as in 0.16), and now also answers the device
+    /// `InvalidAction`.
     #[tokio::test]
     async fn a_garbage_subscribe_response_fails_an_initial_subscribe_with_the_parse_error() {
         let mut w = wired_actor();
@@ -24903,11 +24897,11 @@ mod tests {
         );
     }
 
-    /// A priming chunk is acked only once it has
-    /// parsed. One that does not parse is answered `InvalidAction` — never
-    /// Success-acked and skipped, which would establish the subscription on an
-    /// incomplete priming dump — and fails the attempt; the rebuilt attempt's
-    /// event filters start past the priming event already delivered.
+    /// A priming chunk is acked only once it has parsed. One that does not
+    /// parse is answered `InvalidAction` — never Success-acked and skipped,
+    /// which would establish the subscription on an incomplete priming dump —
+    /// and fails the attempt; the rebuilt attempt's event filters start past
+    /// the priming event already delivered.
     #[tokio::test]
     async fn a_garbage_priming_report_is_answered_invalid_action_and_fails_the_attempt() {
         let mut w = wired_actor();
@@ -24946,9 +24940,8 @@ mod tests {
         );
     }
 
-    /// A device that rejects the first subscribe with a
-    /// `StatusResponse` fails it at once with the raw status — not after the
-    /// 30 s response deadline.
+    /// A device that rejects the first subscribe with a `StatusResponse` fails
+    /// it at once with the raw status — not after the 30 s response deadline.
     #[tokio::test]
     async fn a_status_response_rejects_an_initial_subscribe_at_once() {
         let mut w = wired_actor();
@@ -24973,9 +24966,8 @@ mod tests {
         assert!(w.actor.pending.is_empty());
     }
 
-    /// A rejected resubscribe is rescheduled on the normal
-    /// backoff and evicts nothing — the session demonstrably works, it just
-    /// carried the rejection.
+    /// A rejected resubscribe is rescheduled on the normal backoff and evicts
+    /// nothing — the session demonstrably works, it just carried the rejection.
     #[tokio::test]
     async fn a_rejected_resubscribe_is_rescheduled_and_keeps_its_route_and_session() {
         let mut w = wired_actor();
@@ -25013,8 +25005,8 @@ mod tests {
         assert!(w.actor.sessions.get(w.sid).is_some(), "session kept");
     }
 
-    /// A Success `StatusResponse` is not an answer to a
-    /// `SubscribeRequest` (chip: `CHIP_ERROR_INVALID_MESSAGE_TYPE`).
+    /// A Success `StatusResponse` is not an answer to a `SubscribeRequest`
+    /// (chip: `CHIP_ERROR_INVALID_MESSAGE_TYPE`).
     #[tokio::test]
     async fn a_success_status_response_to_a_subscribe_is_an_unexpected_message() {
         let mut w = wired_actor();
@@ -25040,8 +25032,8 @@ mod tests {
         );
     }
 
-    /// A `StatusResponse` that is not a bare status
-    /// (`parse_status_response` → `Ok(None)`) is malformed.
+    /// A `StatusResponse` that is not a bare status (`parse_status_response` →
+    /// `Ok(None)`) is malformed.
     #[tokio::test]
     async fn a_status_response_that_is_not_a_bare_status_is_malformed() {
         let mut w = wired_actor();
@@ -25071,10 +25063,10 @@ mod tests {
         );
     }
 
-    /// The subscribe handshake acts only on Interaction
-    /// Model messages, so a Secure Channel opcode 0x01 on the exchange is never
-    /// read as a `StatusResponse`, nor a non-IM 0x04 as a `SubscribeResponse`;
-    /// both are ignored.
+    /// The subscribe handshake acts only on Interaction Model messages, so a
+    /// Secure Channel opcode 0x01 on the exchange is never read as a
+    /// `StatusResponse`, nor a non-IM 0x04 as a `SubscribeResponse`; both are
+    /// ignored.
     #[tokio::test]
     async fn a_non_im_message_with_the_status_opcode_is_not_a_status_response() {
         let mut w = wired_actor();
@@ -25107,8 +25099,8 @@ mod tests {
         );
     }
 
-    /// Any other Interaction Model message on a subscribe exchange
-    /// ends the attempt at once instead of waiting out the deadline.
+    /// Any other Interaction Model message on a subscribe exchange ends the
+    /// attempt at once instead of waiting out the deadline.
     #[tokio::test]
     async fn an_unexpected_opcode_ends_a_subscribe_attempt() {
         let mut w = wired_actor();
@@ -25130,8 +25122,8 @@ mod tests {
         );
     }
 
-    /// `InvalidAction` answers an inbound message only. A
-    /// timed-out attempt puts nothing on the wire.
+    /// `InvalidAction` answers an inbound message only. A timed-out attempt
+    /// puts nothing on the wire.
     #[tokio::test]
     async fn a_timed_out_subscribe_attempt_sends_nothing_on_the_wire() {
         let mut w = wired_actor();
@@ -25196,10 +25188,10 @@ mod tests {
         }
     }
 
-    /// A lone subscribe sends `KeepSubscriptions = false`
-    /// (clearing what an earlier process left on the device); a second one to
-    /// the same node, while the first is still pending, sends `true`; another
-    /// node is independent.
+    /// A lone subscribe sends `KeepSubscriptions = false` (clearing what an
+    /// earlier process left on the device); a second one to the same node,
+    /// while the first is still pending, sends `true`; another node is
+    /// independent.
     #[tokio::test]
     async fn a_lone_subscribe_clears_and_a_second_keeps_the_first() {
         let mut actor = actor_with_one_fabric();
@@ -25255,8 +25247,7 @@ mod tests {
         );
     }
 
-    /// A resubscribe keeps a live sibling and clears when
-    /// alone.
+    /// A resubscribe keeps a live sibling and clears when alone.
     #[tokio::test]
     async fn a_resubscribe_keeps_a_live_sibling_and_clears_when_alone() {
         let mut actor = actor_with_one_fabric();
@@ -25277,10 +25268,10 @@ mod tests {
         assert!(pending_keep_flag(&actor, SubId(1)), "a live sibling: keep");
     }
 
-    /// A sibling whose consumer is gone, an initial subscribe
-    /// whose caller gave up (closed oneshot) — pending or parked for its
-    /// re-send — and a subscribe command still parked behind a connect (never
-    /// sent) do not count.
+    /// A sibling whose consumer is gone, an initial subscribe whose caller gave
+    /// up (closed oneshot) — pending or parked for its re-send — and a
+    /// subscribe command still parked behind a connect (never sent) do not
+    /// count.
     #[tokio::test]
     async fn dead_or_unsent_siblings_do_not_keep_subscriptions() {
         let mut actor = actor_with_one_fabric();
@@ -25326,9 +25317,9 @@ mod tests {
         );
     }
 
-    /// A queued, in-flight or connecting resubscribe, a
-    /// pending initial subscribe, and an initial subscribe parked for re-send
-    /// after MRP exhaustion all count; a subscription never counts itself.
+    /// A queued, in-flight or connecting resubscribe, a pending initial
+    /// subscribe, and an initial subscribe parked for re-send after MRP
+    /// exhaustion all count; a subscription never counts itself.
     #[tokio::test]
     async fn in_flight_and_parked_siblings_keep_subscriptions() {
         let mut actor = actor_with_one_fabric();
@@ -25370,10 +25361,10 @@ mod tests {
         );
     }
 
-    /// An initial subscribe re-sent after MRP exhaustion is
-    /// re-encoded, not replayed: the flag is recomputed (a sibling established
-    /// meanwhile) and the event filters start past the priming events the
-    /// failed first attempt already delivered.
+    /// An initial subscribe re-sent after MRP exhaustion is re-encoded, not
+    /// replayed: the flag is recomputed (a sibling established meanwhile) and
+    /// the event filters start past the priming events the failed first attempt
+    /// already delivered.
     #[tokio::test]
     async fn an_initial_subscribe_resent_after_mrp_exhaustion_is_reencoded() {
         let mut actor = actor_with_one_fabric();
@@ -25409,9 +25400,9 @@ mod tests {
         assert!(resent.retried, "re-sent once only");
     }
 
-    /// Cancelling a subscription whose resubscribe is on the
-    /// wire purges the pending attempt AND closes its MRP exchange, so the
-    /// `SubscribeRequest` stops retransmitting and cannot be late-delivered.
+    /// Cancelling a subscription whose resubscribe is on the wire purges the
+    /// pending attempt AND closes its MRP exchange, so the `SubscribeRequest`
+    /// stops retransmitting and cannot be late-delivered.
     #[tokio::test]
     async fn cancel_purges_an_in_flight_resubscribe_and_stops_its_retransmits() {
         let mut actor = actor_with_one_fabric();
@@ -25454,9 +25445,8 @@ mod tests {
         );
     }
 
-    /// The purge closes the purged attempt's own exchange
-    /// only; an unrelated request in flight on the same session keeps its MRP
-    /// retransmits.
+    /// The purge closes the purged attempt's own exchange only; an unrelated
+    /// request in flight on the same session keeps its MRP retransmits.
     #[tokio::test]
     async fn cancel_closes_only_the_purged_exchange() {
         let mut actor = actor_with_one_fabric();
@@ -25505,8 +25495,8 @@ mod tests {
         );
     }
 
-    /// Cancelling a subscription whose resubscribe waits on a
-    /// connect drops its waiter and leaves the connect running for the rest.
+    /// Cancelling a subscription whose resubscribe waits on a connect drops its
+    /// waiter and leaves the connect running for the rest.
     #[tokio::test]
     async fn cancel_drops_a_connecting_resubscribe_but_leaves_the_connect_running() {
         let mut actor = actor_with_one_fabric();
@@ -25538,8 +25528,8 @@ mod tests {
         );
     }
 
-    /// A connect completing for a resubscribe whose
-    /// consumer is gone sends nothing.
+    /// A connect completing for a resubscribe whose consumer is gone sends
+    /// nothing.
     #[tokio::test]
     async fn a_connect_completing_for_a_cancelled_resubscribe_sends_nothing() {
         let mut actor = actor_with_one_fabric();
@@ -25563,9 +25553,9 @@ mod tests {
     }
 
     /// A report for a subscription we do not hold is answered
-    /// `InvalidSubscription`, so the device drops it at once (Matter 1.4
-    /// §8.5). A session with no peer node id (here PASE) has no cross-session
-    /// lookup: an entry with the same id on another session is not matched.
+    /// `InvalidSubscription`, so the device drops it at once (Matter 1.4 §8.5).
+    /// A session with no peer node id (here PASE) has no cross-session lookup:
+    /// an entry with the same id on another session is not matched.
     #[tokio::test]
     async fn a_report_for_an_unknown_subscription_is_answered_invalid_subscription() {
         let mut w = wired_actor();
@@ -25593,10 +25583,10 @@ mod tests {
         );
     }
 
-    /// A report for a subscription whose consumer is gone is
-    /// answered `InvalidSubscription`, and the subscription is reaped — checked
-    /// up front, so even a report that hands the consumer nothing yet (a
-    /// non-final chunk, which never reaches a send) is answered.
+    /// A report for a subscription whose consumer is gone is answered
+    /// `InvalidSubscription`, and the subscription is reaped — checked up
+    /// front, so even a report that hands the consumer nothing yet (a non-final
+    /// chunk, which never reaches a send) is answered.
     #[tokio::test]
     async fn a_report_whose_consumer_is_gone_is_answered_invalid_subscription_and_reaped() {
         let mut w = wired_actor();
@@ -25623,9 +25613,9 @@ mod tests {
         assert!(w.actor.subscriptions.is_empty() && w.actor.sub_index.is_empty());
     }
 
-    /// The late reap — a send that finds the report receiver
-    /// closed while the control receiver is still open (so the up-front check
-    /// did not fire) — also answers `InvalidSubscription`.
+    /// The late reap — a send that finds the report receiver closed while the
+    /// control receiver is still open (so the up-front check did not fire) —
+    /// also answers `InvalidSubscription`.
     #[tokio::test]
     async fn a_report_whose_report_receiver_is_gone_is_answered_invalid_subscription() {
         let mut w = wired_actor();
@@ -25650,8 +25640,8 @@ mod tests {
         assert!(w.actor.subscriptions.is_empty(), "reaped");
     }
 
-    /// A steady-state report that does not parse is
-    /// answered `InvalidAction` (it used to be dropped silently).
+    /// A steady-state report that does not parse is answered `InvalidAction`
+    /// (it used to be dropped silently).
     #[tokio::test]
     async fn a_malformed_steady_state_report_is_answered_invalid_action() {
         let mut w = wired_actor();
@@ -25696,11 +25686,11 @@ mod tests {
         );
     }
 
-    /// A publisher may report on any session it holds with
-    /// us. A report for a live subscription that arrives on a session other
-    /// than its own is matched by (fabric, peer node, subscription id), delivered,
-    /// acked Success, and the subscription is re-keyed to that session —
-    /// taking that session's peer address, since the device may have moved.
+    /// A publisher may report on any session it holds with us. A report for a
+    /// live subscription that arrives on a session other than its own is
+    /// matched by (fabric, peer node, subscription id), delivered, acked
+    /// Success, and the subscription is re-keyed to that session — taking that
+    /// session's peer address, since the device may have moved.
     /// (`InMemoryDatagram::send_to` ignores the address, so the stored peer is
     /// what is asserted.)
     #[tokio::test]
@@ -25752,8 +25742,8 @@ mod tests {
             .contains_key(&(established_on, 0x1234_5678)));
     }
 
-    /// A re-keyed subscription whose arriving session has no
-    /// stamped address takes the address the report came from.
+    /// A re-keyed subscription whose arriving session has no stamped address
+    /// takes the address the report came from.
     #[tokio::test]
     async fn a_report_on_another_session_without_an_address_rekeys_to_its_source() {
         let mut w = wired_actor();
@@ -25776,10 +25766,9 @@ mod tests {
         assert_eq!(w.actor.subscriptions[&SubId(1)].peer, w.dev.local_addr());
     }
 
-    /// A subscription id that matches two of the node's
-    /// subscriptions elsewhere (a non-compliant device reusing ids) is
-    /// treated as unknown: answered `InvalidSubscription`, nothing delivered,
-    /// nothing re-keyed.
+    /// A subscription id that matches two of the node's subscriptions elsewhere
+    /// (a non-compliant device reusing ids) is treated as unknown: answered
+    /// `InvalidSubscription`, nothing delivered, nothing re-keyed.
     #[tokio::test]
     async fn a_report_matching_two_subscriptions_elsewhere_is_unknown() {
         let mut w = wired_actor();
@@ -25813,10 +25802,10 @@ mod tests {
         assert_eq!(w.actor.subscriptions[&SubId(2)].session_id, second_session);
     }
 
-    /// The cross-session lookup matches (fabric, node,
-    /// subscription id), as chip does. A report on a session whose peer is the
-    /// same node id on another fabric is unknown — answered
-    /// `InvalidSubscription`, nothing delivered, nothing re-keyed.
+    /// The cross-session lookup matches (fabric, node, subscription id), as
+    /// chip does. A report on a session whose peer is the same node id on
+    /// another fabric is unknown — answered `InvalidSubscription`, nothing
+    /// delivered, nothing re-keyed.
     #[tokio::test]
     async fn a_report_on_a_session_of_another_fabric_is_unknown() {
         let mut w = wired_actor();
@@ -25849,10 +25838,10 @@ mod tests {
         );
     }
 
-    /// After a cancel purged an in-flight attempt, a priming
-    /// report the device sends on that exchange is no longer the handshake's;
-    /// it is answered `InvalidSubscription` (so the device drops the
-    /// subscription it just created) and reaches no consumer.
+    /// After a cancel purged an in-flight attempt, a priming report the device
+    /// sends on that exchange is no longer the handshake's; it is answered
+    /// `InvalidSubscription` (so the device drops the subscription it just
+    /// created) and reaches no consumer.
     #[tokio::test]
     async fn a_late_priming_report_after_cancel_is_answered_invalid_subscription() {
         let mut w = wired_actor();
@@ -25898,10 +25887,10 @@ mod tests {
         assert!(w.next_sent(NOTHING_SENT_WITHIN).await.is_none());
     }
 
-    /// A liveness timeout drops the subscription's own route,
-    /// so the immediate retry misses the cache and waits on a fresh connect
-    /// (a fresh CASE) instead of going out on the probably-dead session; the
-    /// session, now referenced by nothing, is removed.
+    /// A liveness timeout drops the subscription's own route, so the immediate
+    /// retry misses the cache and waits on a fresh connect (a fresh CASE)
+    /// instead of going out on the probably-dead session; the session, now
+    /// referenced by nothing, is removed.
     #[tokio::test]
     async fn a_liveness_timeout_evicts_its_own_route_so_the_retry_runs_a_fresh_case() {
         let mut actor = actor_with_one_fabric();
@@ -25932,8 +25921,8 @@ mod tests {
         );
     }
 
-    /// The eviction lives in `check_liveness`, not in
-    /// `begin_resubscribe`, which `resubscribe_stranded` also calls.
+    /// The eviction lives in `check_liveness`, not in `begin_resubscribe`,
+    /// which `resubscribe_stranded` also calls.
     #[test]
     fn a_stranded_resubscribe_does_not_evict_the_route() {
         let mut actor = actor_with_one_fabric();
@@ -25949,10 +25938,10 @@ mod tests {
         assert!(actor.cache.contains_key(&(fabric_id, 0x42)), "route kept");
     }
 
-    /// A liveness timeout on a subscription whose consumer
-    /// is gone keeps the route — `begin_resubscribe` reaps it, so no retry
-    /// follows and there is nothing to run a fresh CASE for. The session the
-    /// route points at stays with it.
+    /// A liveness timeout on a subscription whose consumer is gone keeps the
+    /// route — `begin_resubscribe` reaps it, so no retry follows and there is
+    /// nothing to run a fresh CASE for. The session the route points at stays
+    /// with it.
     #[test]
     fn a_liveness_timeout_on_a_consumer_gone_subscription_keeps_the_route() {
         let mut actor = actor_with_one_fabric();
@@ -25975,9 +25964,9 @@ mod tests {
         assert!(actor.resubscribes.is_empty(), "no retry is scheduled");
     }
 
-    /// A route already replaced by a newer session is kept
-    /// (chip spares sessions with newer peer activity); the timed-out
-    /// subscription's old session, referenced by nothing, is removed.
+    /// A route already replaced by a newer session is kept (chip spares
+    /// sessions with newer peer activity); the timed-out subscription's old
+    /// session, referenced by nothing, is removed.
     #[test]
     fn a_liveness_timeout_keeps_a_route_already_replaced_by_a_newer_session() {
         let mut actor = actor_with_one_fabric();
@@ -25998,9 +25987,9 @@ mod tests {
         assert!(actor.sessions.get(old_session).is_none(), "orphan removed");
     }
 
-    /// Two stale siblings on one session timing out in the same
-    /// pass — the session goes once the last `SubEntry` leaves it, which is
-    /// why the orphan test runs after `begin_resubscribe`, per subscription.
+    /// Two stale siblings on one session timing out in the same pass — the
+    /// session goes once the last `SubEntry` leaves it, which is why the orphan
+    /// test runs after `begin_resubscribe`, per subscription.
     #[test]
     fn two_stale_siblings_on_one_session_remove_it_only_after_the_last() {
         let mut actor = actor_with_one_fabric();
@@ -26049,9 +26038,9 @@ mod tests {
         assert_eq!(actor.subscriptions[&SubId(2)].session_id, sid);
     }
 
-    /// A timed-out resubscribe drops the route, not a session a
-    /// sibling still uses (0.16 removed the session, stranding the sibling and
-    /// any in-flight invoke on it).
+    /// A timed-out resubscribe drops the route, not a session a sibling still
+    /// uses (0.16 removed the session, stranding the sibling and any in-flight
+    /// invoke on it).
     #[tokio::test]
     async fn a_timed_out_resubscribe_evicts_only_the_route_and_spares_a_siblings_session() {
         let mut actor = actor_with_one_fabric();
@@ -26082,9 +26071,8 @@ mod tests {
         assert_eq!(queued_state(&actor, 1).0, 2, "rescheduled");
     }
 
-    /// After a resubscribe timeout, a session nothing
-    /// references any more is removed, so it cannot crowd out live ones at
-    /// the session table's cap.
+    /// After a resubscribe timeout, a session nothing references any more is
+    /// removed, so it cannot crowd out live ones at the session table's cap.
     #[tokio::test]
     async fn an_unreferenced_session_is_removed_after_a_resubscribe_timeout() {
         let mut actor = actor_with_one_fabric();
@@ -26100,8 +26088,8 @@ mod tests {
         assert!(actor.sessions.get(sid).is_none());
     }
 
-    /// A session with an operation still in flight on it is
-    /// never removed as an orphan, even when the cache has moved on.
+    /// A session with an operation still in flight on it is never removed as an
+    /// orphan, even when the cache has moved on.
     #[tokio::test]
     async fn a_session_with_an_op_in_flight_is_never_removed_as_an_orphan() {
         let mut actor = actor_with_one_fabric();
@@ -26122,9 +26110,9 @@ mod tests {
         );
     }
 
-    /// A round trip whose MRP
-    /// retransmissions run out removes its session along with the route once
-    /// nothing else uses it — and it still reconnects and re-sends once.
+    /// A round trip whose MRP retransmissions run out removes its session along
+    /// with the route once nothing else uses it — and it still reconnects and
+    /// re-sends once.
     #[tokio::test]
     async fn a_round_trip_timeout_removes_its_session_once_nothing_uses_it() {
         let mut actor = actor_with_one_fabric();
@@ -26170,8 +26158,8 @@ mod tests {
         assert_eq!(actor.pending_connects[&0x42].len(), 1, "re-send queued");
     }
 
-    /// Re-keying a subscription to the session its report arrived
-    /// on can leave its old session referenced by nothing; it is removed.
+    /// Re-keying a subscription to the session its report arrived on can leave
+    /// its old session referenced by nothing; it is removed.
     #[tokio::test]
     async fn a_rekey_removes_the_orphaned_old_session() {
         let mut w = wired_actor();
@@ -26235,10 +26223,10 @@ mod tests {
         }
     }
 
-    /// The device for the sibling end-to-end test. It models the
-    /// publisher rule the test is about, Matter 1.4 §8.5: a `SubscribeRequest`
-    /// with `KeepSubscriptions = false` terminates every other subscription
-    /// this subscriber holds here.
+    /// The device for the sibling end-to-end test. It models the publisher rule
+    /// the test is about, Matter 1.4 §8.5: a `SubscribeRequest` with
+    /// `KeepSubscriptions = false` terminates every other subscription this
+    /// subscriber holds here.
     ///
     /// - The 1st request (A) gets max interval 0 and no reports, so its
     ///   liveness trips after `LIVENESS_GRACE`.
@@ -26370,10 +26358,10 @@ mod tests {
         keep_endpoint_open(io);
     }
 
-    /// Two subscriptions to one node; one goes
-    /// through a resubscribe (liveness, then a fresh CASE session); the other
-    /// must keep receiving reports afterwards — the device would have
-    /// terminated it had any request said `KeepSubscriptions = false`.
+    /// Two subscriptions to one node; one goes through a resubscribe (liveness,
+    /// then a fresh CASE session); the other must keep receiving reports
+    /// afterwards — the device would have terminated it had any request said
+    /// `KeepSubscriptions = false`.
     #[tokio::test]
     #[allow(clippy::too_many_lines)] // one linear scenario: two subscribes, a resubscribe, a report
     async fn sibling_subscriptions_survive_each_others_resubscribe() {
@@ -26508,9 +26496,8 @@ mod tests {
         keep_endpoint_open(io);
     }
 
-    /// A device that rejects the first subscribe
-    /// fails it with `SubscribeRejected(0x89)` well under the 30 s response
-    /// deadline.
+    /// A device that rejects the first subscribe fails it with
+    /// `SubscribeRejected(0x89)` well under the 30 s response deadline.
     #[tokio::test]
     async fn a_rejected_first_subscribe_fails_fast_with_the_device_status() {
         let Harness {
@@ -26562,11 +26549,11 @@ mod tests {
 
     // --- watch re-query cadence (spec 2026-10-04) ---
 
-    /// While the watch holds the subtype browse it is
-    /// re-queried one step after the watch starts, then on an interval that
-    /// doubles up to the cap — 30, 90, 210, 450 s, then every 300 s in
-    /// production — and never before the first step. Driven with a synthetic
-    /// `now` on a grid of half steps, so an early or late re-query shows.
+    /// While the watch holds the subtype browse it is re-queried one step after
+    /// the watch starts, then on an interval that doubles up to the cap — 30,
+    /// 90, 210, 450 s, then every 300 s in production — and never before the
+    /// first step. Driven with a synthetic `now` on a grid of half steps, so an
+    /// early or late re-query shows.
     #[tokio::test]
     async fn the_watch_requeries_on_a_capped_doubling_cadence() {
         assert_eq!(
@@ -26602,9 +26589,9 @@ mod tests {
         assert_eq!(s.stops, Vec::<QueryHandle>::new());
     }
 
-    /// No re-query while the base-type fallback browse
-    /// is live (a resolve is already driving queries, and #113 forbids acting
-    /// on the subtype beside it); re-querying resumes once it closes.
+    /// No re-query while the base-type fallback browse is live (a resolve is
+    /// already driving queries, and #113 forbids acting on the subtype beside
+    /// it); re-querying resumes once it closes.
     #[tokio::test]
     async fn the_watch_never_requeries_beside_a_live_base_browse() {
         let (discovery, state) = watch_discovery();
@@ -26645,12 +26632,11 @@ mod tests {
         );
     }
 
-    /// Equal handles: a `Discovery` that keeps the
-    /// trait default for `query_operational_fabric` hands back one handle for
-    /// both browses. While the base browse holds it too, it is not
-    /// re-queried. Once the base browse lets go, the watch's rule applies to
-    /// the handle it still holds — a base-type browse, re-queried on the
-    /// cadence (accepted, and documented on
+    /// Equal handles: a `Discovery` that keeps the trait default for
+    /// `query_operational_fabric` hands back one handle for both browses. While
+    /// the base browse holds it too, it is not re-queried. Once the base browse
+    /// lets go, the watch's rule applies to the handle it still holds — a
+    /// base-type browse, re-queried on the cadence (accepted, and documented on
     /// `resubscribe_now`; such a `Discovery` normally keeps the no-op default
     /// `requery`).
     #[tokio::test]
@@ -26692,9 +26678,9 @@ mod tests {
         );
     }
 
-    /// `close_subtype_browse` (every close path goes
-    /// through it) clears the schedule, so a reopened watch starts at the
-    /// first step instead of re-querying at once on a stale instant.
+    /// `close_subtype_browse` (every close path goes through it) clears the
+    /// schedule, so a reopened watch starts at the first step instead of
+    /// re-querying at once on a stale instant.
     #[tokio::test]
     async fn closing_the_subtype_browse_clears_the_requery_schedule() {
         let (discovery, state) = watch_discovery();
@@ -26771,10 +26757,10 @@ mod tests {
         );
     }
 
-    /// Once [`REQUERY_FAST_DRAIN`] has passed since the
-    /// re-query, the watch is back on its 1 s drain tick. The re-query is
-    /// driven at a synthetic instant far enough in the past that its window
-    /// has already closed by the real clock `drive_pending_resolves` reads.
+    /// Once [`REQUERY_FAST_DRAIN`] has passed since the re-query, the watch is
+    /// back on its 1 s drain tick. The re-query is driven at a synthetic
+    /// instant far enough in the past that its window has already closed by the
+    /// real clock `drive_pending_resolves` reads.
     #[tokio::test]
     async fn after_the_fast_drain_window_the_watch_drains_on_its_tick() {
         let (discovery, state) = watch_discovery();
@@ -26800,9 +26786,9 @@ mod tests {
         );
     }
 
-    /// `close_subtype_browse` clears the fast-drain window
-    /// with the rest of the watch's re-query state, so a reopened watch starts
-    /// on its 1 s drain tick rather than inheriting a closed browse's window.
+    /// `close_subtype_browse` clears the fast-drain window with the rest of the
+    /// watch's re-query state, so a reopened watch starts on its 1 s drain tick
+    /// rather than inheriting a closed browse's window.
     #[tokio::test]
     async fn closing_the_subtype_browse_clears_the_fast_drain_window() {
         let (discovery, state) = watch_discovery();
@@ -26829,10 +26815,9 @@ mod tests {
         );
     }
 
-    /// Once nothing waits, the
-    /// schedule goes even while a parked resolve keeps the subtype browse
-    /// open, so the next episode starts one full step out instead of
-    /// re-querying at once on a past-due instant.
+    /// Once nothing waits, the schedule goes even while a parked resolve keeps
+    /// the subtype browse open, so the next episode starts one full step out
+    /// instead of re-querying at once on a past-due instant.
     #[tokio::test]
     async fn the_requery_schedule_is_dropped_when_the_watch_is_not_needed() {
         let (discovery, state) = watch_discovery();
@@ -26876,10 +26861,9 @@ mod tests {
         assert_eq!(actor.watch_requery_at, Some(t1 + ADVERT_REQUERY_FIRST));
     }
 
-    /// A node newly entering an
-    /// episode restarts the cadence at its first step — so it gets the 30 s →
-    /// 5 min sequence whatever other nodes already wait — but never later than
-    /// a re-query already scheduled.
+    /// A node newly entering an episode restarts the cadence at its first step
+    /// — so it gets the 30 s → 5 min sequence whatever other nodes already wait
+    /// — but never later than a re-query already scheduled.
     #[tokio::test]
     async fn a_newly_lost_node_restarts_the_requery_cadence() {
         let (discovery, state) = watch_discovery();
@@ -26933,13 +26917,13 @@ mod tests {
         );
     }
 
-    /// End to end over the loopback harness: a
-    /// subscription goes silent, its retry fails against the powered-off
-    /// device and is pushed 10 minutes out. The device comes back, but its
-    /// announcement never reaches the controller's subtype browse: it shows up
-    /// only in answer to a fresh query. The watch's re-query finds it, and the
-    /// subscription is re-established within about one cadence step — long
-    /// before the 600 s retry.
+    /// End to end over the loopback harness: a subscription goes silent, its
+    /// retry fails against the powered-off device and is pushed 10 minutes out.
+    /// The device comes back, but its announcement never reaches the
+    /// controller's subtype browse: it shows up only in answer to a fresh
+    /// query. The watch's re-query finds it, and the subscription is
+    /// re-established within about one cadence step — long before the 600 s
+    /// retry.
     #[tokio::test]
     #[allow(clippy::too_many_lines)] // one linear scenario: subscribe, outage, backoff, missed announcement, re-query, recovery
     async fn a_requery_finds_a_device_whose_announcement_was_missed() {
