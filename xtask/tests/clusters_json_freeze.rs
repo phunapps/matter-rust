@@ -446,6 +446,12 @@ const NEWER_IN_THE_MODEL: [(&str, u64, u64); 28] = [
     ("WindowCovering", 6, 8),
 ];
 
+/// How to bring chip-1.4.2.json and clusters.json back in step (the
+/// recovery the script's own docstring gives).
+const CHIP_FACTS_RECOVERY: &str = "the frozen revisions and clusters.json are out of step: run \
+     CHIP_FACTS_BOOTSTRAP=1 cargo xtask dump-model, then python3 scripts/chip-facts.py <chip> --write, \
+     then cargo xtask dump-model";
+
 #[test]
 fn cluster_revisions_are_the_frozen_1_4_2_ones() {
     // `revision` (CLUSTER_REVISION) comes from chip-1.4.2.json, which
@@ -467,7 +473,10 @@ fn cluster_revisions_are_the_frozen_1_4_2_ones() {
     for c in clusters(&v) {
         let name = c["name"].as_str().unwrap();
         names.push(name);
-        assert_eq!(c["revision"], table[name], "{name}");
+        let frozen = table
+            .get(name)
+            .unwrap_or_else(|| panic!("{name}: no row in chip-1.4.2.json; {CHIP_FACTS_RECOVERY}"));
+        assert_eq!(&c["revision"], frozen, "{name}; {CHIP_FACTS_RECOVERY}");
         let (rev, model) = (
             c["revision"].as_u64().unwrap(),
             c["modelRevision"].as_u64().unwrap(),
@@ -483,7 +492,10 @@ fn cluster_revisions_are_the_frozen_1_4_2_ones() {
     let mut keys: Vec<&str> = table.keys().map(String::as_str).collect();
     names.sort_unstable();
     keys.sort_unstable();
-    assert_eq!(keys, names);
+    assert_eq!(
+        keys, names,
+        "chip-1.4.2.json's revision rows are not the generated clusters; {CHIP_FACTS_RECOVERY}"
+    );
     newer.sort_unstable();
     assert_eq!(newer, NEWER_IN_THE_MODEL);
 }
@@ -3324,6 +3336,15 @@ fn content_control_is_provisional_and_keeps_its_shapes() {
     );
 }
 
+/// Whether datatype `d` has a field marked secret.
+fn holds_secret(d: &Value) -> bool {
+    d["fields"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|f| f["secret"] == true)
+}
+
 /// The secret-holding structs reachable from `start` through a field's type or
 /// list entry type, at any depth (`start` itself excluded unless a cycle leads
 /// back to it).
@@ -3331,13 +3352,6 @@ fn secret_holders_below<'a>(
     dts: &std::collections::HashMap<&'a str, &'a Value>,
     start: &'a str,
 ) -> Vec<&'a str> {
-    let holds_secret = |d: &Value| {
-        d["fields"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .any(|f| f["secret"] == true)
-    };
     let mut found = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut stack = vec![start];
@@ -3379,15 +3393,6 @@ fn a_request_reaches_a_secret_struct_only_as_a_direct_argument() {
             .iter()
             .map(|d| (d["name"].as_str().unwrap(), d))
             .collect();
-        let holds_secret = |name: &str| {
-            dts.get(name).is_some_and(|d| {
-                d["fields"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .any(|f| f["secret"] == true)
-            })
-        };
         for cmd in c["commands"].as_array().unwrap() {
             if cmd["direction"] != "request" {
                 continue;
@@ -3401,7 +3406,7 @@ fn a_request_reaches_a_secret_struct_only_as_a_direct_argument() {
                 );
                 if let Some(entry) = f["entryType"].as_str() {
                     assert!(
-                        !holds_secret(entry),
+                        !dts.get(entry).is_some_and(|d| holds_secret(d)),
                         "{at}: a list of secret-holding {entry}"
                     );
                     assert_eq!(

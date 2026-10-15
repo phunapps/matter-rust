@@ -9,21 +9,26 @@ thing that reads chip, and it is dev-only like scripts/chip-xml-conformance.py.
 
 Facts:
   revisions    each generated cluster's revision in chip's
-               data_model/1.4.2/clusters XML (the checkout's working tree).
-               Emitted as CLUSTER_REVISION. A generated cluster that is not
+               data_model/1.4.2/clusters XML (the checkout's working tree),
+               1 to 65535. Emitted as CLUSTER_REVISION. A cluster id in two
+               XML files stops the script. A generated cluster that is not
                in that XML stops the script unless REVISIONS_BY_HAND below
                names its revision: no silent fallback to the model's.
   provisional  generated elements chip marks provisional that the codegen
                model does not (clusters.json `provisional`), each with where
                chip marks it. Sources, all of chip's 1.4.2:
                  data_model/1.4.2 XML at the working tree, and at the tag
-                 v1.4.2.0 (`git show`): <provisionalConform/> on a feature,
-                 attribute, command, event, field, enum item or bitfield,
-                 directly or as the first branch of <otherwiseConform>;
+                 v1.4.2.0 (`git show`): <provisionalConform/> on a cluster id,
+                 feature, attribute, command, event, field, enum item or
+                 bitfield, directly or as the first branch of
+                 <otherwiseConform>;
                  controller-clusters.matter at v1.4.2.0: `provisional` on a
                  cluster, attribute or event.
                An element of a cluster that is provisional as a whole (in the
-               model or in chip) is not listed on its own.
+               model or in chip) is not listed on its own. A chip mark on an
+               element the model does not generate is listed on stderr (a
+               warning, in both modes), never dropped silently. Commands, and
+               their fields, are matched by id and direction, not by name.
 
 Element keys use clusters.json names: `<Cluster>` for a whole cluster, else
 `<Cluster>.<Kind>.<Name>` with Kind one of Feature, Attribute, Command,
@@ -43,6 +48,9 @@ Python 3 standard library only.
 Usage:
     python3 scripts/chip-facts.py <chip-checkout>            # check (exit 1 on drift)
     python3 scripts/chip-facts.py <chip-checkout> --write    # rewrite the file
+
+Check mode also notes (without failing) when the checkout's HEAD or v1.4.2.0
+differs from the commits the file records.
 
 Exit codes: 0 clean, 1 drift, 2 usage or input error.
 """
@@ -118,7 +126,9 @@ def xml_roots(read_files):
 
 
 def by_cluster_id(roots):
-    """cluster id -> (file name, root, [base roots, nearest first])."""
+    """cluster id -> (file name, root, [base roots, nearest first], the
+    <clusterId> element). A cluster id in two files stops the script: which
+    one chip means would otherwise depend on file-name order."""
     by_name = {re.sub(r" Cluster$", "", r.get("name") or ""): r for _, r in roots}
     out = {}
     for fname, root in roots:
@@ -137,16 +147,40 @@ def by_cluster_id(roots):
             chain.append(cur)
         for cid in ids.findall("clusterId"):
             if cid.get("id") is not None:
-                out[num(cid.get("id"), f"{fname} clusterId")] = (fname, root, chain)
+                k = num(cid.get("id"), f"{fname} clusterId")
+                if k in out and out[k][0] != fname:
+                    die(f"cluster id {k:#06x} is in both {out[k][0]} and {fname}")
+                out[k] = (fname, root, chain, cid)
     return out
 
 
-def xml_marks(root, chain):
+DIRECTIONS = {"commandToServer": "request", "responseFromServer": "response"}
+
+
+def xml_marks(root, chain, fname):
     """Provisional marks of one XML cluster and its bases, as a set of
-    (kind, key): ("Feature", code), ("Attribute", id), ("Command", norm name),
-    ("Event", id), ("Field", (norm owner, id)), ("Value", (norm owner, value)).
-    A derived cluster's element overrides its base's (the nearest wins)."""
+    (kind, key): ("Feature", code), ("Attribute", id), ("Command", (id,
+    direction)), ("Event", id), ("Field", (owner, id)) with owner a command's
+    (id, direction) or an event's or datatype's norm name, and ("Value",
+    (norm owner, value)). A derived cluster's element overrides its base's
+    (the nearest wins)."""
     marks = {}
+    # A derived cluster's command override may omit `direction`: it is the
+    # base command's of the same id and name.
+    base_dirs = {}
+
+    def command_key(e):
+        cid = num(e.get("id"), f"{fname} command id")
+        d = e.get("direction")
+        if d is None:
+            d = base_dirs.get((cid, norm(e.get("name"))))
+            if d is None:
+                die(f"{fname}: command {e.get('name')!r} has no direction, and no base "
+                    "command has its id and name")
+        elif d not in DIRECTIONS:
+            die(f"{fname}: command {e.get('name')!r} has direction {d!r}")
+        base_dirs[(cid, norm(e.get("name")))] = d
+        return (cid, DIRECTIONS[d])
 
     def put(key, el):
         # An override without a conformance of its own keeps the base's.
@@ -165,14 +199,18 @@ def xml_marks(root, chain):
         for kind, tag in (("Command", "command"), ("Event", "event")):
             group = r.find(f"{tag}s")
             for e in group.findall(tag) if group is not None else []:
-                key = (kind, norm(e.get("name")) if kind == "Command"
-                       else num(e.get("id"), "event id") if e.get("id") is not None else None)
-                if key[1] is None:
+                if e.get("id") is None:
                     continue
-                put(key, e)
+                if kind == "Command":
+                    key = command_key(e)
+                    owner = key
+                else:
+                    key = num(e.get("id"), "event id")
+                    owner = norm(e.get("name"))
+                put((kind, key), e)
                 for fl in e.findall("field"):
                     if fl.get("id") is not None:
-                        put(("Field", (norm(e.get("name")), num(fl.get("id"), "field id"))), fl)
+                        put(("Field", (owner, num(fl.get("id"), "field id"))), fl)
         dts = r.find("dataTypes")
         for d in list(dts) if dts is not None else []:
             owner = norm(d.get("name"))
@@ -230,7 +268,7 @@ def model_element(c, kind, key):
                 return f"{name}.Attribute.{a['name']}", bool(a.get("provisional"))
     if kind == "Command":
         for cmd in c["commands"]:
-            if norm(cmd["name"]) == key:
+            if (cmd["id"], cmd["direction"]) == key:
                 return f"{name}.Command.{cmd['name']}", bool(cmd.get("provisional"))
     if kind == "Event":
         for e in c.get("events", []):
@@ -238,12 +276,15 @@ def model_element(c, kind, key):
                 return f"{name}.Event.{e['name']}", bool(e.get("provisional"))
     if kind == "Field":
         owner, fid = key
-        owners = [*c["commands"], *c.get("events", []), *c["datatypes"]]
+        if isinstance(owner, tuple):  # a command's (id, direction)
+            owners = [o for o in c["commands"] if (o["id"], o["direction"]) == owner]
+        else:
+            owners = [o for o in [*c.get("events", []), *c["datatypes"]]
+                      if norm(o["name"]) == owner]
         for o in owners:
-            if norm(o["name"]) == owner:
-                for f in o.get("fields") or []:
-                    if f["id"] == fid:
-                        return f"{name}.Field.{o['name']}.{f['name']}", bool(f.get("provisional"))
+            for f in o.get("fields") or []:
+                if f["id"] == fid:
+                    return f"{name}.Field.{o['name']}.{f['name']}", bool(f.get("provisional"))
     if kind == "Value":
         owner, value = key
         for d in c["datatypes"]:
@@ -259,13 +300,13 @@ def model_element(c, kind, key):
 
 
 def compute(chip, model):
+    if not os.path.isdir(os.path.join(chip, XML_DIR)):
+        die(f"no {XML_DIR} under {chip} (is it a connectedhomeip checkout?)")
     head = git(chip, "rev-parse", "HEAD").strip()
     release = git(chip, "rev-parse", f"{RELEASE}^{{commit}}").strip()
 
     def worktree_files():
         d = os.path.join(chip, XML_DIR)
-        if not os.path.isdir(d):
-            die(f"no {XML_DIR} under {chip} (is it a connectedhomeip checkout?)")
         for f in sorted(os.listdir(d)):
             if f.endswith(".xml"):
                 with open(os.path.join(d, f), encoding="utf-8") as fh:
@@ -280,12 +321,15 @@ def compute(chip, model):
     tagged = by_cluster_id(xml_roots(release_files))
     codegen = codegen_marks(git(chip, "show", f"{RELEASE}:{CODEGEN}"))
 
-    revisions, marks = {}, {}
+    revisions, marks, unmatched = {}, {}, []
     for c in model["clusters"]:
         hit = worktree.get(c["id"])
         if hit is not None:
-            fname, root, _ = hit
-            revisions[c["name"]] = num(root.get("revision"), f"{fname} revision")
+            fname, root, _, _ = hit
+            rev = num(root.get("revision"), f"{fname} revision")
+            if not 1 <= rev <= 0xFFFF:
+                die(f"{fname} revision {rev} is not a cluster revision (1 to 65535)")
+            revisions[c["name"]] = rev
         elif c["name"] in REVISIONS_BY_HAND:
             revisions[c["name"]] = REVISIONS_BY_HAND[c["name"]][0]
         else:
@@ -295,9 +339,11 @@ def compute(chip, model):
         sources = {}
         for label, table in ((XML_DIR, worktree), (f"{XML_DIR} at {RELEASE}", tagged)):
             if c["id"] in table:
-                _, r, chain = table[c["id"]]
-                for m in xml_marks(r, chain):
+                fname, r, chain, cid = table[c["id"]]
+                for m in xml_marks(r, chain, fname):
                     sources.setdefault(m, []).append(label)
+                if provisional(cid):
+                    sources.setdefault(("Cluster", None), []).append(label)
         for m in codegen.get(c["id"], set()):
             sources.setdefault(m, []).append(f"controller-clusters.matter at {RELEASE}")
         whole = ("Cluster", None) in sources or c.get("provisional")
@@ -306,10 +352,18 @@ def compute(chip, model):
                 continue
             found = model_element(c, kind, key)
             if found is None:
-                continue  # not generated (a 1.4 element the model dropped, or excluded)
+                # Not generated (a 1.4 element the model dropped, or excluded),
+                # or chip and the model disagree on its id or name: say so.
+                unmatched.append(f"{c['name']}.{kind}.{key} ({', '.join(sorted(set(where)))})")
+                continue
             element, model_provisional = found
             if not model_provisional:
                 marks[element] = sorted(set(where))
+    if unmatched:
+        print(f"chip-facts: warning: {len(unmatched)} chip-provisional marks have no "
+              "generated element:", file=sys.stderr)
+        for u in sorted(unmatched):
+            print(f"  {u}", file=sys.stderr)
     return {
         "comment": "Written by scripts/chip-facts.py from chip's Matter 1.4.2 data; do not edit "
                    "by hand. The dump reads it: `revisions` become CLUSTER_REVISION, and each "
@@ -343,6 +397,11 @@ def main():
             committed = json.load(fh)
     except (OSError, ValueError) as e:
         die(f"cannot read {OUT}: {e} (run with --write)")
+    if committed.get("chip") != facts["chip"]:
+        rec = committed.get("chip") or {}
+        print(f"chip-facts: note: checkout is {facts['chip']['worktree'][:8]} "
+              f"({RELEASE} {facts['chip'][RELEASE][:8]}), file was written from "
+              f"{str(rec.get('worktree'))[:8]} ({RELEASE} {str(rec.get(RELEASE))[:8]})")
     drift = [k for k in FACTS if committed.get(k) != facts[k]]
     if drift:
         print(f"chip-facts: {', '.join(drift)} differ from chip; review, then run with --write")

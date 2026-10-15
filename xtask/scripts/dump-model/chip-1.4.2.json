@@ -366,7 +366,8 @@
     {
       "element": "ScenesManagement",
       "sources": [
-        "controller-clusters.matter at v1.4.2.0"
+        "controller-clusters.matter at v1.4.2.0",
+        "data_model/1.4.2/clusters at v1.4.2.0"
       ]
     },
     {
