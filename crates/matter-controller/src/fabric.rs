@@ -375,7 +375,7 @@ mod tests {
     fn default_path_has_no_icac_and_noc_issuer_is_rcac() {
         // `issue_icac = false` (the `FabricConfig::new` default) must not
         // mint an ICAC, and the commissioner NOC's issuer must be the RCAC
-        // subject (the flat RCAC->NOC path, byte-unchanged from Task 7).
+        // subject (the flat RCAC->NOC path, byte-unchanged by the optional ICAC).
         let fabric = create_fabric(&sample_cfg(), &SystemNocRng).expect("create");
         assert!(fabric.icac.is_none());
         assert_eq!(fabric.commissioner.noc.issuer(), fabric.rcac_cert.subject());

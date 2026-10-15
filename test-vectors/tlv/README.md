@@ -91,7 +91,7 @@ plus the updated `manifest.toml`.
 encodes each `encode` block via `TlvWriter`, asserts byte equality with
 the matching `.bin`, then round-trips the `.bin` through `TlvReader`
 and asserts structural equality. The harness lives with the codec
-crate, not here; see the M1 plan when it lands.
+crate, not here: `crates/matter-codec/tests/vectors.rs`.
 
 ## Schema notes
 

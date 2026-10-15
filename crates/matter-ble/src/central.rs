@@ -1467,7 +1467,7 @@ mod tests {
 
     #[test]
     fn service_discovery_error_is_distinct_from_connect() {
-        // Task 5's single connect retry keys on `Connect`; discovery exhaustion
+        // The controller's single connect retry keys on `Connect`; discovery exhaustion
         // (the macOS uuidNotAllowed stall) must NOT be that variant, or the retry
         // doubles a ~25 s known-hopeless failure.
         let e = CentralError::ServiceDiscovery("2 attempts".into());

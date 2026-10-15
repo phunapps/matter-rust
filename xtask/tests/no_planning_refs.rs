@@ -55,12 +55,13 @@ const POINTERS: &[Rule] = &[
     },
     Rule {
         what: "a review id",
-        regex: r"(?i:\breview (?:finding|focus|ruling)\b)|\breview [BCIMNS]\d+\b|\bT\d+ review\b|(?i:\b(?:final|whole-batch|per-task) review\b)",
+        regex: r"(?i:\breview (?:finding|focus|ruling)\b)|\breview [BCIMNS]\d+\b|\bT\d+ review\b|(?i:\b(?:final|whole-batch|per-task)[- ]review\b)",
         examples: &[
             "see review finding 3",
             "is unchanged (review B1)",
             "the T6 review said",
             "caught in the final review",
+            "a Final-review F1 regression",
         ],
         except: &[],
     },
@@ -72,11 +73,12 @@ const POINTERS: &[Rule] = &[
     },
     Rule {
         what: "a design-spec citation",
-        regex: r"\b(?:A3|M7) spec\b|\bspec rev(?:ision)? \d+\b|\bSpec (?:test \d+|20\d\d-\d\d-\d\d)\b|(?i:\bdesign doc\b)",
+        regex: r"\b(?:A3|M7) spec\b|\bspec rev(?:ision)? \d+\b|(?i:\bspec tests? \d+)|\bSpec 20\d\d-\d\d-\d\d\b|(?i:\bdesign doc\b)",
         examples: &[
             "/// M9-A3 spec §5.4 against real chip encoding",
             "as of spec rev 3",
             "Spec test 4 covers it",
+            "as Spec 2026-10-04 says",
             "see the design doc",
         ],
         except: &[],
@@ -153,22 +155,8 @@ const POINTERS: &[Rule] = &[
     },
 ];
 
-/// Where [`POINTERS`] are searched (git pathspecs). Widened area by area as
-/// each area is cleaned; `"."` is every tracked file.
-const POINTER_SCOPE: &[&str] = &[
-    "xtask",
-    "scripts",
-    "crates/matter-clusters",
-    "crates/integration-tests",
-    "docs/matter-js-comparison.md",
-    "docs/coverage",
-    "justfile",
-    ".github",
-    "crates/matter-commissioning",
-    "crates/matter-cert",
-    "crates/matter-crypto",
-    "crates/matter-codec",
-];
+/// Where [`POINTERS`] are searched: every tracked file.
+const POINTER_SCOPE: &[&str] = &["."];
 
 /// Never searched: `.gitignore` names the private directory in order to
 /// ignore it, this file holds the patterns, and fuzz corpora are binary.

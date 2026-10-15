@@ -1,5 +1,5 @@
 //! `parse_report_data` benchmark. Targets the per-report parse path where the
-//! 2026-06-12 audit (Task 13) removed the eager deep-clone of every Replace
+//! 2026-06-12 audit removed the eager deep-clone of every Replace
 //! value into a redundant `attributes` Vec.
 //!
 //! The signal scales with attribute count × value size: pre-audit each Replace

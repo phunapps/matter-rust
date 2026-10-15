@@ -27,8 +27,8 @@ Capturing the *decrypted* `QueryImage`/`QueryImageResponse` bytes from chip's
 `ota-provider-app` ↔ `ota-requestor-app` exchange is harder than past matter.js
 captures (the payloads are CASE-encrypted) and needs both reference apps plus a
 decrypted-payload extraction path. No connectedhomeip checkout is present in the
-F1 build environment, so this is impractical here and is **explicitly allowed to
-fall back to the roundtrip floor** by the F1 plan.
+F1 build environment, so this is impractical here, and F1 deliberately **falls
+back to the roundtrip floor**.
 
 ### What F4 adds here
 

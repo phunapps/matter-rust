@@ -321,7 +321,7 @@ impl MatterController {
         use crate::provider_server::{build_operational_service, ProviderServer};
 
         // Credential pool: one identity per CASE accept (first session +
-        // post-reboot session + retry slack — see the spec).
+        // post-reboot session + retry slack).
         const PROVIDER_CREDENTIAL_POOL: usize = 4;
 
         // Identity + offer.

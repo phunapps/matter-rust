@@ -107,9 +107,9 @@ between attempts.
 ## 3. Build matter-rust on the Pi
 
 The Pi is the safe BLE path (step above), so the commissioner binary runs
-there too. Source is already staged at `~/matter-rust` on the Pi and this
-combination (Linux arm64 + BlueZ) is cross-platform-validated per the M9-C2
-design doc.
+there too. Source is already staged at `~/matter-rust` on the Pi, and this
+combination (Linux arm64 + BlueZ) is the BLE path the chip-tool reference
+commission has already proven against this rig (see "Rig" above).
 
 ```sh
 ssh admin@192.168.1.30
@@ -242,7 +242,7 @@ IPv6 border-routing, not re-testing commissioning itself.
 ## 7. Diff the trace against the chip-tool reference
 
 The chip-tool `pairing ble-thread` reference commission (already captured
-against this rig, per the M9-C2 design doc's "Rig" section) is the
+against this rig, see "Rig" above) is the
 byte-parity oracle. Compare matter-rust's BTP/commissioning trace against
 it, focused on the network-provisioning fork (everything else is shared
 with the already-verified C1 path):
@@ -269,8 +269,8 @@ chip-tool reference entry.
 
 ## Known carry-forward: Wi-Fi failsafe sizing recheck
 
-Unrelated to Thread specifically, but surfaced during the M9-C2 design
-review: `Stage::FailsafeBeforeNetworkEnable`'s default extension (used when
+Unrelated to Thread specifically, but surfaced during M9-C2:
+`Stage::FailsafeBeforeNetworkEnable`'s default extension (used when
 `ConnectMaxTimeSeconds` is unread/zero) moved from 60 s to 90 s
 (`DEFAULT_CONNECT_MAX_TIME_SECONDS` in `commissioner.rs`) as part of
 genericizing the network stages for Thread. This is a strictly larger
@@ -290,6 +290,6 @@ flagged so it isn't forgotten.
   (`crates/matter-commissioning/src/state_machine/commissioner.rs`,
   `crates/matter-commissioning/src/thread_dataset.rs`).
 - In-process hermetic proof of the Thread fork (BTP mock, no hardware):
-  `crates/matter-commissioning/tests/commission_ble_loopback.rs`'s "M9-C2
-  Task 7" section.
+  `crates/matter-commissioning/tests/commission_ble_loopback.rs`'s
+  BLE→Thread section.
 - Byte-parity vectors: `test-vectors/thread/network_commissioning.json`.

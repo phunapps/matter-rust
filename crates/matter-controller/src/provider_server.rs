@@ -191,8 +191,8 @@ pub struct ProviderServer<D> {
     io: D,
     /// Pool of operational identities, one consumed per CASE accept (the
     /// responder state machine takes ownership of its credentials).
-    /// `serve_ota` mints these from the persisted fabric — see the spec's
-    /// sizing rationale (first session + post-reboot session + retry slack).
+    /// `serve_ota` mints these from the persisted fabric, sized for the first
+    /// session, a post-reboot session and retry slack.
     credentials: Vec<CaseCredentials>,
     roots: TrustedRoots,
     /// Base secured session id; accept N advertises `base.wrapping_add(N)` so

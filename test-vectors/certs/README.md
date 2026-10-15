@@ -34,7 +34,7 @@ against a fixed expected byte sequence.
 
 ## How the Rust harness uses these
 
-`crates/matter-cert/tests/certificates.rs` (added in M2.1 task 8) loads
+`crates/matter-cert/tests/certificates.rs` (added in M2.1) loads
 `manifest.toml`, parses each `.bin` via `MatterCertificate::from_tlv`,
 asserts any optional expected-field annotations in the manifest, then
 re-serialises via `to_tlv` and asserts byte-for-byte equality with the

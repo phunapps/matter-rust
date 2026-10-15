@@ -5,10 +5,9 @@ DAC + PAI test certificates vendored from
 at commit `43aa98c2d30ee547c6b587b9de7bbb794f175ece` (tag `v1.4.0.0`),
 from `credentials/test/attestation/`.
 
-> Note: an earlier draft of this task referenced
-> `credentials/development/attestation/`. At `v1.4.0.0` the
-> `Chip-Test-*` fixtures live under `credentials/test/attestation/`
-> instead. Filenames are unchanged.
+> Note: at `v1.4.0.0` the `Chip-Test-*` fixtures live under
+> `credentials/test/attestation/`, not
+> `credentials/development/attestation/`.
 
 | File | Role | Subject VID | Subject PID |
 |---|---|---|---|

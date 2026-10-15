@@ -30,7 +30,7 @@ thiserror = { workspace = true }
 # `btleplug` speaks `uuid::Uuid` in its public API, so `uuid` is a transitive
 # API dependency; `futures` is needed to poll btleplug's notification / event
 # streams. Both are OFF the CLAUDE.md approved-library list and are confined to
-# this optional feature (flagged for morning review per the M9-C1 design D4).
+# this optional feature.
 btleplug = { version = "=0.12.0", optional = true }
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros"], optional = true }
 uuid = { version = "1", optional = true }

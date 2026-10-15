@@ -16,7 +16,7 @@ use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 /// A read/subscribe event path with optional (wildcard) components. A `None`
 /// field is omitted from the encoded `EventPathIB`, which the IM interprets as a
 /// wildcard. `node` is normally `None` for a controller addressing the connected
-/// node; `is_urgent` requests urgent reporting on a subscription (B2).
+/// node; `is_urgent` requests urgent reporting on a subscription.
 ///
 /// `#[non_exhaustive]`: an event path may gain optional spec components; marking
 /// it keeps such additions non-breaking. Build via [`EventPath::concrete`] /

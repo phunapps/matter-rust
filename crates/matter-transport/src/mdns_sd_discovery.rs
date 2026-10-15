@@ -812,7 +812,7 @@ impl Discovery for MdnsSdDiscovery {
     /// Each handle buffers at most `FOUND_BUFFER_CAP` (256) names, oldest
     /// dropped, so a handle whose owner never calls this costs bounded memory.
     ///
-    /// One imprecision is accepted (spec 2026-10-04, review S1): mdns-sd also
+    /// One imprecision is accepted: mdns-sd also
     /// sends `ServiceRemoved` when an instance's SRV or address records expire
     /// while its PTR is still cached, so the next [`Discovery::requery`]
     /// replays that PTR and it is reported once more. For the controller that
@@ -1754,8 +1754,8 @@ mod tests {
 
     #[test]
     fn service_kind_to_dns_sd_string_exact() {
-        // Defensive: the adapter relies on these strings; if Task 3's
-        // service_type changes, this test catches it.
+        // Defensive: the adapter relies on these strings; if
+        // `ServiceKind::service_type` changes, this test catches it.
         assert_eq!(
             ServiceKind::Commissionable.service_type(),
             "_matterc._udp.local."
@@ -1852,7 +1852,7 @@ mod tests {
         found.iter().any(|n| n == instance)
     }
 
-    /// T1: a found event is fanned out to every handle of the browse, and each
+    /// A found event is fanned out to every handle of the browse, and each
     /// handle gets it exactly once.
     #[test]
     fn a_found_event_reaches_every_attached_handle_once() {
@@ -1877,7 +1877,7 @@ mod tests {
         d.stop_query(b);
     }
 
-    /// T2: found events are events, not state — a handle attached after one
+    /// Found events are events, not state — a handle attached after one
     /// does not get it — while the same late handle still gets the `surfaced`
     /// replay of resolved records.
     #[test]
@@ -1958,7 +1958,7 @@ mod tests {
         }
     }
 
-    /// T3: on a subtype browse mdns-sd reports the PTR's alias, which is the
+    /// On a subtype browse mdns-sd reports the PTR's alias, which is the
     /// BASE-type instance fullname (mdns-sd 0.21.3 `service_daemon.rs`
     /// L3087-3104); the instance label is everything before the first dot. A
     /// fullname with no instance label is ignored, not surfaced as "".
@@ -1981,7 +1981,7 @@ mod tests {
         d.stop_query(h);
     }
 
-    /// T4: `poll_results` and `poll_found` share one drain, so whichever runs
+    /// `poll_results` and `poll_found` share one drain, so whichever runs
     /// first fans every pending event out to both kinds of buffer and neither
     /// call order loses anything. Events go through `queue_for_test`, which
     /// leaves them for the next drain instead of fanning them out at once.
@@ -2012,7 +2012,7 @@ mod tests {
         d.stop_query(h);
     }
 
-    /// T5: a handle nobody calls `poll_found` on (the controller's base handle)
+    /// A handle nobody calls `poll_found` on (the controller's base handle)
     /// costs bounded memory: at the cap the OLDEST name is dropped. Driven
     /// through `fan_out_event` directly so no live daemon event can perturb the
     /// count.
@@ -2054,7 +2054,7 @@ mod tests {
     // Replay suppression (`present`).
     // ---------------------------------------------------------------------
 
-    /// Spec 2026-10-04 test 1: a found instance is reported once; a second
+    /// A found instance is reported once; a second
     /// `ServiceFound` with no `ServiceRemoved` between is a re-delivery of a
     /// PTR the daemon already held, not a new one; after a removal, a found
     /// event is a genuine return and is reported again.
@@ -2079,7 +2079,7 @@ mod tests {
         d.stop_query(h);
     }
 
-    /// Spec 2026-10-04 test 2: a replayed PTR (a requery replays every cached
+    /// A replayed PTR (a requery replays every cached
     /// one) reaches no handle as a found event, while its resolved record is
     /// still re-delivered by `poll_results` (latest-wins consumers are
     /// unaffected).
@@ -2118,7 +2118,7 @@ mod tests {
         d.stop_query(second);
     }
 
-    /// Spec 2026-10-04 test 5: `present` is keyed verbatim, matching mdns-sd's
+    /// `present` is keyed verbatim, matching mdns-sd's
     /// case-sensitive PTR alias comparison (`dns_parser.rs` 876-878): two
     /// spellings are two cache entries there and two entries here.
     #[test]
@@ -2191,7 +2191,7 @@ mod tests {
         ServiceEvent::SearchStarted(TEST_SUBTYPE.to_string())
     }
 
-    /// Spec 2026-10-04 test 4: what the old receiver holds is applied before
+    /// What the old receiver holds is applied before
     /// anything after the new receiver's `SearchStarted`. The device left (its
     /// PTR expired: `ServiceRemoved` to the old listener) and was back by the
     /// time the daemon ran the browse (a genuine `ServiceFound` on the new
@@ -2227,7 +2227,7 @@ mod tests {
         );
     }
 
-    /// Review Focus 1: the daemon sends a removal to the old listener AFTER
+    /// The daemon sends a removal to the old listener AFTER
     /// step 1 of a drain read it empty, then runs the browse command before
     /// step 2 reads the new receiver. Step 3 drains the old receiver once more
     /// at the switch point; without it the removal is dropped with the old
@@ -2261,7 +2261,7 @@ mod tests {
         );
     }
 
-    /// Spec 2026-10-04 test 4: while the new receiver is empty the daemon has
+    /// While the new receiver is empty the daemon has
     /// not run the browse command, so the old receiver is still the live
     /// listener: it is kept and drained, and a removal it carries then is
     /// applied, not lost. It is dropped once the new receiver's
@@ -2335,7 +2335,7 @@ mod tests {
         );
     }
 
-    /// Spec 2026-10-04 test 3 (review S1, accepted and pinned): mdns-sd also
+    /// An accepted imprecision, pinned: mdns-sd also
     /// reports `ServiceRemoved` when only an instance's SRV/addresses expire
     /// while its PTR stays cached. The next requery replays that PTR, and it
     /// is reported as found once — and only once: the requery after that
@@ -2380,7 +2380,7 @@ mod tests {
         );
     }
 
-    /// Spec 2026-10-04 test 4 / Review Focus 2: a requery while a swap is
+    /// A requery while a swap is
     /// still pending (no drain has seen the new receiver's first event) is a
     /// no-op — a second `browse` would retire the not-yet-live receiver and
     /// drop the live one. Per-handle buffers survive the swap untouched.
@@ -2410,7 +2410,7 @@ mod tests {
         assert_eq!(d.browses.len(), 0);
     }
 
-    /// Spec 2026-10-04 test 6: `requery` on an unknown or stopped handle does
+    /// `requery` on an unknown or stopped handle does
     /// nothing (no browse is opened or re-opened).
     #[test]
     fn requery_on_an_unknown_or_stopped_handle_is_a_no_op() {

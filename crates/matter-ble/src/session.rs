@@ -560,8 +560,9 @@ impl BtpSession {
     /// pending to piggyback on); otherwise on the 2.5 s send-ack timer. The
     /// earliest of any already-armed deadline is kept.
     fn arm_ack_timer(&mut self, now: Instant) {
-        // Task 6 will also suppress the immediate ack when outbound data is
-        // queued to piggyback on; the RX-only half never has any.
+        // Queued outbound data does not suppress the immediate deadline here:
+        // a data fragment that leaves through `next_gatt_write` first
+        // piggybacks the ack and clears the deadline.
         let candidate = if self.local_window <= IMMEDIATE_ACK_THRESHOLD {
             now
         } else {
@@ -798,7 +799,7 @@ mod tests {
     fn handle_ack_received_incorrect_sequence() {
         let t0 = Instant::now();
         let mut s = central(t0);
-        // Inject the TX-outstanding precondition (Task 6 owns the send path).
+        // Inject the TX-outstanding precondition directly, not via the send path.
         s.expecting_ack = true;
         s.tx_oldest_unacked = 0;
         s.tx_newest_unacked = 1;
@@ -897,7 +898,7 @@ mod tests {
         assert_eq!(pkt, vec![0x08, 0x00, 0x00]);
     }
 
-    // Regression (T5 review, IMPORTANT): a standalone ack we emit registers
+    // Regression: a standalone ack we emit registers
     // itself as an outstanding TX fragment (full GetAndIncrementNextTxSeqNum), so
     // (a) a valid inbound ack for that seq is accepted rather than hitting
     // expecting_ack==false -> InvalidAck, and (b) it is subject to the 15 s
@@ -1196,9 +1197,9 @@ mod tests {
         assert_eq!(s.poll_timeout(), Some(t0 + ACK_SEND_TIMEOUT));
     }
 
-    // ---- standalone-ack flow control (T6 review) ----------------------------
+    // ---- standalone-ack flow control ----------------------------------------
 
-    // Regression (T6 review, IMPORTANT): chip routes standalone acks through
+    // Regression: chip routes standalone acks through
     // DriveSending -> DoSendStandAloneAck -> SendCharacteristic, gated on GATT-op
     // in flight. A due send-ack timer with a GATT write outstanding must DEFER
     // (emit nothing, leave the ack pending, keep the timer due), then deliver on

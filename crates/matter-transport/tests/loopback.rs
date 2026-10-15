@@ -94,7 +94,7 @@ async fn full_session_roundtrip_via_real_udp() {
 
     // 4. Alice ships via transport. Prime write-readiness first — Tokio's
     //    try_send_to returns WouldBlock on a freshly-bound UDP socket
-    //    before the runtime has registered write readiness (see Task 4).
+    //    before the runtime has registered write readiness.
     alice_tx.socket().writable().await.unwrap();
     alice_tx.send(bob_addr, out1.wire_bytes).unwrap();
 

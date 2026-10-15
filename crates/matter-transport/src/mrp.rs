@@ -112,7 +112,7 @@ impl Default for MrpConfig {
     /// `initial_idle` was 4200 ms and `idle_threshold` 5 s. Neither came from
     /// the specification: `4200` appears in no version of it, in no part of
     /// connectedhomeip, and in no part of matter.js. It originated in this
-    /// project's own M5 design notes as a derivation, `300 × 14`, and the
+    /// project during M5 as a derivation, `300 × 14`, and the
     /// correct values arrived later with `for_peer` without anyone reconciling
     /// the two — leaving the same file asserting 4200 ms twelve lines above
     /// `SPEC_DEFAULT_IDLE: 500 ms`.
@@ -496,8 +496,7 @@ pub struct PreparedOutbound {
     /// Whether the local side initiated the exchange (mirrors the `I`
     /// flag).
     pub is_local_initiator: bool,
-    /// Whether a pending peer counter was piggybacked into this message
-    /// (Task 5).
+    /// Whether a pending peer counter was piggybacked into this message.
     pub piggyback_acked: bool,
 }
 

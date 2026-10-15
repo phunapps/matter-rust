@@ -132,7 +132,7 @@ pub fn handle_query_image(
 
 /// Authorise an inbound `ApplyUpdateRequest`, returning an `ApplyUpdateResponse`
 /// with `Action = Proceed` and `DelayedActionTime = 0` (this Provider has no
-/// user-consent or staggered-rollout policy yet — see the spec's deferral).
+/// user-consent or staggered-rollout policy yet; both are deferred).
 ///
 /// The request's `UpdateToken`/`NewVersion` are decoded to validate the request
 /// is well-formed, then discarded.

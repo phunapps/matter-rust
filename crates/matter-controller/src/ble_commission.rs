@@ -197,7 +197,7 @@ pub(crate) async fn run_commission_ble_task(
 
     // 4. Drive the BLE commissioning run. Network credentials are required: a
     //    BLE-only device with no Wi-Fi/Thread credentials to install is
-    //    unprovisionable (D7) — `network` may still be `AlreadyOnNetwork` for a
+    //    unprovisionable — `network` may still be `AlreadyOnNetwork` for a
     //    device that's already joined.
     let commissioner = CommissionerConfig {
         pase_attestation_challenge: [0u8; 16], // commission_ble overwrites from live PASE

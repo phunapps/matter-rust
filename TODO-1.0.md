@@ -280,7 +280,7 @@ declared VID/PID against the DAC's subject VID/PID.
    &CdSigningRoot) -> Result<(), AttestationError>`.
 2. CMS/PKCS#7 SignedData parser (likely via `cms` crate or
    hand-rolled if the surface is small enough — defer the
-   library-choice decision to the M6.4.x design).
+   library choice to M6.4.x).
 3. Bundled CSA CD signing root analogous to the bundled PAA test
    roots in `crates/matter-commissioning/src/attestation/csa_test_roots/`.
 4. New `AttestationError` variants for CD-specific failures (at
@@ -516,8 +516,8 @@ path.
 
 ### OTA provider server — residual hardening notes
 
-**Status:** CLOSED 2026-07-12. The three Importants from the multi-session
-final review were fixed first (stray frames no longer burn pooled
+**Status:** CLOSED 2026-07-12. Three important defects in the multi-session
+serve were fixed first (stray frames no longer burn pooled
 credentials `4a26ab31`; stale secured frames are skipped, not fatal
 `77815604`; the serve is pinned to its target peer `47357b61`), and both
 remaining fail-closed residuals are now fixed with loopback regressions:

@@ -1,8 +1,8 @@
 //! Matter secured-message framing (Matter Core Specification §4.4) plus the
 //! reception-side replay window (§4.6.5).
 //!
-//! The header layer is implemented in this task. AES-CCM payload encryption
-//! is added in Task 5. The replay window is added in Task 3.
+//! The module holds the header codec, AES-CCM payload encryption and
+//! decryption (unicast and group), and the replay window.
 
 use bitflags::bitflags;
 

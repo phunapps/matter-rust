@@ -954,10 +954,10 @@ published release, `0.1.0` through `0.18.1`.
   we ignore is rejected here and accepted by chip. No Interaction Model
   message comes near that depth.
 
-## Unreleased — matter-clusters 0.6.0 (in progress, M9-A3)
+## Unreleased — matter-clusters 0.6.0 (in progress)
 
 **Not released.** This section collects changes on `main` that will ship
-when M9-A3 (cluster-library completion) finishes. Nothing below is on
+when the cluster-library completion work finishes. Nothing below is on
 crates.io yet, and more will be added before the release.
 
 `matter-clusters` 0.6.0 is a breaking release. `matter-ota` must move to 0.6.0
@@ -1349,7 +1349,7 @@ unless every exchange was paced: it gets a 15-buffer PacketBuffer pool (its
 `CHIPProjectAppConfig.h` sets 500 inside `#ifndef
 CHIP_DEVICE_LAYER_TARGET_DARWIN`, which is always defined), and responses the
 previous test's controller left unACKed when it was dropped exhausted it. At
-v1.4.2.0 both tests passed unpaced throughout. With M9-A3 B7 the nightly
+v1.4.2.0 both tests passed unpaced throughout. Since the media clusters, the nightly
 runs them at v1.4.2.0 (linux-x64), and both passed in nightly 38175373715 on
 2245a81; they do not run on the Mac (tv-app needs Rosetta 2 to build on Apple
 silicon). Beyond those runs, Messages is validated by decode tests, two
@@ -1537,7 +1537,7 @@ How each of these clusters was validated:
   the block-list commands are unsupported, so the live test covers
   attributes 0, 2 and 4–7 and the status answers only), ApplicationBasic on
   its five Content App endpoints, and AccountLogin on its Vendor3 Content
-  App. Every test passed at both refs, as did B5's Messages tests in the
+  App. Every test passed at both refs, as did the Messages tests in the
   same suite.
 - **Live against chip's all-clusters** as well: WakeOnLan and LowPower,
   locally at master 5cd2917a on macOS and at v1.4.2.0 on the Pi, and in the
@@ -2527,8 +2527,8 @@ missing jitter meant multiple controllers retransmitted to a peer in lockstep.
 
 `initial_idle` was 4200 ms and `idle_threshold` 5 s, against a specified 500 ms
 and 4000 ms. `4200` appears in no version of the Matter specification, nowhere
-in connectedhomeip and nowhere in matter.js; it originated in this project's own
-M5 design notes as a derivation (`300 × 14`). `Default` is now pinned equal to
+in connectedhomeip and nowhere in matter.js; it originated in this project
+during M5 as a derivation (`300 × 14`). `Default` is now pinned equal to
 `for_peer(None, None, None)` so the two cannot drift apart again.
 
 ### Fixed — exchange ids violated §4.10.2 three ways
@@ -3804,9 +3804,9 @@ IM byte-parity tests, and the chunk byte-parity tests are all unchanged and
 are what pins this; `matter-codec`'s next publish is an additive MINOR (new
 public API only, nothing removed or retyped).
 
-**Validation for this phase (Task 10) caught a real, reproducible decode-side
+**Validation for this phase caught a real, reproducible decode-side
 regression against the `pre-phase4` criterion baseline** — exactly the risk
-the phase-4 spec itself flagged ("`next()` now routes through `next_ref` —
+flagged when phase 4 was planned ("`next()` now routes through `next_ref` —
 watch for regression here specifically"). At its peak
 `decode/report_170attr_64B` went 25.67 µs → 64.64 µs (+152%), every other
 decode bench moved +45% to +186%, and `matter-interaction`'s streaming report
@@ -3866,7 +3866,7 @@ strategy generated raw `0x1F` (the IS1 localized-string separator), which
 generator defect, not a codec bug, and is fixed by excluding `0x1F` from the
 generated character set.
 
-Bench validation against the pre-phase5 baseline (Task 14): `report_parse`
+Bench validation against the pre-phase5 baseline: `report_parse`
 and codec decode/encode are unmoved (encode/report slightly improved —
 `encode/report_170attr` −0.7%/−2.5%), and CASE handshake benches are unmoved
 once re-measured on a quiet machine — a first, contended run of
@@ -4624,7 +4624,7 @@ changes.
   `BtpSession`, strictly-serialized C1 writes, disconnect detection). Needs
   a Tokio runtime (`Manager::adapters()` panics outside one). Off-CLAUDE.md-list
   deps `uuid`/`futures` are confined to this optional feature (flagged for
-  review per the M9-C1 design).
+  review).
 - **macOS TCC handling** — `BleCentral::new()` explicitly checks
   `adapter_state() == PoweredOn` and returns an error pointing at
   `docs/runbooks/ble-commissioning.md` rather than silently finding no
@@ -5233,7 +5233,7 @@ migration step is needed for snapshots from M9-E1 or earlier.
   yet been re-exercised live against a real Wi-Fi device since the change
   — see `docs/runbooks/c2-thread-commission.md`'s carry-forward note.
 - **Hermetic Thread loopback proof** — `commission_ble_loopback.rs` gains
-  a Thread-FeatureMap mock device (M9-C2 Task 7) exercising the full fork
+  a Thread-FeatureMap mock device (M9-C2) exercising the full fork
   end-to-end (FeatureMap→Thread route, dataset provisioning via
   `AddOrUpdateThreadNetwork`, `ConnectNetwork` keyed by Extended PAN ID,
   convergence to CASE) without hardware.
@@ -5623,7 +5623,7 @@ commission) are the remaining M6 sub-milestones.
   (`case_failed_response_aborts_with_case_establishment_failed`,
   `case_failed_when_not_awaiting_returns_out_of_order`).
 - `tests/state_machine_unit.rs` gains a `transitions_are_total`
-  proptest case alongside the existing two from M6.4.1 T10.
+  proptest case alongside the existing two from M6.4.1.
 - `tests/commissioning_e2e.rs` placeholder for the public-API
   drive-through pending M6.4.6 fixtures.
 - With this sub-phase the state machine drives end-to-end from

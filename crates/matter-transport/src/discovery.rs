@@ -446,7 +446,7 @@ mod tests {
         );
     }
 
-    /// T6: `poll_found` is additive — an implementation written before it
+    /// `poll_found` is additive — an implementation written before it
     /// existed keeps compiling and reports no found events for any handle.
     #[test]
     fn default_poll_found_reports_nothing() {
@@ -476,7 +476,7 @@ mod tests {
         );
     }
 
-    /// Spec 2026-10-04 test 6: `requery` is additive — an implementation
+    /// `requery` is additive — an implementation
     /// written before it existed keeps compiling — and the default does
     /// nothing at all: it calls back into no method of the implementation.
     #[test]
