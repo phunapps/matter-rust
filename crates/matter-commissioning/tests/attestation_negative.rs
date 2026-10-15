@@ -6,8 +6,8 @@
 //! and asserts `verify_chain` returns the spec-mandated
 //! `AttestationError` variant.
 //!
-//! The 8 fixtures and their expected variants come from the M6.2
-//! design doc §Negative-path fixture matrix.
+//! The 8 fixtures form a negative-path matrix: one per chain-validation
+//! failure mode, each paired with the variant it must yield.
 
 // dac / pai / paa / paa_bytes / pai_bytes / dac_bytes are
 // spec-canonical role names from Matter §6.2.3 (Device Attestation
@@ -138,7 +138,7 @@ fn dac_with_ca_bit_yields_basic_constraints_violation() {
 
 #[test]
 fn wrong_eku_yields_invalid_chain() {
-    // Note: the spec originally said "missing-eku". But webpki (correctly,
+    // Note: a "missing-eku" fixture would not test this. webpki (correctly,
     // per RFC 5280 §4.2.1.12) treats an *absent* EKU extension as
     // unconstrained — no required-EKU check triggers. So this fixture
     // instead has an EKU extension whose contents are wrong:

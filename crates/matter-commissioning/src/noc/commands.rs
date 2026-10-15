@@ -563,7 +563,7 @@ mod tests {
     fn decode_csr_response_rejects_non_struct_outer() {
         // A well-formed TLV that is NOT the expected anonymous struct (here a
         // bare unsigned integer) must surface a structural error — NOT the
-        // misleading codec `UnexpectedEof`. (Finding #2.)
+        // misleading codec `UnexpectedEof`.
         let mut buf = Vec::new();
         let mut w = TlvWriter::new(&mut buf);
         w.put_uint(Tag::Anonymous, 7).unwrap();

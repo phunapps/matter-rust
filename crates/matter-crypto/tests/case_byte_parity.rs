@@ -4,8 +4,8 @@
 //! `test-vectors/case/` and replays it through our state machines,
 //! asserting byte-identical message output at every step.
 //!
-//! Fixtures produced by `cargo xtask capture-case` (M4.3 Task 3).
-//! Tests will fail with "fixture not found" until Task 3 lands.
+//! Fixtures produced by `cargo xtask capture-case`; a test fails with
+//! "fixture not found" if its fixture is missing.
 
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
@@ -385,7 +385,7 @@ fn fixture_noc_roundtrips_through_matter_cert() {
 /// output at every step. Also verifies that both sides derive identical session
 /// keys.
 ///
-/// Fixtures produced by `cargo xtask capture-case` (M4.3 Task 3).
+/// Fixtures produced by `cargo xtask capture-case`.
 #[test]
 fn matter_js_byte_parity_new_session() {
     let fx = load_fixture("handshake-new-session");
@@ -493,7 +493,7 @@ fn matter_js_byte_parity_new_session() {
 /// two-message exchange, and asserts byte-identical output. The shared_secret
 /// and resumption_id in the fixture are used to seed the `ResumptionRecord`.
 ///
-/// Requires fixtures from `cargo xtask capture-case` (M4.3 Task 3).
+/// Requires fixtures from `cargo xtask capture-case`.
 ///
 /// The responder is built via
 /// `case_responder_with_eph_key_and_resumption_id` so the fresh
@@ -634,7 +634,7 @@ fn matter_js_byte_parity_resumption_accepted() {
 /// the full Sigma1 → Sigma2 → Sigma3 exchange that results when the responder
 /// calls `reject_resumption()`.
 ///
-/// Requires fixtures from `cargo xtask capture-case` (M4.3 Task 3).
+/// Requires fixtures from `cargo xtask capture-case`.
 ///
 /// (The old `#[ignore]` on this test blamed a `compute_sigma1_resume_mic`
 /// composition mismatch — that was a misdiagnosis: the test fed a hardcoded

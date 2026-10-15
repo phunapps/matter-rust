@@ -1,4 +1,4 @@
-//! Gate test for the Task-8 mock-device attestation + CSR response builders.
+//! Gate test for the mock-device attestation + CSR response builders.
 //!
 //! Proves that the outputs of `support::build_attestation_response` and
 //! `support::build_csr_response` are accepted by the Commissioner's REAL

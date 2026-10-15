@@ -45,9 +45,8 @@
 //!
 //! # Dead-code allowance
 //!
-//! Items here are `pub(crate)` and consumed by the M4.1 state machines
-//! (Tasks 6/7). The allow below suppresses the lint while only this file
-//! is committed.
+//! Items here are `pub(crate)` and consumed by the CASE state machines
+//! (`initiator.rs`, `responder.rs`).
 #![allow(dead_code)]
 
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};

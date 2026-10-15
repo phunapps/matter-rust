@@ -8,8 +8,8 @@ use thiserror::Error;
 /// Errors produced by `matter-commissioning::noc`.
 ///
 /// Variants are coarse-grained — each maps to a distinct caller-side
-/// remediation path. See the M6.3 design doc's "Information leakage in
-/// error variants" table for the audit reasoning.
+/// remediation path, and no finer: a misbehaving device must not be able to
+/// use the errors it provokes to probe which check failed.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum NocError {
@@ -31,7 +31,7 @@ pub enum NocError {
     NonceMismatch,
 
     /// The DAC's signature over `NOCSR_elements || attestation_challenge`
-    /// did not verify. Coarse by design (see design doc).
+    /// did not verify. Coarse by design: it does not say why.
     #[error("DAC attestation signature over NOCSR failed")]
     BadCsrAttestationSignature,
 

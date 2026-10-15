@@ -6,7 +6,7 @@ vendored from
 at commit `43aa98c2d30ee547c6b587b9de7bbb794f175ece` (tag `v1.4.0.0`),
 from the directory `credentials/test/attestation/`.
 
-> Note: an earlier draft of this task referenced
+> Note: some references name
 > `credentials/development/attestation/`. At `v1.4.0.0` the
 > `Chip-Test-*` fixtures live under `credentials/test/attestation/`
 > instead (byte-identical copies of the two PAAs also exist under

@@ -1,6 +1,6 @@
 //! Decode benchmarks. Targets the TLV `read_value` tree-materialisation path
 //! (`read_container_body`), where the 2026-06-12 audit changed array decoding
-//! to a single allocation (Task 19) and added a per-element budget check.
+//! to a single allocation and added a per-element budget check.
 //!
 //! Run: `cargo bench --bench decode`
 //! Cross-commit compare: see the perf-baseline harness.

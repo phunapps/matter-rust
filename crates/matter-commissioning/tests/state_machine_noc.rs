@@ -36,7 +36,7 @@ fn happy_path_drives_through_csr_and_noc_to_read_network_commissioning_info() {
                 attributes,
                 // FeatureMap (0xFFFC) + ConnectMaxTimeSeconds (0x0003);
                 // the latter sizes the FailsafeBeforeNetworkEnable
-                // extension (M9-C2 D7).
+                // extension.
                 &[0xFFFC, 0x0003],
                 "reads FeatureMap + ConnectMaxTimeSeconds"
             );

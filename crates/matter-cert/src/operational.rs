@@ -310,9 +310,8 @@ pub fn icac(params: IcacParams) -> Result<UnsignedCertificate> {
 ///
 /// Byte-parity: the SKID matches
 /// `matter-commissioning::noc::issuer::issue_noc`'s existing, wire-tested
-/// computation (both go through the same §6.5.4 convention), so a later task
-/// can refactor `issue_noc` onto this constructor without changing the wire
-/// output.
+/// computation (both go through the same §6.5.4 convention), so `issue_noc`
+/// is built on this constructor without changing the wire output.
 ///
 /// # Errors
 ///

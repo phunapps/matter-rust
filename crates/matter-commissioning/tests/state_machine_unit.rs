@@ -335,7 +335,7 @@ proptest! {
         let _ = sm.poll();
     }
 
-    /// M6.4.5 T50 — for every `(Stage, Expectation, payload)` combination
+    /// For every `(Stage, Expectation, payload)` combination
     /// the state machine handles cleanly: returns `Ok` or a typed
     /// `CommissioningError` variant, no panic.
     ///
@@ -346,7 +346,7 @@ proptest! {
     /// M6.4.5 it provides coverage at the `SecurePairing` →
     /// `ReadCommissioningInfo` waiting state on top of the existing
     /// `on_response_never_panics` + `poll_never_panics` coverage from
-    /// M6.4.1 T10. Updated to 21 stages in M6.5.2 (adds
+    /// M6.4.1. Updated to 21 stages in M6.5.2 (adds
     /// `ReadNetworkCommissioningInfo`, `NetworkSetup`,
     /// `FailsafeBeforeNetworkEnable`, and `NetworkEnable`).
     #[test]

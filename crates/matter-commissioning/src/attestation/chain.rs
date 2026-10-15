@@ -55,7 +55,7 @@ static MATTER_SIG_ALGS: &[&dyn SignatureVerificationAlgorithm] = &[webpki::ring:
 /// function couldn't return it. So we [`TrustAnchor::to_owned`] the
 /// result, copying the three small slices (subject DN, SPKI, optional
 /// name constraints — together a few hundred bytes) onto the heap.
-/// T6's `verify_chain` calls this once per `verify_chain` invocation,
+/// `verify_chain` calls this once per invocation,
 /// so the cost is negligible (the path validator itself does far more
 /// allocation per call).
 ///
@@ -76,7 +76,7 @@ static MATTER_SIG_ALGS: &[&dyn SignatureVerificationAlgorithm] = &[webpki::ring:
 /// like ours that name them in signatures pull `rustls-pki-types`
 /// directly. The Cargo.toml comment on that dep records this.
 //
-// pub(crate) — the only legitimate caller is `verify_chain` (T6).
+// pub(crate) — the only legitimate caller is `verify_chain`.
 // External callers don't need `TrustAnchor` in their hands; they
 // see only [`AttestationError`] / [`ChainVerification`].
 pub(crate) fn paa_to_trust_anchor(paa: &Paa) -> Result<TrustAnchor<'static>, AttestationError> {
@@ -371,13 +371,13 @@ mod tests {
         assert_ne!(result.paa_subject, b"");
     }
 
-    // ── Fix A — VID-scoped PAA scope (Matter §6.2.2.1) ──────────────────────
+    // ── VID-scoped PAA scope (Matter §6.2.2.1) ──────────────────────────────
     //
     // These tests synthesise a fresh DAC → PAI → PAA chain whose subject
     // VIDs we control independently, using the same recipe as the
     // integration-test `build_mock_device_pki` helper (the chip
     // `gen-negative-fixtures.py` extension layout). They exercise the
-    // step-7 overlay added in this task:
+    // step-7 PAA VID-scope overlay:
     //
     //   - VID-scoped PAA whose scope MATCHES the DAC/PAI VID → accepted.
     //   - VID-scoped PAA whose scope DIFFERS from the DAC/PAI VID →

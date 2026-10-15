@@ -3,7 +3,7 @@
 //!
 //! This is the milestone green check. The controller half is the production
 //! [`matter_commissioning::driver::commission`] driver; the device half is the
-//! `support::run_mock_device` twin (Tasks 7b–11). Both run under one
+//! `support::run_mock_device` twin (`tests/support/mod.rs`). Both run under one
 //! `tokio::join!` over a single [`InMemoryDatagram`] pair. No part of
 //! `commission()` is mocked or stubbed — only the network transport and mDNS
 //! discovery are in-process.
@@ -19,7 +19,8 @@
 //!   prover via PBKDFParamResponse (see `pase.rs::run_pase`), so any valid params
 //!   are fine as long as both halves use the same ones.
 //! - **Attestation challenge:** sourced from the LIVE PASE session on both sides
-//!   (Step 0 fix to `commission()` + `run_mock_device`'s `pase_keys.attestation_key`).
+//!   (`commission()` takes it from its session; `run_mock_device` uses
+//!   `pase_keys.attestation_key`).
 //!   The controller's `pase_attestation_challenge` config field is overwritten by
 //!   `commission()`, so we set it to `[0u8; 16]` here to prove that.
 //! - **Fabric / CASE / NOC:** ONE fabric RCAC (`FabricRecord::new_root_only`).
@@ -250,9 +251,10 @@ async fn run_loopback_commission() {
 
     // ── 5. CommissionerConfig + DriverConfig (the controller under test). ─────
     //
-    // pase_attestation_challenge is intentionally [0u8; 16]: commission() (Step 0
-    // fix) overrides it with the live PASE-derived attestation_key, so the value
-    // here is irrelevant — proving the fix sources the challenge from the session.
+    // pase_attestation_challenge is intentionally [0u8; 16]: commission()
+    // overrides it with the live PASE-derived attestation_key, so the value
+    // here is irrelevant — proving commission() sources the challenge from the
+    // session.
     let commissioner = CommissionerConfig {
         pase_attestation_challenge: [0u8; 16],
         fabric: &fabric,

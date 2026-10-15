@@ -31,7 +31,7 @@ fn arb_tag() -> impl Strategy<Value = Tag> {
 }
 
 /// Generates an arbitrary scalar `Value`. Used as the leaf for the
-/// recursive container strategy in task 2.
+/// recursive container strategy, `arb_value`.
 fn arb_scalar_value() -> impl Strategy<Value = Value> {
     prop_oneof![
         any::<bool>().prop_map(Value::Bool),

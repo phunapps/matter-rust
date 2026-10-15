@@ -21,16 +21,15 @@
 //! - Reduction: `mod(bytesToNumberBE(slice), curve.n)` — big-endian
 //!   interpretation, modular reduction mod the P-256 group order n.
 //! - `L = Point.BASE.multiply(w1).toBytes(false)` — uncompressed SEC1.
-//! - HKDF info strings (for Task 4 / `spake2plus.rs`):
+//! - HKDF info strings (used in `spake2plus.rs`):
 //!   - `"ConfirmationKeys"` → 32-byte `KcAB`, split `KcA`/`KcB`.
 //!   - `"SessionKeys"` → 48-byte keys, split into decrypt/encrypt/attestation
 //!     (from `@matter/protocol/src/session/NodeSession.ts`).
 //!
 //! Matter Core Spec §3.10.2, §3.10.3, §A.4.
 
-// All items in this module are consumed by `spake2plus.rs` (Task 4).
-// Until that file is populated the compiler sees them as dead code;
-// this allow will be removed once Task 4 lands.
+// The items in this module are consumed by `spake2plus.rs`, `prover.rs` and
+// `verifier.rs`, and `pake_passcode_verifier` is re-exported from `pase`.
 #![allow(dead_code)]
 
 use std::num::NonZeroU32;

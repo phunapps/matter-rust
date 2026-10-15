@@ -47,7 +47,7 @@ const RESOLVE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_mil
 /// just been handed Wi-Fi credentials when `commission_ble` reaches
 /// `EstablishCase`, so it must still associate to the AP, obtain a DHCP lease,
 /// and announce its `_matter._tcp` operational record before the resolve can
-/// succeed — a materially longer window than the IP path's ~30 s (design D11.2).
+/// succeed — a materially longer window than the IP path's ~30 s.
 pub const BLE_RESOLVE_POLL_ATTEMPTS: u32 = 600;
 
 /// Pick the most routable address from an mDNS record's address list: the first
@@ -110,7 +110,7 @@ pub async fn resolve_operational<D: Discovery>(
 /// [`resolve_operational`] (`RESOLVE_POLL_ATTEMPTS` = 300, ~30 s); the BLE path
 /// passes [`BLE_RESOLVE_POLL_ATTEMPTS`] (600, ~60 s) because a just-provisioned
 /// device needs longer to associate to Wi-Fi and announce its operational
-/// record (design D11.2).
+/// record.
 ///
 /// # Errors
 ///
@@ -1432,7 +1432,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // run_case loopback test (M6.6.3b Task 5)
+    // run_case loopback test
     // -----------------------------------------------------------------------
 
     use matter_cert::test_support::{build_unsigned, with_signature, TestCertFields};
@@ -2071,7 +2071,7 @@ mod tests {
         );
     }
 
-    /// M9-G-d Task 2: `run_case_establish` drives the same handshake but returns
+    /// `run_case_establish` drives the same handshake but returns
     /// the [`CaseSessionOutput`] WITHOUT registering it, advertising the caller's
     /// `local_session_id` in Sigma1. The returned output must (a) carry that
     /// local id and (b) register into a fresh `SessionManager` yielding a usable

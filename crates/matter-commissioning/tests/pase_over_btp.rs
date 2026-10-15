@@ -1,7 +1,7 @@
-//! M9-C1 Task 10 floor test: the REAL PASE handshake driven through two REAL
+//! M9-C1 floor test: the REAL PASE handshake driven through two REAL
 //! [`BtpSession`] engines at the degenerate segment size 20, so every SPAKE2+
-//! message multi-fragments and the reassembly / window / ack machinery of
-//! Tasks 5-8 is exercised end to end — hardware-free.
+//! message multi-fragments and the BTP engine's reassembly / window / ack
+//! machinery is exercised end to end — hardware-free.
 //!
 //! This is the BTP-framing floor (contrast [`commission_ble_loopback`], the
 //! plain-datagram routing floor). It wires the controller's `run_pase_with`
@@ -15,7 +15,7 @@
 //!   `transport_reliable`; the device's verifier derives matching keys;
 //! - **every fragment on the wire is ≤ 20 bytes** (real segmentation happened);
 //! - **every reassembled unsecured frame has the R-bit clear** (MRP off over
-//!   the reliable transport — the T7/T8 property, re-proven through framing);
+//!   the reliable transport, re-proven here through framing);
 //! - **exactly one `send_to` per Matter message** on each side — no retransmit
 //!   fired (BTP self-reliabilizes; the unsecured stop-and-wait is off).
 

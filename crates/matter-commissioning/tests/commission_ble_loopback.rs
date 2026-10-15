@@ -1,4 +1,4 @@
-//! M9-C1 Task 9 gate: the REAL `commission_ble()` driver commissions a
+//! M9-C1 gate: the REAL `commission_ble()` driver commissions a
 //! self-contained dual-transport `MockDevice` end to end, hardware-free.
 //!
 //! Unlike [`commission_loopback`], the controller here runs PASE + every
@@ -9,7 +9,8 @@
 //! on the BTP pair and CASE on the UDP pair.
 //!
 //! This is a *plain-datagram* floor for the routing + reliability logic — the
-//! BTP-framing floor (real `BtpSession` seg/reassembly) is Task 10. It asserts:
+//! BTP-framing floor (real `BtpSession` seg/reassembly) is
+//! `tests/pase_over_btp.rs`. It asserts:
 //! - commissioning completes with the right fabric;
 //! - every unsecured frame the controller sends on the BTP pair has the R-bit
 //!   **clear** and no standalone ack ever appears there (MRP off);
@@ -454,7 +455,7 @@ async fn commission_ble_reaches_done_over_two_transports() {
     );
 }
 
-// ── M9-C2 Task 7: hermetic BLE→Thread commission (PASE→provision→CASE) ─────────
+// ── M9-C2: hermetic BLE→Thread commission (PASE→provision→CASE) ───────────────
 //
 // The Thread analog of the headline Wi-Fi gate above. The mock advertises
 // `NetworkCommissioning.FeatureMap = THREAD`, so `commission_ble` drives the
@@ -641,7 +642,7 @@ async fn commission_ble_thread_reaches_done() {
     );
 }
 
-// ── D11.3: rollback over a dead BTP session must never mask the original error ──
+// ── rollback over a dead BTP session must never mask the original error ──
 //
 // The focused paused-time unit tests on `with_response_deadline` in
 // `driver/commission.rs` cover the loop dispatch deadline in isolation. This

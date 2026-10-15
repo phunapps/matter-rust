@@ -1053,7 +1053,7 @@ impl CaseResponder {
             }
 
             // Resumption path: return Sigma2_Resume and transition directly to
-            // Complete. No Sigma3_Resume to wait for (matter.js finding from Task 1).
+            // Complete. No Sigma3_Resume to wait for (confirmed from matter.js).
             State::ReadyToSendSigma2Resume {
                 sigma2_resume_bytes,
                 session_keys,

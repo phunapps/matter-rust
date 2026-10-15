@@ -1,4 +1,4 @@
-//! Gate test for the Task-7b mock-device PKI builder.
+//! Gate test for the mock-device PKI builder.
 //!
 //! This file's only job is to:
 //!
@@ -6,7 +6,7 @@
 //! 2. Prove that `build_mock_device_pki` produces a chain that the
 //!    Commissioner's real `verify_chain` accepts.
 //!
-//! Everything in `support/mod.rs` will be reused by the Task-12
+//! Everything in `support/mod.rs` is reused by the
 //! `commission_loopback.rs` integration test, which declares `mod support;`
 //! the same way.
 //!

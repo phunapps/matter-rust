@@ -12,17 +12,16 @@
 //! Without this step, a genuine DAC for product X could fraudulently
 //! claim to commission product Y.
 //!
-//! # Phase status
+//! # Parts
 //!
-//! - **M6.4.3 T28 (this module):** skeleton wiring — [`CdSigningRoots`]
-//!   trust store, [`verify_certification_declaration`] flow with full
-//!   CMS / signature / VID / PID checks, plus placeholder
-//!   `parse_pem_public_key` and `parse_inner_cd_tlv` helpers that
-//!   T29 and T30 fill in. Five new
-//!   [`crate::attestation::AttestationError`] variants are exposed.
-//! - **M6.4.3 T29:** PEM `SubjectPublicKeyInfo` parser — enables the
-//!   bundled CSA-test root to load.
-//! - **M6.4.3 T30:** inner CD TLV parser — exposes `vendor_id` and
+//! - [`CdSigningRoots`]: the trust store of CD signing-root keys, and
+//!   [`verify_certification_declaration`]: the verification flow with full
+//!   CMS / signature / VID / PID checks. Failures are reported as the
+//!   `CertificationDeclaration*` variants of
+//!   [`crate::attestation::AttestationError`].
+//! - `parse_pem_public_key`: the PEM `SubjectPublicKeyInfo` parser that
+//!   loads the bundled CSA-test root and [`CdSigningRoots::from_pem`]'s keys.
+//! - `parse_inner_cd_tlv`: the inner CD TLV parser — exposes `vendor_id` and
 //!   `product_ids` for the VID / PID cross-check.
 
 #![forbid(unsafe_code)]

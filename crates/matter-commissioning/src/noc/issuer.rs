@@ -380,12 +380,11 @@ mod tests {
     /// `ring`'s ECDSA nonce is random — this is fully deterministic and
     /// therefore safe to pin byte-for-byte.
     ///
-    /// This is the refactor guard for the Task 7 `issue_noc` ->
-    /// `matter_cert::operational::noc` migration: it must produce this exact
-    /// byte sequence both before and after the refactor. Do NOT edit these
-    /// bytes to make a failing test pass — a mismatch means the refactor
-    /// changed the wire format, which must be fixed at the source, not
-    /// papered over here.
+    /// This pinned `issue_noc`'s output across its move onto
+    /// `matter_cert::operational::noc` and still guards it: it must produce
+    /// this exact byte sequence. Do NOT edit these bytes to make a failing
+    /// test pass — a mismatch means a change altered the wire format, which
+    /// must be fixed at the source, not papered over here.
     #[rustfmt::skip]
     const GOLDEN_NOC_TBS: &[u8] = &[
         48, 130, 1, 173, 160, 3, 2, 1, 2, 2, 19, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
@@ -416,12 +415,12 @@ mod tests {
     const GOLDEN_NODE_ID: u64 = 0xDEAD_BEEF_CAFE_BABE;
     const GOLDEN_CATS: [u32; 1] = [0x0001_0002];
 
-    /// Task 7 refactor guard: `issue_noc`'s TBS-DER output for a fixed
-    /// fabric/CSR/node/CAT/validity/serial must be byte-identical both
-    /// before and after refactoring `issue_noc` onto
-    /// `matter_cert::operational::noc`. See [`GOLDEN_NOC_TBS`] for the full
+    /// Wire-format guard: `issue_noc`'s TBS-DER output for a fixed
+    /// fabric/CSR/node/CAT/validity/serial must stay byte-identical to
+    /// [`GOLDEN_NOC_TBS`] (pinned before `issue_noc` moved onto
+    /// `matter_cert::operational::noc`). See [`GOLDEN_NOC_TBS`] for the full
     /// rationale — do not weaken this test or edit the golden bytes to
-    /// force a pass; a mismatch means the refactor changed the wire format.
+    /// force a pass; a mismatch means a change altered the wire format.
     #[test]
     fn issue_noc_tbs_bytes_are_stable() {
         let signer = RingSigner::from_pkcs8(RCAC_PKCS8).unwrap();

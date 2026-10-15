@@ -158,7 +158,8 @@ mod tests {
             .collect()
     }
 
-    // Reference dataset from Task 1's capture vector.
+    // Reference dataset from the captured vector
+    // (`test-vectors/thread/network_commissioning.json`).
     const DS: &str = "0e08000000000001000000030000184a0300001235060004001fffe002087896217f787f6ebe0708fdec3f34f3cd2020051071dccee3f164f15da92254e0b9c8a3a5030f4f70656e5468726561642d38396437010289d70410dc4b544c7a58671a2ce4f876f5d6dcd90c0402a0f7f8";
 
     #[test]
@@ -207,7 +208,7 @@ mod tests {
 
     #[test]
     fn debug_redacts_network_key() {
-        // DS (Task 1's capture vector) carries a type-0x04 (Network Key)
+        // DS (the captured vector) carries a type-0x04 (Network Key)
         // TLV with value dc4b544c7a58671a2ce4f876f5d6dcd9 — a recognizable
         // pattern that must never appear in `{:?}` output.
         let d = ThreadDataset::new(hex(DS)).unwrap();

@@ -3,7 +3,7 @@
 //! byte-for-byte.
 //!
 //! The manifest carries no `expected` field-assertion annotations for the
-//! committed snapshot — those can be added in a future task. The test
+//! committed snapshot — those can be added later. The test
 //! therefore exercises: (1) every captured cert parses without error,
 //! (2) re-serialisation produces byte-for-byte identical output, and
 //! (3) the manifest is non-empty (regression guard against an empty capture).
@@ -138,7 +138,7 @@ fn every_certificate_parses_and_round_trips() {
 }
 
 // ---------------------------------------------------------------------------
-// Task 10: byte-parity + signature verification
+// byte-parity + signature verification
 // ---------------------------------------------------------------------------
 
 /// Assert that `to_x509_tbs_der()` produces byte-identical output to

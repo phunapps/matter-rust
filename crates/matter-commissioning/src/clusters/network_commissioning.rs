@@ -1,10 +1,12 @@
 //! `NetworkCommissioning` cluster (id `0x0031`) command + response
 //! codecs.
 //!
-//! Spec §11.9. M6.5 ships the Wi-Fi subset: `AddOrUpdateWiFiNetwork`,
-//! `ConnectNetwork`, plus the `FeatureMap` attribute read for
-//! Wi-Fi/Ethernet/Thread branching. `ScanNetworks`, Thread commands,
-//! and `RemoveNetwork`/`ReorderNetworks` are deferred per the M6.5 spec.
+//! Spec §11.9. Only what commissioning sends and reads:
+//! `AddOrUpdateWiFiNetwork`, `AddOrUpdateThreadNetwork` (M9-C2),
+//! `ConnectNetwork`, plus the `FeatureMap` and `ConnectMaxTimeSeconds`
+//! attribute reads for Wi-Fi/Ethernet/Thread branching. `ScanNetworks` and
+//! `RemoveNetwork`/`ReorderNetworks` are not implemented: commissioning
+//! never sends them.
 
 #![forbid(unsafe_code)]
 

@@ -1,6 +1,5 @@
-//! M6.3.2: table-driven negative-path matrix. Each fixture exercises
-//! one row of the spec's "every signature gate must reject the obvious
-//! ways to attack it" table.
+//! M6.3.2: table-driven negative-path matrix. Each fixture is one obvious
+//! way to attack a signature gate, and every gate must reject it.
 
 #![forbid(unsafe_code)]
 #![allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.

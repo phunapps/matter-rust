@@ -41,9 +41,8 @@
 //!
 //! # Dead-code allowance
 //!
-//! All items here are `pub(crate)` and consumed by M3.2 Task 2 (state
-//! machines) which lands in the same PR series. The allow below suppresses
-//! the dead-code lint that fires while only this file is committed.
+//! All items here are `pub(crate)` and consumed by the PASE state machines
+//! (`prover.rs`, `verifier.rs`).
 #![allow(dead_code)]
 
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};

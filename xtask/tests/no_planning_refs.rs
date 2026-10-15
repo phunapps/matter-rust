@@ -35,7 +35,8 @@ const EVERYWHERE: &[Rule] = &[Rule {
 const POINTERS: &[Rule] = &[
     Rule {
         what: "a plan task",
-        regex: r"\bTask \d+\b",
+        // "Task-8", "Tasks 7b-11" and "Task 7b" too.
+        regex: r"\bTasks?[- ]\d+",
         example: "added in Task 7",
         except: &[],
     },
@@ -101,7 +102,7 @@ const POINTERS: &[Rule] = &[
     },
     Rule {
         what: "a design-decision number",
-        regex: r"(?:design|spec|[Ss]pec:\s*[\w-]+|matter-hardening|M9-C\d(?: design)?) [CD]\d+(?:\.\d+)?|\((?:design |spec )?D\d+(?:\.\d+)?(?:/D\d+(?:\.\d+)?)*\)|\(D\d+(?:\.\d+)?[ ,+]|pre-D\d+|(?<![-\w])D\d+(?:\.\d+)?/D\d+|the D\d+ backstop|per D\d+|(?:matter-hardening )?C\d/D\d+|(?<![-\w\[/])D\d+(?:\.\d+)?(?::|'s)|(?<![-\w])D\d+\.\d+",
+        regex: r"\b(?:design|spec|[Ss]pec:\s*[\w-]+|matter-hardening|M9-C\d(?: design)?) [CD]\d+(?:\.\d+)?\b|\((?:design |spec )?D\d+(?:\.\d+)?(?:/D\d+(?:\.\d+)?)*\)|\(D\d+(?:\.\d+)?[ ,+]|\bpre-D\d+\b|(?<![-\w])D\d+(?:\.\d+)?/D\d+\b|\bthe D\d+ backstop\b|\bper D\d+\b|\b(?:matter-hardening )?C\d/D\d+\b|(?<![-\w\[/])D\d+(?:\.\d+)?(?::|'s\b)|(?<![-\w])D\d+\.\d+\b",
         example: "is derived from that value instead (spec D7) — see",
         // The runbooks name the public M9-D1..D3 milestones ("D2: reading
         // operational credentials").
@@ -134,6 +135,10 @@ const POINTER_SCOPE: &[&str] = &[
     "docs/coverage",
     "justfile",
     ".github",
+    "crates/matter-commissioning",
+    "crates/matter-cert",
+    "crates/matter-crypto",
+    "crates/matter-codec",
 ];
 
 /// Never searched: `.gitignore` names the private directory in order to

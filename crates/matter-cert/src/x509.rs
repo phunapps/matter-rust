@@ -34,7 +34,7 @@ use crate::error::{Error, Result};
 //   /** matter-rcac-id            = ASN.1 OID 1.3.6.1.4.1.37244.1.4 */
 //   /** matter-fabric-id          = ASN.1 OID 1.3.6.1.4.1.37244.1.5 */
 //   /** matter-noc-cat            = ASN.1 OID 1.3.6.1.4.1.37244.1.6 */
-//   /** matter-vvs-id             = ASN.1 OID 1.3.6.1.4.1.37244.1.7 */  ← present in matter.js; not in the plan template
+//   /** matter-vvs-id             = ASN.1 OID 1.3.6.1.4.1.37244.1.7 */  ← present in matter.js; unused here
 //   /** matter-oid-vid            = ASN.1 OID 1.3.6.1.4.1.37244.2.1 */
 //   /** matter-oid-pid            = ASN.1 OID 1.3.6.1.4.1.37244.2.2 */
 /// Operational-certificate attribute: Matter node-id.
@@ -62,9 +62,11 @@ const OID_MATTER_NOC_CAT: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6
 
 /// Operational-certificate attribute: Matter VVS id.
 ///
-/// Present in matter.js (arc `.1.7`) but absent from the plan template.
-/// Included here for completeness; used in Vendor Verification Service
-/// certificates introduced in a later Matter specification revision.
+/// Present in matter.js (arc `.1.7`, and in chip as
+/// `MatterVidVerificationSignerId`) but unused here: no `DnAttribute`
+/// variant maps to it. Included for completeness; used in Vendor
+/// Verification Service certificates introduced in a later Matter
+/// specification revision.
 /// Forward-looking: consumed when `DnAttribute` adds a `VvsId` variant.
 #[allow(dead_code)]
 const OID_MATTER_VVS_ID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.1.7");
@@ -919,8 +921,8 @@ const OID_KP_OCSP_SIGNING: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.
 /// # Errors
 ///
 /// Currently infallible — returns an empty extension body for unknown values
-/// rather than failing, because the task-7 scope does not include error variants
-/// for unknown EKU values.
+/// rather than failing, because the error type has no variant for an unknown
+/// EKU value.
 fn encode_extended_key_usage_into(out: &mut Vec<u8>, eku: &[u32], critical: bool) {
     let mut value = Vec::new();
     wrap_sequence_into(&mut value, |inner| {
@@ -995,7 +997,8 @@ fn encode_authority_key_identifier_into(out: &mut Vec<u8>, aki: &KeyIdentifier) 
 /// Extensions are emitted in Matter TLV declaration order (basic-constraints,
 /// key-usage, extended-key-usage, subject-key-identifier, authority-key-identifier).
 /// This order matches matter.js's `matterToX509` / `extensionsToAst` order
-/// and is verified by the byte-parity test in Task 10.
+/// and is verified by the byte-parity test
+/// (`every_certificate_x509_tbs_matches_reference` in `tests/certificates.rs`).
 fn encode_extensions_block_into(out: &mut Vec<u8>, ext: &Extensions) {
     // Wrap in [3] EXPLICIT: context-class constructed tag = 0xA3, around the
     // inner `SEQUENCE OF Extension`.

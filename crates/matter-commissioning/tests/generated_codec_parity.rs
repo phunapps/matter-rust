@@ -1,9 +1,10 @@
-//! M9-A3 B6: the commissioning flow's hand-written `GeneralCommissioning` and
+//! Byte parity: the commissioning flow's hand-written `GeneralCommissioning` and
 //! `NetworkCommissioning` codecs against the generated ones.
 //!
 //! `matter-commissioning` drives commissioning with its own hand-written
 //! subset of these two clusters (`matter_commissioning::clusters`), and keeps
-//! it (spec §2: codecs only, consolidation deferred). `matter-clusters` now
+//! it (the generated clusters are codecs only; consolidating the two is
+//! deferred). `matter-clusters` now
 //! also generates both clusters in full. The two must never disagree on the
 //! wire, so this test pins every command the commissioning flow sends: the
 //! same inputs give the same bytes from both encoders. Those commands are

@@ -19,7 +19,7 @@
 //! `verify_signed_by` is the same primitive `CertificateChain::validate`
 //! calls internally for the anchor-signature check, so this still exercises
 //! the real signature-verification path; `TrustAnchor` is still built here
-//! to demonstrate the anchor-construction step the brief calls out.
+//! because this test demonstrates the anchor-construction step.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
 
@@ -107,9 +107,8 @@ fn build_rcac_icac_noc_chain() -> (MatterCertificate, MatterCertificate, MatterC
     let rcac_cert = sign_with_ring(unsigned_rcac, &rcac_pkcs8).unwrap();
 
     // Read the RCAC's own subject DN / SKID back off the signed cert rather
-    // than reconstructing them, per the brief's "simpler and less
-    // error-prone" guidance — this can never drift from what `rcac()`
-    // actually produced.
+    // than reconstructing them: simpler and less error-prone, and it can
+    // never drift from what `rcac()` actually produced.
     let rcac_subject = rcac_cert.subject().clone();
     let rcac_skid = rcac_cert.extensions().subject_key_identifier.unwrap();
 

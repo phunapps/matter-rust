@@ -1461,7 +1461,7 @@ mod tests {
         assert!(matches!(r.next(), Err(Error::UnexpectedEof)));
     }
 
-    // --- Task 4: container event tests ---
+    // --- container event tests ---
 
     #[test]
     fn next_decodes_structure_start_and_end_vector_0019() {
@@ -1568,7 +1568,7 @@ mod tests {
         assert!(matches!(r2.next(), Err(Error::UnexpectedEndOfContainer)));
     }
 
-    // --- Task 5: read_value tree builder tests ---
+    // --- read_value tree builder tests ---
 
     #[test]
     fn read_value_returns_empty_structure_vector_0019() {
@@ -1652,7 +1652,7 @@ mod tests {
         ));
     }
 
-    // --- Task 19: fail-closed array tags, budget, conversion error ---
+    // --- fail-closed array tags, budget, conversion error ---
 
     #[test]
     fn read_value_rejects_array_with_context_tagged_child() {
@@ -1912,7 +1912,7 @@ mod tests {
         assert!(matches!(r.skip_container(), Err(Error::UnclosedContainer)));
     }
 
-    // --- Task 4.1: raw-walk skip_container ---
+    // --- raw-walk skip_container ---
 
     #[test]
     fn skip_container_does_not_validate_skipped_utf8() {
@@ -1991,7 +1991,7 @@ mod tests {
         ));
     }
 
-    // --- Task 4 (perf phase 4): next_ref zero-copy core ---
+    // --- next_ref zero-copy core ---
 
     #[test]
     fn next_ref_borrows_utf8_and_bytes() {
@@ -2035,7 +2035,7 @@ mod tests {
         assert_eq!(Value::from(ValueRef::Null), Value::Null);
     }
 
-    // --- Task 4.4b: element spans ---
+    // --- element spans ---
 
     #[test]
     fn scalar_element_span_covers_full_element_and_body_excludes_tag() {
@@ -2186,7 +2186,7 @@ mod tests {
         assert_eq!(r.span_bytes(5..9), &[] as &[u8]);
     }
 
-    // --- Phase 5 hygiene: next/next_ref parity, span/depth pins ---
+    // --- next/next_ref parity, span/depth pins ---
 
     /// `next()` is documented as `next_ref().map(Element::from)`. Pin that the
     /// two agree — value AND error — over hostile inputs, element by element.
@@ -2346,7 +2346,7 @@ mod tests {
         let mut r = TlvReader::new(&bytes);
         r.next().unwrap();
         assert!(matches!(r.finish(), Err(Error::UnclosedContainer)));
-        // The bare struct header alone (`[0x15]`, the review's example).
+        // The bare struct header alone (`[0x15]`, the shortest unclosed input).
         let mut r = TlvReader::new(&bytes[..1]);
         r.next().unwrap();
         assert!(matches!(r.finish(), Err(Error::UnclosedContainer)));

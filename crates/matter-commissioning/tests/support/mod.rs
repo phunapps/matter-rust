@@ -5,13 +5,17 @@
 //! each loopback test file via `mod support;`. Production code must never
 //! depend on anything in this module.
 //!
-//! # Contents (grows across Tasks 7b-11)
+//! # Contents
 //!
-//! - **Task 7b** (this file): [`build_mock_device_pki`] – synthetic PAA/PAI/DAC
-//!   chain accepted by the Commissioner's real `verify_chain`.
-//! - **Task 8** (this file): [`build_attestation_response`], [`build_csr_response`],
+//! - [`build_mock_device_pki`] – synthetic PAA/PAI/DAC chain accepted by the
+//!   Commissioner's real `verify_chain`.
+//! - [`build_attestation_response`], [`build_csr_response`],
 //!   [`load_cd_fixture`] – mock-device builders whose outputs the Commissioner's
 //!   real verifiers accept.
+//! - The device-side Interaction Model codec ([`parse_invoke_request`],
+//!   [`build_invoke_response`], [`parse_read_request`], [`build_report_data`]),
+//!   the per-stage response table ([`respond`]) and the mock-device responder
+//!   loops ([`run_mock_device`], [`run_mock_device_dual`]).
 //!
 //! # Key PKCS#8 compatibility note
 //!
@@ -22,7 +26,7 @@
 //! signing variants share the same PKCS#8 v1 DER key format for P-256 — only
 //! the *output* encoding of the signature differs (fixed/IEEE-P1363 vs.
 //! ASN.1/DER). Cross-loading the PKCS#8 therefore works without any conversion.
-//! This was verified empirically by the Task 7b gate test in `mock_pki.rs`.
+//! This was verified empirically by the gate test in `mock_pki.rs`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 // Domain acronyms (PAA, PAI, DAC, VID, PID, EKU, PKCS#8) are prose, not code items.
@@ -30,7 +34,7 @@
 // paa_pkcs8 / pai_pkcs8 are intentionally paired names.
 #![allow(clippy::similar_names)]
 // `pub` items in test support modules are used by sibling test binaries
-// (commission_loopback.rs in Task 12). Clippy sees this module in isolation
+// (such as commission_loopback.rs). Clippy sees this module in isolation
 // and thinks they're unreachable; they're not.
 #![allow(dead_code, unreachable_pub)]
 // The verbatim-copied DER helpers from src/noc/csr.rs use intentional
@@ -63,12 +67,12 @@ use serde::Deserialize;
 /// Vendor ID used for the mock device's DAC/PAI (and PAA for completeness).
 ///
 /// 0xFFF1 is the CSA test-fixture VID. MUST match the Certification Declaration
-/// fixture used in Task 8's CD verification step.
+/// fixture ([`load_cd_fixture`]) used in the CD verification step.
 pub const VID: u16 = 0xFFF1;
 
 /// Product ID encoded in the mock device's DAC.
 ///
-/// MUST match the Certification Declaration fixture used in Task 8.
+/// MUST match the Certification Declaration fixture ([`load_cd_fixture`]).
 pub const PID: u16 = 0x8001;
 
 /// EKU compact integer for `id-kp-clientAuth` (OID 1.3.6.1.5.5.7.3.2).
@@ -82,13 +86,13 @@ const EKU_CLIENT_AUTH: u32 = 2;
 /// Synthetic PAA → PAI → DAC chain for use in loopback tests.
 ///
 /// Built by [`build_mock_device_pki`] and validated against the Commissioner's
-/// real `verify_chain` before being wired into the mock responder (Task 9).
+/// real `verify_chain` before being wired into the mock responder.
 ///
 /// The chain uses VID [`VID`] (0xFFF1) and PID [`PID`] (0x8001), matching the
-/// CSA Certification Declaration fixture used in Task 8's CD verification.
+/// CSA Certification Declaration fixture used in the CD verification.
 pub struct MockDevicePki {
     /// The DAC's private key. Used by the mock device to sign
-    /// `AttestationElements` (Task 8) and the NOCSR (Task 9). This is what
+    /// `AttestationElements` and the NOCSR. This is what
     /// proves device identity during commissioning.
     pub dac_signer: RingSigner,
     /// DER-encoded Device Attestation Certificate (leaf, not CA).
@@ -107,7 +111,7 @@ pub struct MockDevicePki {
     /// A [`PaaTrustStore`] pre-seeded with the synthetic PAA.
     ///
     /// Pass this to `attestation::chain::verify_chain` (or the Commissioner's
-    /// attestation verifier in Task 9) so the chain validates.
+    /// attestation verifier) so the chain validates.
     pub paa_trust_store: PaaTrustStore,
 }
 
@@ -238,7 +242,7 @@ pub fn build_mock_device_pki(now: MatterTime) -> MockDevicePki {
     }
 }
 
-// ── Task 8: mock-device attestation + CSR response builders ──────────────────
+// ── mock-device attestation + CSR response builders ──────────────────────────
 
 // ── Verbatim copy of DER / PKCS#10 helpers from src/noc/csr.rs #[cfg(test)]  ─
 //
@@ -505,7 +509,7 @@ pub fn build_attestation_response(
 /// (IEEE P1363 fixed-width, 64 bytes) over `nocsr_elements || attestation_challenge`.
 ///
 /// The embedded PKCS#10 CSR is generated with `seed=0x42` (deterministic).
-/// Task 10/11 only need the CSR's public key to issue a NOC; the exact
+/// The loopback gate only needs the CSR's public key to issue a NOC; the exact
 /// operational key does not matter for the loopback gate.
 ///
 /// # Panics
@@ -536,9 +540,9 @@ pub fn build_csr_response(
     }
 }
 
-// ── Task 9: device-side Interaction Model codec ───────────────────────────────
+// ── device-side Interaction Model codec ───────────────────────────────────────
 //
-// The mock device's responder loop (Task 11) needs to:
+// The mock device's responder loop (`run_mock_device`) needs to:
 //   1. Receive the controller's IM request bytes.
 //   2. `parse_invoke_request` / `parse_read_request` — device decodes what
 //      the controller sent.
@@ -1056,26 +1060,26 @@ pub fn build_report_data(reports: &[(matter_commissioning::im::AttributePath, &[
     buf
 }
 
-// ── Task 10: mock-device per-stage response table (Ethernet path) ─────────────
+// ── mock-device per-stage response table (Ethernet path) ──────────────────────
 
 /// Reply from the mock device for one IM round-trip.
 ///
 /// `Command(fields_tlv)` carries the anonymous-tagged command-fields TLV blob
-/// that Task 11's responder loop passes to [`build_invoke_response`]. The
+/// that the responder loop (`run_mock_device`) passes to [`build_invoke_response`]. The
 /// blob is what the Commissioner's per-`Expectation` decoder in
 /// `handle_response` reads (e.g. `decode_arm_fail_safe_response`,
 /// `decode_noc_response`, etc.).
 ///
 /// `Status(status_code)` signals that the device should reply with a bare
-/// `CommandStatusIB` (no payload). Task 11 calls [`build_invoke_status_response`]
+/// `CommandStatusIB` (no payload). The responder loop calls [`build_invoke_status_response`]
 /// for this variant. `AddTrustedRootCertificate` (0x003E/0x0B) uses this because
 /// the Commissioner's `Expectation::AddTrustedRootResponse` handler checks
 /// `payload.first() == Some(&0u8)` — a single 0-byte "signal", not a TLV struct.
 ///
 /// `StatusSignal(byte)` is reserved for the AddTrustedRoot fast path where
 /// `on_response(Expectation::AddTrustedRootResponse, &[0x00])` is called
-/// directly with a 1-byte sentinel rather than a full IM message. See Task 11
-/// for the dispatch.
+/// directly with a 1-byte sentinel rather than a full IM message. See
+/// [`run_mock_device`] for the dispatch.
 pub enum DeviceReply {
     /// Anonymous-tagged command-fields TLV. Wrap with [`build_invoke_response`].
     Command(Vec<u8>),
@@ -1085,7 +1089,7 @@ pub enum DeviceReply {
 
 /// Map a single incoming `InvokeRequest` to the mock device's Ethernet-path reply.
 ///
-/// The returned [`DeviceReply`] is what Task 11's responder loop uses to build
+/// The returned [`DeviceReply`] is what the responder loop (`run_mock_device`) uses to build
 /// the outgoing `InvokeResponseMessage`.
 ///
 /// # Cluster / command coverage (Ethernet happy path)
@@ -1301,7 +1305,7 @@ pub fn respond(
         // AddTrustedRootCertificate (0x003E/0x0B) → bare IM status (no response command)
         // Commissioner handler (Expectation::AddTrustedRootResponse):
         //   checks: payload.first() == Some(&0u8)  — the driver passes &[0x00] for success.
-        //   Task 11 sees Status(0) and calls build_invoke_status_response + then signals
+        //   The responder loop sees Status(0) and calls build_invoke_status_response + then signals
         //   on_response(AddTrustedRootResponse, &[0x00]).
         (0x003E, 0x0B) => DeviceReply::Status(0),
 
@@ -1327,7 +1331,7 @@ pub fn respond(
         // Commissioner decoder: decode_network_config_response
         //   expects: anonymous struct { ctx(0): NetworkingStatus u8 } (0 = Success).
         //
-        // Additive Thread arm (M9-C2 Task 7). Only the Thread dual-transport
+        // Additive Thread arm (M9-C2). Only the Thread dual-transport
         // harness reaches this — the Wi-Fi path sends 0x02, the Ethernet path
         // never touches 0x0031 — so it cannot perturb the existing tests. The
         // NetworkConfigResponse shape is identical to the Wi-Fi 0x02 arm.
@@ -1422,7 +1426,7 @@ pub fn respond_read_attribute_thread(
 /// Ethernet-path attribute value TLV.
 ///
 /// The returned `Vec<u8>` is an **anonymous-tagged** TLV element (scalar or
-/// struct) that Task 11 passes to [`build_report_data`] as the `value_tlv`
+/// struct) that the responder loop passes to [`build_report_data`] as the `value_tlv`
 /// entry.  The driver's `extract_read_payload` re-encodes the value into the
 /// format `Commissioner::on_response` expects for each `Expectation`.
 ///
@@ -1525,7 +1529,7 @@ pub fn respond_read_attribute(attr_path: matter_commissioning::im::AttributePath
         }
 
         // ConnectMaxTimeSeconds (0x0031/0x0003): read alongside FeatureMap at
-        // Stage::ReadNetworkCommissioningInfo (D7). int8u seconds (spec
+        // Stage::ReadNetworkCommissioningInfo. int8u seconds (spec
         // §11.9.5.4); sizes the FailsafeBeforeNetworkEnable extension.
         // Value is irrelevant on the Ethernet loopback (AlreadyOnNetwork
         // skips network setup), but the device must answer the requested
@@ -1544,7 +1548,7 @@ pub fn respond_read_attribute(attr_path: matter_commissioning::im::AttributePath
     }
 }
 
-// ── Task 10: Step 2 tests ─────────────────────────────────────────────────────
+// ── per-stage response table tests ────────────────────────────────────────────
 
 #[cfg(test)]
 mod mock_device_response_table {
@@ -1854,7 +1858,8 @@ mod mock_device_response_table {
 
     // ── AddTrustedRoot ─────────────────────────────────────────────────────────
 
-    /// respond(0x003E/0x0B) emits Status(0) so Task 11 uses build_invoke_status_response.
+    /// respond(0x003E/0x0B) emits Status(0) so the responder loop uses
+    /// build_invoke_status_response.
     #[test]
     fn add_trusted_root_emits_status_zero() {
         let pki = build_mock_device_pki(now());
@@ -1978,7 +1983,7 @@ mod mock_device_response_table {
     }
 }
 
-// ── Task 9: roundtrip tests ───────────────────────────────────────────────────
+// ── device-side IM codec roundtrip tests ──────────────────────────────────────
 
 #[cfg(test)]
 mod device_im_roundtrip {
@@ -2184,7 +2189,7 @@ mod device_im_roundtrip {
     }
 }
 
-// ── Task 11: mock-device responder loop (PASE → secured IM → CASE → IM) ───────
+// ── mock-device responder loop (PASE → secured IM → CASE → IM) ────────────────
 //
 // `run_mock_device` is the device twin of the controller's `commission()`
 // (src/driver/commission.rs). Where `commission()` runs the *initiator* side of
@@ -2194,14 +2199,15 @@ mod device_im_roundtrip {
 // reply path, then the CASE `CaseResponder`, then resumes the IM loop on the
 // CASE session until `CommissioningComplete`.
 //
-// Both halves run under one `tokio::join!` in Task 12's loopback gate, over a
-// single `InMemoryDatagram` pair. The device listens on its end for every
-// phase; `commission()` reuses the same transport for PASE, the secured IM
-// round-trips, and CASE (operational discovery is stubbed so the resolved
-// operational address is the same loopback endpoint).
+// Both halves run under one `tokio::join!` in the loopback test
+// (`tests/commission_loopback.rs`), over a single `InMemoryDatagram` pair. The
+// device listens on its end for every phase; `commission()` reuses the same
+// transport for PASE, the secured IM round-trips, and CASE (operational
+// discovery is stubbed so the resolved operational address is the same
+// loopback endpoint).
 //
-// Wire/opcode map (mirrors the M6.6.3b loopback device tasks and the Task 3/4/5
-// device-reply tasks in commission.rs):
+// Wire/opcode map (mirrors the device-side tasks of the loopback tests in
+// src/driver/case.rs and src/driver/commission.rs):
 //   - PASE (unsecured, SecureChannel): in 0x20 PBKDFParamRequest / 0x22 Pake1 /
 //     0x24 Pake3; out 0x21 PBKDFParamResponse / 0x23 Pake2.
 //   - Secured IM (INTERACTION_MODEL): in 0x08 InvokeRequest / 0x02 ReadRequest;
@@ -2360,13 +2366,14 @@ async fn close_handshake_with_status_report<T: AsyncDatagram>(
 
 /// Inputs the mock device needs to play the device side of one commissioning run.
 ///
-/// Built by Task 12 from the *same* fabric the controller commissions under, so
-/// the device's CASE `CaseResponder` validates against the controller's
-/// `TrustedRoots` and vice versa (the device's NOC and the controller's NOC are
-/// both issued under the fabric RCAC). See `commission()`'s "CASE credential
-/// sourcing" note: the controller mints its own operational NOC under the
-/// fabric RCAC; Task 12 mints the *device's* operational NOC under the same
-/// RCAC and hands the resulting [`CaseCredentials`] + [`TrustedRoots`] here.
+/// Built by the loopback test (`tests/commission_loopback.rs`) from the *same*
+/// fabric the controller commissions under, so the device's CASE
+/// `CaseResponder` validates against the controller's `TrustedRoots` and vice
+/// versa (the device's NOC and the controller's NOC are both issued under the
+/// fabric RCAC). See `commission()`'s "CASE credential sourcing" note: the
+/// controller mints its own operational NOC under the fabric RCAC; the loopback
+/// test mints the *device's* operational NOC under the same RCAC and hands the
+/// resulting [`CaseCredentials`] + [`TrustedRoots`] here.
 pub struct MockDeviceCaseSetup {
     /// The device's operational identity for the CASE responder — a NOC issued
     /// under the fabric RCAC for the device's assigned node id, on the
@@ -2417,8 +2424,8 @@ pub struct MockDeviceCaseSetup {
 ///    CASE session, until the device services `CommissioningComplete`
 ///    (GeneralCommissioning 0x0030 / 0x04), then waits up to
 ///    [`COMPLETE_ACK_WAIT`] for the controller's ACK of that response and
-///    reports it in [`MockDeviceOutcome`], so the `tokio::join!` in Task 12
-///    completes.
+///    reports it in [`MockDeviceOutcome`], so the `tokio::join!` in the
+///    loopback test completes.
 ///
 /// `peer` is the address replies are sent to; with [`InMemoryDatagram`] the
 /// peer arg is ignored (the channel is point-to-point) and the controller's
@@ -3173,7 +3180,7 @@ pub async fn run_mock_device_dual(
 /// **goes silent** — it holds both endpoints open (so neither channel closes)
 /// but never sends another datagram.
 ///
-/// This is the D11.3 coverage twin of [`run_mock_device_dual`]: it forces the
+/// This is the stalled-session twin of [`run_mock_device_dual`]: it forces the
 /// controller's poll loop to hit its response deadline on a stalled BTP session
 /// (a `TransportProvides` dispatch that never gets a reply → the loop exits with
 /// `DriverError::Timeout`), and then keeps stalling so the *failure-exit rollback*
@@ -3320,7 +3327,7 @@ pub async fn run_mock_device_dual_silent_after(
     // dispatch) then hits its response deadline, and so does the rollback.
     // This stall twin never reaches network provisioning; advertise Wi-Fi and
     // discard the capture (a local throwaway sink) so the public signature stays
-    // unchanged for the D11.3 rollback test that calls it.
+    // unchanged for the dead-BTP rollback test that calls it.
     let discard_log: CommandLog = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     for _ in 0..service_pre_op_stages {
         let (packet, _from) = btp_dev.recv_from().await?;

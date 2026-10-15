@@ -198,8 +198,8 @@ fn wifi_creds_thread_only_featuremap_rejects_mismatch() {
     // Wi-Fi credentials against a Thread-only device: routing keys off the
     // *supplied* credential type, so the mismatch is reported as the
     // supplied type being unsupported by the device — `needed: WiFi`, NOT
-    // `Thread`. (M9-C2 D6 routing; the pre-C2 behaviour reported the
-    // device's offered type here.)
+    // `Thread`. (Before M9-C2 the routing reported the device's offered
+    // type here.)
     let mut sm = drive_to_read_network_info(make_wifi_config());
     let _ = sm.poll().expect("emit ReadAttribute");
     let Err(err) = sm.on_response(
@@ -259,7 +259,8 @@ fn empty_feature_map_is_malformed() {
 // ---------------------------------------------------------------------------
 
 /// Drive the state machine from `ReadNetworkCommissioningInfo` all the
-/// way to `Stage::NetworkSetup` using Task 16's composition pattern.
+/// way to `Stage::NetworkSetup` by composing `drive_to_read_network_info`
+/// with a real `FeatureMap` response.
 ///
 /// Avoids adding a new `position_at_stage_for_test(Stage::NetworkSetup, …)` call:
 /// the `__test_shortcuts` surface stays minimal and the full flow through
@@ -276,7 +277,7 @@ fn drive_to_wifi_network_setup() -> Commissioner {
 }
 
 // ---------------------------------------------------------------------------
-// M6.5.2 Task 17 — NetworkSetup dispatch (Wi-Fi) + NetworkConfigResponse handler
+// NetworkSetup dispatch (Wi-Fi) + NetworkConfigResponse handler
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -359,7 +360,7 @@ fn wifi_network_setup_bounds_exceeded_maps_to_slots_full() {
 }
 
 // ---------------------------------------------------------------------------
-// M6.5.2 Task 18 — FailsafeBeforeNetworkEnable dispatch + second ArmFailSafe
+// FailsafeBeforeNetworkEnable dispatch + second ArmFailSafe
 // ---------------------------------------------------------------------------
 
 fn drive_to_failsafe_before_wifi_enable() -> Commissioner {
@@ -395,7 +396,7 @@ fn failsafe_before_wifi_enable_emits_second_arm_failsafe() {
 }
 
 // ---------------------------------------------------------------------------
-// M6.5.2 Task 19 — NetworkEnable dispatch (Wi-Fi) + ConnectNetworkResponse handler
+// NetworkEnable dispatch (Wi-Fi) + ConnectNetworkResponse handler
 // ---------------------------------------------------------------------------
 
 fn drive_to_wifi_network_enable() -> Commissioner {
@@ -480,7 +481,7 @@ fn wifi_network_enable_unknown_status_maps_to_none() {
 }
 
 // ---------------------------------------------------------------------------
-// M6.5.2 Task 20 — Ethernet-only end-to-end walk
+// Ethernet-only end-to-end walk
 // ---------------------------------------------------------------------------
 
 /// Full end-to-end walk for an Ethernet-only device (no Wi-Fi or Thread):
@@ -552,7 +553,7 @@ fn ethernet_only_e2e_reaches_done() {
 }
 
 // ---------------------------------------------------------------------------
-// M9-C2 Task 5 — Thread network provisioning (route + dispatch)
+// Thread network provisioning (route + dispatch)
 // ---------------------------------------------------------------------------
 
 /// Reference OTBR operational dataset (111 bytes, `ot-ctl dataset active -x`).
@@ -673,7 +674,7 @@ f70656e5468726561642d38396437010289d70410dc4b544c7a58671a2ce4f876f5d6dcd90c0402a
 
 /// Thread creds against a Wi-Fi-only `FeatureMap` must fail fast with
 /// `NetworkFeatureUnsupported{ needed: Thread }` — NOT silently skip
-/// provisioning (the T4 review carry-forward).
+/// provisioning.
 #[test]
 fn thread_creds_wifi_only_featuremap_rejects_mismatch() {
     let mut sm = drive_to_read_network_info(make_thread_config());

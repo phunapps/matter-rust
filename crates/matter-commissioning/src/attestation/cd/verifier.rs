@@ -7,8 +7,7 @@
 //!    encapsulated content.
 //! 3. ECDSA-P256 / SHA-256 signature verification against each
 //!    trusted root's public key; accept on first match.
-//! 4. Decode the inner CD TLV via `parse_inner_cd_tlv` (M6.4.3 T30
-//!    fills the helper).
+//! 4. Decode the inner CD TLV via `parse_inner_cd_tlv`.
 //! 5. Cross-check declared VID + PID against the expected pair
 //!    supplied by the caller (typically sourced from the verified DAC
 //!    subject).
@@ -382,7 +381,7 @@ pub fn verify_certification_declaration_with_paa(
 }
 
 /// Decoded view of the inner Certification Declaration TLV — the
-/// subset the verifier cross-checks today. T30 fleshes out the parser.
+/// subset the verifier cross-checks today.
 #[derive(Debug)]
 struct ParsedCd {
     /// Vendor ID (Matter Core Spec §6.3.1 tag 1).
@@ -1276,7 +1275,7 @@ mod tests {
         assert_eq!(parsed.dac_origin_product_id, Some(ProductId::new(0x5678)));
     }
 
-    // ── Fix B — CD dac_origin override binding (Matter §6.2.3) ──────────────
+    // ── CD dac_origin override binding (Matter §6.2.3) ──────────────────────
     //
     // These tests sign a synthetic CD with the bundled CSA-test signing key
     // (which `CdSigningRoots::with_example_device_roots()` trusts) and run it
@@ -1301,7 +1300,7 @@ mod tests {
     /// including the `dac_origin_*` override fields (tags 9 / 10).
     ///
     /// Mirrors `xtask/src/capture_cd.rs::build_inner_cd_tlv` but adds the
-    /// optional tags 9/10 so the Fix B override path can be exercised.
+    /// optional tags 9/10 so the `dac_origin` override path can be exercised.
     #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
     fn build_inner_cd_tlv(
         vendor_id: u16,

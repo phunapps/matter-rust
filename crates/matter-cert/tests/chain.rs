@@ -1,8 +1,8 @@
 //! Chain validation integration tests.
 //!
-//! Tier 1: positive end-to-end against the captured chain (Task 8).
+//! Tier 1: positive end-to-end against the captured chain.
 //! Tier 2: hand-written negative tests, one per failure mode (this file).
-//! Tier 3: proptest properties (Task 8).
+//! Tier 3: proptest properties.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
 

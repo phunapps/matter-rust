@@ -904,8 +904,7 @@ mod qr_api_tests {
 
     /// The spec example must encode AND decode without errors. (Exact
     /// byte parity against matter.js is verified by the integration test
-    /// `tests/setup_byte_parity.rs` once fixtures are captured in
-    /// Task 21.)
+    /// `tests/setup_byte_parity.rs` against captured fixtures.)
     #[test]
     fn spec_example_qr_encode_decode_roundtrip() {
         let p = spec_example_payload();

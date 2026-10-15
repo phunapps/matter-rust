@@ -1,6 +1,6 @@
 //! Authoritative webpki gate for `matter_cert::test_support::build_x509_der`.
 //!
-//! This is the riskiest correctness gate of M6.6.4 (Task 7): the X.509 DER
+//! This is the riskiest correctness gate of M6.6.4: the X.509 DER
 //! certificates emitted by `build_x509_der` MUST satisfy strict
 //! `rustls-webpki` path validation, exactly as `attestation::chain::
 //! verify_chain` runs it during real commissioning. We build a synthetic

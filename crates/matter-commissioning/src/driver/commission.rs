@@ -22,17 +22,17 @@ use crate::CommissionerConfig;
 /// [`AsyncDatagram`] `SocketAddr` is routing-irrelevant — a BTP `AsyncDatagram`
 /// is wired to exactly one GATT peer at construction and ignores the send
 /// destination. This value is **never dereferenced as a real address**; it only
-/// satisfies the `SocketAddr` parameter of the shared driver helpers on the
-/// BLE path (design D1). IPv6 localhost:5540 (the Matter UDP port) is a
+/// satisfies the `SocketAddr` parameter of the driver helpers the BLE path
+/// shares with the IP path. IPv6 localhost:5540 (the Matter UDP port) is a
 /// deliberately obvious, non-routing placeholder.
 pub const STREAM_PEER: SocketAddr =
     SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 5540, 0, 0));
 
 /// Response deadline for a secured commissioning dispatch on the BLE path when
 /// the invoke is **not** `NetworkCommissioning::ConnectNetwork`. With MRP off
-/// over BTP (design D3), nothing at the exchange layer ever times out, so this
-/// wrapper is the only guard against an unbounded hang if the device stops
-/// responding. 30 s matches the unsecured PASE path's response window and
+/// over BTP (BTP provides its own reliability), nothing at the exchange layer
+/// ever times out, so this wrapper is the only guard against an unbounded hang
+/// if the device stops responding. 30 s matches the unsecured PASE path's response window and
 /// chip's BTP-ack-derived exchange response timeout.
 const RESPONSE_DEADLINE: Duration = Duration::from_secs(30);
 
@@ -40,11 +40,10 @@ const RESPONSE_DEADLINE: Duration = Duration::from_secs(30);
 /// the BLE path, used only when the device hasn't reported
 /// `ConnectMaxTimeSeconds` (attribute `0x0003`) yet — e.g. an unread or
 /// zero value. Longer than [`RESPONSE_DEADLINE`] because the device
-/// performs the (slow) network association inline before replying (design
-/// D3).
+/// performs the (slow) network association inline before replying.
 ///
 /// When the device **has** reported `ConnectMaxTimeSeconds`, the deadline
-/// is derived from that value instead (spec D7) — see
+/// is derived from that value instead — see
 /// [`connect_network_deadline`], which floors it at 90 s (the same floor
 /// the state machine's private `network_enable_failsafe_seconds` uses for
 /// the `FailsafeBeforeNetworkEnable` extension) so this deadline can never
@@ -57,12 +56,12 @@ const CONNECT_NETWORK_RESPONSE_DEADLINE: Duration = Duration::from_secs(60);
 /// `connect_max_time_seconds` is `0` when the device hasn't reported the
 /// attribute (unread, or the device reported `0`) — in that case this
 /// falls back to the fixed [`CONNECT_NETWORK_RESPONSE_DEADLINE`] (60 s),
-/// unchanged from the pre-D7 behavior. When the device *did* report a
+/// as before `ConnectMaxTimeSeconds` was read. When the device *did* report a
 /// value, the deadline is floored at
 /// `crate::state_machine::DEFAULT_CONNECT_MAX_TIME_SECONDS` (90 s) — the
 /// same floor the state machine's failsafe-extension sizing uses — so a
 /// device that legitimately takes up to 90 s to attach is never cancelled
-/// by this deadline before its own failsafe would expire (spec D7).
+/// by this deadline before its own failsafe would expire.
 fn connect_network_deadline(connect_max_time_seconds: u16) -> Duration {
     if connect_max_time_seconds == 0 {
         CONNECT_NETWORK_RESPONSE_DEADLINE
@@ -103,7 +102,7 @@ mod attr_id {
 
     /// `NetworkCommissioning::ConnectMaxTimeSeconds` — attribute 0x0003
     /// (spec §11.9.5.4). Read alongside `FeatureMap` to size the
-    /// failsafe extension before `ConnectNetwork` (D7).
+    /// failsafe extension before `ConnectNetwork`.
     pub(super) const CONNECT_MAX_TIME_SECONDS: u32 =
         crate::clusters::network_commissioning::attribute_id::CONNECT_MAX_TIME_SECONDS;
 }
@@ -537,8 +536,9 @@ pub async fn resolve_commissionable<D: Discovery>(
 }
 
 /// Best-effort disarm of the device's failsafe by sending `ArmFailSafe(expiry=0)`
-/// over the PASE session. Called by the `Action::Abort` branch of the poll loop
-/// (Task 6) when `send_disarm_failsafe` is `true`.
+/// over the PASE session. Called by `run_commission` when the poll loop exits
+/// abnormally and `disarm_on_exit` says to disarm (a mid-flight failure, or an
+/// `Action::Abort` whose `send_disarm_failsafe` is `true`).
 ///
 /// Errors from [`dispatch_invoke`] are intentionally swallowed: this is a
 /// best-effort cleanup step. If the device is unreachable or the session has
@@ -580,7 +580,7 @@ pub(crate) async fn rollback<T: AsyncDatagram>(
 ///
 /// The mapping of a `DriverError` result to
 /// `on_response(Expectation::CaseFailed, &[])` is the **caller's** job
-/// (Task 6's poll loop) — this function simply returns the `Result` so the
+/// (the poll loop, `run_poll_loop`) — this function simply returns the `Result` so the
 /// caller can choose how to handle it.
 ///
 /// # Errors
@@ -641,7 +641,7 @@ pub struct BleDriverConfig<'a> {
     /// The sans-IO commissioner configuration (fabric, trust stores, node ids,
     /// network creds, rng, etc.). Its `network` **must** be
     /// `NetworkCredentials::WiFi` for a Wi-Fi device: a BLE-only device with no
-    /// network credentials to install is unprovisionable (design D7). Mirrors
+    /// network credentials to install is unprovisionable. Mirrors
     /// [`DriverConfig::commissioner`].
     pub commissioner: CommissionerConfig<'a>,
     /// Device passcode (from the setup payload). Mirrors [`DriverConfig::passcode`].
@@ -738,7 +738,7 @@ where
 /// CASE handshake and all post-CASE secured traffic run over `udp` at the
 /// device's mDNS-resolved operational address. `discovery` is used **only** for
 /// the operational resolve — the commissionable device was already discovered
-/// and BTP-connected by the controller layer (design D2).
+/// and BTP-connected by the controller layer.
 ///
 /// Differs from [`commission`] in exactly three ways, all threaded through the
 /// shared `run_commission` body:
@@ -936,7 +936,7 @@ where
                 // is a transparent pass-through — MRP's own timers bound the
                 // wait, so IP-path behavior is byte-for-byte unchanged. Under
                 // `TransportProvides` (BLE) MRP is off, so an unbounded rollback
-                // over a stalled BTP session would hang forever (D11.3); the
+                // over a stalled BTP session would hang forever; the
                 // 30 s deadline (rollback is an `ArmFailSafe` invoke, never a
                 // ConnectNetwork) caps it. A rollback timeout is swallowed by the
                 // outer `let _` exactly like any other best-effort rollback
@@ -1240,10 +1240,9 @@ where
                 };
                 // NetworkCommissioning::ConnectNetwork gets the longer BLE-path
                 // response deadline, sized from the device-reported
-                // `ConnectMaxTimeSeconds` (spec D7; see
-                // `connect_network_deadline`) rather than a fixed constant —
-                // the device does the slow network association inline before
-                // replying.
+                // `ConnectMaxTimeSeconds` (see `connect_network_deadline`)
+                // rather than a fixed constant — the device does the slow
+                // network association inline before replying.
                 let is_connect_network = cluster
                     == crate::clusters::network_commissioning::CLUSTER_ID
                     && command
@@ -1329,7 +1328,7 @@ where
                 };
                 let read_payload = extract_read_payload(expect, &report)?;
                 sm.on_response(expect, &read_payload)?;
-                // D7: the NetworkCommissioning read also carries
+                // The NetworkCommissioning read also carries
                 // `ConnectMaxTimeSeconds` (attr 0x0003). It rides in the
                 // same `ReportData` but does not route the state machine,
                 // so it is applied out-of-band here (after the FeatureMap
@@ -1473,7 +1472,7 @@ mod tests {
     //
     // A Matter controller never parses InvokeRequests (the device does) or
     // decodes ArmFailSafe request fields (the device does). These helpers live
-    // here so the in-process loopback device simulator in the Task 5 tests can
+    // here so the in-process loopback device simulator in the tests below can
     // assert/reply without leaking device-codec into production.
     // -----------------------------------------------------------------------
 
@@ -1930,7 +1929,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // extract_read_payload unit tests (Step 1 — failing first, then pass)
+    // extract_read_payload unit tests
     // -----------------------------------------------------------------------
 
     /// A `ReportData` carrying a bare `FeatureMap` u32 is mapped to the bare
@@ -2168,7 +2167,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // dispatch_read integration tests (Step 2)
+    // dispatch_read integration tests
     // -----------------------------------------------------------------------
 
     /// `dispatch_read` sends a `ReadRequest`, the device replies with a canned
@@ -2254,14 +2253,14 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Task 5 failing tests — rollback + establish_case_session
+    // rollback + establish_case_session tests
     // -----------------------------------------------------------------------
 
     /// `rollback` sends `ArmFailSafe(expiry_length=0, breadcrumb=0)` over the
     /// PASE session and swallows any error. The device side asserts it received
     /// cluster 0x0030 / command 0x00 and that the decoded `expiry_length_seconds`
     /// field is 0.
-    /// The disarm decision (Finding #3): a `?`-propagated mid-flight failure
+    /// The disarm decision: a `?`-propagated mid-flight failure
     /// must trigger a best-effort failsafe disarm, an abort that asks to disarm
     /// must disarm, and an abort that says the failsafe was never armed must
     /// NOT disarm. Combined with `rollback_sends_arm_fail_safe_zero_over_pase`
@@ -2309,7 +2308,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // with_response_deadline — the BLE-path hang guard (D3/D11.1)
+    // with_response_deadline — the BLE-path hang guard (MRP is off over BTP)
     // -----------------------------------------------------------------------
 
     /// Under `Mrp` the wrapper is transparent: a ready future's value passes
@@ -2365,7 +2364,7 @@ mod tests {
 
     /// A `ConnectNetwork` dispatch whose device hasn't reported
     /// `ConnectMaxTimeSeconds` (`Some(0)`) falls back to the fixed 60 s
-    /// deadline — unchanged pre-D7 behavior.
+    /// deadline, as before `ConnectMaxTimeSeconds` was read.
     #[tokio::test(start_paused = true)]
     async fn with_response_deadline_connect_network_absent_falls_back_to_60s() {
         let start = tokio::time::Instant::now();
@@ -2386,8 +2385,8 @@ mod tests {
 
     /// A `ConnectNetwork` dispatch whose device reported a
     /// `ConnectMaxTimeSeconds` below the 90 s floor (e.g. the Thread
-    /// loopback mock's 30 s) is bounded at 90 s, not the raw 30 s — spec
-    /// D7's floor, matching the state-machine failsafe extension's default.
+    /// loopback mock's 30 s) is bounded at 90 s, not the raw 30 s — the
+    /// floor the state-machine failsafe extension's default also uses.
     #[tokio::test(start_paused = true)]
     async fn with_response_deadline_connect_network_floors_small_value_at_90s() {
         let start = tokio::time::Instant::now();

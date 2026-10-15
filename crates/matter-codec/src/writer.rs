@@ -807,7 +807,7 @@ mod tests {
         }
     }
 
-    // --- Phase 3 Task 2: container primitives ---
+    // --- container primitives ---
 
     #[test]
     fn start_structure_anonymous_emits_0x15() {
@@ -870,7 +870,7 @@ mod tests {
         assert_eq!(buf, [0x15, 0x24, 0x00, 0x2A, 0x18]);
     }
 
-    // --- Phase 3 Task 3: write_value recursive container dispatch ---
+    // --- write_value recursive container dispatch ---
 
     #[test]
     fn write_value_empty_structure_matches_vector_0019() {
@@ -993,7 +993,7 @@ mod tests {
         assert_eq!(buf, [0x15, 0x35, 0x00, 0x24, 0x00, 0x2A, 0x18, 0x18]);
     }
 
-    // --- Task 19: write-side depth guard ---
+    // --- write-side depth guard ---
 
     /// Build a `Value` tree of `levels` nested structures, innermost holding a
     /// single uint. `levels == 1` is one structure wrapping the scalar.
@@ -1041,7 +1041,7 @@ mod tests {
         assert_eq!(decoded, ok);
     }
 
-    // --- Phase 5 hygiene: MAX_HEADER saturation ---
+    // --- MAX_HEADER saturation ---
 
     /// The widest possible element: FQ-8 tag (control + 8 tag bytes) + u64
     /// payload = exactly `MAX_HEADER` (17) bytes. Pins that the stack buffer

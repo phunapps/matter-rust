@@ -98,13 +98,13 @@ struct StageRecord {
     stage: String,
     action: String,
     #[serde(default)]
-    #[allow(dead_code)] // Reserved for richer per-stage assertions in T56.
+    #[allow(dead_code)] // Reserved for richer per-stage assertions.
     cluster: Option<String>,
     #[serde(default)]
-    #[allow(dead_code)] // Reserved for richer per-stage assertions in T56.
+    #[allow(dead_code)] // Reserved for richer per-stage assertions.
     command: Option<String>,
     #[serde(default)]
-    #[allow(dead_code)] // Reserved for ReadAttribute attribute-set checks in T56.
+    #[allow(dead_code)] // Reserved for ReadAttribute attribute-set checks.
     attribute_ids: Vec<u32>,
     expected_payload_b64: Option<String>,
     response_payload_b64: Option<String>,
@@ -287,7 +287,7 @@ fn matter_js_happy_path_byte_parity() {
     }
 }
 
-/// Verdict-only negative gate (M6.4.6 T57): the sibling fixture flips one
+/// Verdict-only negative gate (M6.4.6): the sibling fixture flips one
 /// bit inside the DAC certificate of the captured `CertificateChainResponse`.
 /// The walk must FAIL during attestation — the DAC's signature no longer
 /// verifies against its PAI — rather than complete, and must fail no later

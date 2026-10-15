@@ -32,7 +32,7 @@ pub(crate) const DEFAULT_CONNECT_MAX_TIME_SECONDS: u16 = 90;
 ///
 /// `Debug` is hand-written to redact `credentials` (renders only the
 /// length). `Clone` is derived. Validation runs in
-/// `Commissioner::new` (M6.5.2 Task 13).
+/// `Commissioner::new`.
 #[derive(Clone, PartialEq, Eq)]
 pub struct WiFiCredentials {
     /// SSID bytes, 1–32 bytes.
@@ -163,11 +163,9 @@ pub struct CommissionerConfig<'a> {
 pub struct Commissioner {
     stage: Stage,
 
-    // Configuration captured at construction time. Storage slots for
-    // M6.4.2+ (`pai_der`, `dac_der`, `attestation_response`, CSR /
-    // NOC artefacts, the CASE-awaiting flag, etc.) are added in
-    // later tasks as the corresponding stages land — keeping the
-    // struct minimal here avoids per-task churn on the field list.
+    // Configuration captured at construction time. The per-stage storage
+    // slots (`pai_der`, `dac_der`, `attestation_response`, CSR / NOC
+    // artefacts, the CASE-awaiting flag, etc.) follow below.
     #[allow(dead_code)] // Used by attestation/CSR verification in M6.4.2+.
     pase_attestation_challenge: [u8; 16],
     #[allow(dead_code)] // Used by NOC issuance + chain validation in M6.4.4.
@@ -194,7 +192,7 @@ pub struct Commissioner {
 
     // Attestation slots — populated by SendPaiCertRequest /
     // SendDacCertRequest / SendAttestationRequest, consumed by
-    // AttestationVerification (M6.4.2 T18-T21).
+    // AttestationVerification.
     pai_der: Option<Vec<u8>>,
     dac_der: Option<Vec<u8>>,
     attestation_nonce: Option<[u8; 32]>,
@@ -202,7 +200,7 @@ pub struct Commissioner {
 
     // CSR + NOC slots — populated by SendOpCertSigningRequest /
     // ValidateCsr / GenerateNocChain, consumed by SendTrustedRootCert
-    // and SendNoc (M6.4.4 T35-T40).
+    // and SendNoc.
     csr_nonce: Option<[u8; 32]>,
     csr_response: Option<crate::noc::CsrResponse>,
     verified_csr: Option<crate::noc::VerifiedCsr>,
@@ -353,9 +351,9 @@ impl Commissioner {
     }
 
     /// The operational-network credentials captured at construction.
-    /// Read by tests and by the network-provisioning dispatch/routing
-    /// (Task 5 consumes this to select the Thread sub-cursor).
-    #[allow(dead_code)] // Consumed by tests now; by Thread routing in Task 5.
+    /// Read by tests; the network-provisioning dispatch and routing read
+    /// the field directly.
+    #[allow(dead_code)] // Only tests call this accessor.
     pub(crate) fn network(&self) -> &NetworkCredentials {
         &self.network
     }
@@ -441,7 +439,8 @@ impl Commissioner {
     /// Consumed by the driver ([`crate::driver::commission`]) to size the
     /// BLE-path `ConnectNetwork` response deadline from the same value that
     /// [`Self::network_enable_failsafe_seconds`] uses for the failsafe
-    /// extension (spec D7: both must be sized from `ConnectMaxTimeSeconds`).
+    /// extension (both must be sized from `ConnectMaxTimeSeconds`, so the
+    /// deadline never fires before the failsafe extension would expire).
     ///
     /// Driver-only, like its setter.
     #[cfg(feature = "driver")]
@@ -482,9 +481,7 @@ impl Commissioner {
     ///
     /// Called by [`Self::poll`] only when there is no cached
     /// `pending_action`. Walks `Stage::SecurePairing` forward to the
-    /// first wire stage by self-recursion; stages past
-    /// `Stage::ConfigRegulatory` short-circuit to `Stage::Failed` until
-    /// M6.4.2+ tasks land.
+    /// first wire stage by self-recursion.
     // Lint carve-out: the per-stage arms each carry their own
     // payload-shape comments, so collapsing them into smaller helpers
     // would obscure the cluster-command mapping the function
@@ -714,7 +711,7 @@ impl Commissioner {
                     attributes: &[
                         crate::clusters::network_commissioning::attribute_id::FEATURE_MAP,
                         // ConnectMaxTimeSeconds (spec §11.9.5.4) — sizes the
-                        // FailsafeBeforeNetworkEnable extension (D7). Thread
+                        // FailsafeBeforeNetworkEnable extension. Thread
                         // attach is slower than Wi-Fi association.
                         crate::clusters::network_commissioning::attribute_id::CONNECT_MAX_TIME_SECONDS,
                     ],
@@ -1168,7 +1165,7 @@ impl Commissioner {
         self.pending_action = None;
     }
 
-    /// Off-wire attestation verification chain (M6.4.2 T21).
+    /// Off-wire attestation verification chain.
     ///
     /// Consumes the PAI/DAC DER + `AttestationResponse` + nonce captured
     /// by [`Stage::SendPaiCertRequest`] / [`Stage::SendDacCertRequest`]
@@ -1865,7 +1862,7 @@ mod tests {
         vec![0x15, 0x18]
     }
 
-    // --- M6.4.2 T18-T21: attestation flow tests ---
+    // --- attestation flow tests ---
 
     fn drive_to_send_pai_cert_request(sm: &mut Commissioner) {
         let _ = sm.poll().expect("poll info");
@@ -2019,7 +2016,7 @@ mod tests {
         );
     }
 
-    // --- M6.4.4 T35-T40: CSR + NOC issuance flow tests ---
+    // --- CSR + NOC issuance flow tests ---
 
     /// Extract the 32-byte `CSRNonce` from a `CSRRequest` Invoke payload.
     /// Mirrors `nonce_from_attestation_invoke` — same TLV shape, both
@@ -2052,7 +2049,8 @@ mod tests {
     /// would otherwise demand real fixtures M6.4.2's verifier accepts)
     /// and checks the emitted `CSRRequest` Invoke's nonce randomness
     /// across two independent commissioner instances. The full
-    /// integration drive ships in T41 with real matter.js fixtures.
+    /// integration drive with real matter.js fixtures is
+    /// `tests/state_machine_noc.rs`.
     #[test]
     fn send_op_cert_signing_request_emits_csr_with_random_nonce() {
         let fabric = make_fabric_record();
@@ -2291,7 +2289,7 @@ mod tests {
         assert_eq!(sm.stage(), Stage::SendNoc);
     }
 
-    // --- M6.4.5 T44-T47: PASE -> CASE handoff + CommissioningComplete tests ---
+    // --- PASE -> CASE handoff + CommissioningComplete tests ---
 
     #[test]
     fn find_operational_for_complete_emits_establish_case() {
@@ -2416,7 +2414,7 @@ mod tests {
         }
     }
 
-    // --- M6.4.5 T49: CaseFailed negative coverage ---
+    // --- CaseFailed negative coverage ---
 
     #[test]
     fn case_failed_response_aborts_with_case_establishment_failed() {
@@ -2652,7 +2650,7 @@ mod tests {
         );
     }
 
-    // --- M6.5.2 T14: failsafe expiry derivation from BasicCommissioningInfo ---
+    // --- failsafe expiry derivation from BasicCommissioningInfo ---
 
     #[test]
     fn failsafe_expiry_derives_from_basic_commissioning_info() {
@@ -2737,7 +2735,7 @@ mod tests {
         }
     }
 
-    // --- M6.5.2 T15: breadcrumb monotonicity ---
+    // --- breadcrumb monotonicity ---
 
     #[test]
     fn breadcrumb_increases_across_commands() {
