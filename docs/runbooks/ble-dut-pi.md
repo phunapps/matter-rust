@@ -210,5 +210,4 @@ live handshake against this DUT to confirm or correct it.
 
 ## Reference
 
-- Design: `docs/superpowers/specs/2026-07-13-m9-c1-ble-btp-design.md`, §D10.
 - Central-side runbook: `docs/runbooks/ble-commissioning.md`.

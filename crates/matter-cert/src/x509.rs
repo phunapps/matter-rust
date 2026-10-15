@@ -5,9 +5,6 @@
 //! a parsed [`crate::MatterCertificate`] into a byte-identical
 //! representation of matter.js's `Certificate.asUnsignedDer()` output,
 //! which `MatterCertificate::verify_signed_by` then hands to `ring`.
-//!
-//! See `docs/superpowers/specs/2026-05-18-matter-x509-conversion-design.md`
-//! for the full design and the byte-parity rationale.
 
 // All OID constants are now reachable through matter_cert_to_x509_tbs_der
 // (which delegates to the per-encoder helpers). The skeleton-phase

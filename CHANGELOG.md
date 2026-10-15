@@ -4586,7 +4586,7 @@ changes.
   macOS BLE commissioning *succeed* — the `uuidNotAllowed` write rejection is an
   upstream btleplug/`CoreBluetooth` issue (and the same rig's macOS `chip-tool`
   hits an equivalent GATT-write failure), so live BLE commissioning stays
-  Linux-only. Root-cause writeup under `docs/superpowers/audits/`.
+  Linux-only. The root cause is summarised in `TODO-1.0.md` ("BLE central on macOS").
 - **BLE scanning never worked on Linux/`BlueZ`.** `BleCentral::find_device`
   passed a service-UUID `ScanFilter` to btleplug; `CoreBluetooth` honours it,
   but the `BlueZ` backend goes silent under it — no service-data events and an

@@ -250,7 +250,7 @@ contributing one if not present.
 ### Certification Declaration verification — HARD GATE BEFORE M6.6
 
 **Status:** **closed in M6.4.3** — see commits `10e3a81e` through
-`d227db5b` and `docs/superpowers/specs/2026-05-28-m6.4-commissioning-state-machine-design.md`.
+`d227db5b`.
 
 [original body retained for historical context]
 
@@ -579,8 +579,7 @@ documentation to say it may be a `BlueZ`-synthesised alias.
 
 **Status:** root cause CONFIRMED on hardware 2026-07-21 (real ESP32-C6, macOS
 26.5.2, btleplug 0.12.0). Infinite hang now bounded (`84dd442e`); success still
-blocked upstream. Full writeup:
-`docs/superpowers/audits/2026-07-21-macos-ble-hang-investigation.md`.
+blocked upstream.
 
 Live BLE commissioning works from Linux/`BlueZ` (both C1/Wi-Fi and C2/Thread
 were commissioned from the Pi against the ESP32-C6). From **macOS** it hangs at

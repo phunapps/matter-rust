@@ -6,9 +6,6 @@
 //! issuer/subject linkage (structural DN equality), path-length
 //! constraint, and signature verification (via M2.3's
 //! [`crate::MatterCertificate::verify_signed_by`]).
-//!
-//! See `docs/superpowers/specs/2026-05-18-matter-cert-chain-validation-design.md`
-//! for the full design.
 
 use crate::certificate::MatterCertificate;
 use crate::error::{Error, Result};

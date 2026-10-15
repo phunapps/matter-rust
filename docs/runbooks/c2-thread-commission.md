@@ -10,8 +10,8 @@ it joins the mesh and answers operational Thread traffic.
 > install + network provisioning all over BLE. For a Thread device, "network
 > provisioning" means `AddOrUpdateThreadNetwork` with the operational
 > dataset bytes, then `ConnectNetwork` keyed by the dataset's Extended
-> PAN ID — see D3/D5 in
-> `docs/superpowers/specs/2026-07-17-m9-c2-thread-commissioning-design.md`.
+> PAN ID (the dataset's TLVs carry the Extended PAN ID; see
+> `crates/matter-commissioning/src/thread_dataset.rs`).
 > Everything else (BTP handshake, PASE, attestation, CSR/NOC, the operational
 > CASE handshake once the device is reachable) is identical to the C1
 > Wi-Fi path — see `docs/runbooks/ble-commissioning.md` for that shared
@@ -281,7 +281,6 @@ flagged so it isn't forgotten.
 
 ## Reference
 
-- Design: `docs/superpowers/specs/2026-07-17-m9-c2-thread-commissioning-design.md`.
 - Shared BLE/BTP groundwork (macOS TCC, BTP capture, Pi DUT bring-up): C1's
   `docs/runbooks/ble-commissioning.md` and `docs/runbooks/ble-dut-pi.md`.
 - API: `MatterController::commission_ble`

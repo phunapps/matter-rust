@@ -163,8 +163,6 @@ failure as "investigate before continuing," not "retry and hope."
 
 ## Reference
 
-- Design: `docs/superpowers/specs/2026-07-13-m9-c1-ble-btp-design.md`, §D9
-  and "Overnight / morning split".
 - Peripheral-side runbook: `docs/runbooks/ble-dut-pi.md`.
 - API: `MatterController::commission_ble`
   (`crates/matter-controller/src/controller.rs`).

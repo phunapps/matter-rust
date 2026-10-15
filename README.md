@@ -102,8 +102,8 @@ characteristics' descriptor discovery and C1 write with `CBError.uuidNotAllowed`
 and btleplug drops the errored delegate events so the operation used to hang.
 That hang is now **bounded to a fast, clear failure** rather than an indefinite
 stall, but macOS BLE commissioning still cannot complete — it needs an upstream
-btleplug/CoreBluetooth fix. Root-cause writeup in
-[`docs/superpowers/audits/`](docs/) and [`TODO-1.0.md`](TODO-1.0.md).
+btleplug/CoreBluetooth fix. The root cause is summarised in
+[`TODO-1.0.md`](TODO-1.0.md) ("BLE central on macOS").
 
 ## Commissioning a real device
 

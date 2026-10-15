@@ -51,8 +51,8 @@ use crate::BtpError;
 /// discovery, notifications, C1 write, subscribe, handshake response) and each
 /// C1-write / C2-indication in the pump. This is how the macOS hang was
 /// root-caused: the trace stops at `discover_services START` (or, past a patched
-/// btleplug, at `handshake C1 write START`) — see the investigation under
-/// `docs/superpowers/audits/`. Confirmed cause: btleplug 0.12.0 drops errored
+/// btleplug, at `handshake C1 write START`) — see `TODO-1.0.md`, "BLE central
+/// on macOS". Confirmed cause: btleplug 0.12.0 drops errored
 /// `CoreBluetooth` delegate events, and `CoreBluetooth` rejects the `CHIPoBLE`
 /// GATT ops with `CBError.uuidNotAllowed`.
 ///
@@ -98,8 +98,8 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 /// `didDiscoverDescriptorsForCharacteristic` handler gates on `error.is_none()`).
 /// `CHIPoBLE`'s C1/C2 return `CBError.uuidNotAllowed` for that probe, so the
 /// future stalls forever. A per-attempt bound converts the stall into a clean,
-/// fast failure instead of hanging past every commissioning deadline. See the
-/// macOS BLE investigation under docs/superpowers/audits/.
+/// fast failure instead of hanging past every commissioning deadline. See
+/// `TODO-1.0.md`, "BLE central on macOS".
 const SERVICE_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(12);
 /// How many times to (re-)issue service discovery before giving up. A retry
 /// cannot recover the `btleplug` event-drop above (re-discovery hits the same

@@ -18,9 +18,7 @@ independent oracle.
 
 ### Why not chip-captured vectors at F1
 
-Per the M9-F design
-([`docs/superpowers/specs/2026-06-30-m9-f-ota-provider-bdx-design.md`]),
-the **live `ota-requestor-app` is the PRIMARY wire oracle**, and it arrives in
+The **live `ota-requestor-app` is the PRIMARY wire oracle**, and it arrives in
 phase **F4** (end-to-end via the H6 multi-DUT harness). A real requestor rejects
 a malformed `QueryImageResponse` or BDX block, so a successful
 announce → query → BDX download → apply is itself strong wire evidence.

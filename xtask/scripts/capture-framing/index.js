@@ -316,8 +316,8 @@ function captureGroupScenario(inputs) {
 }
 
 // ---------------------------------------------------------------------------
-// Scenarios — see the plan (docs/superpowers/plans/...transport-phase-1.md
-// "Task 7: capture-framing") for the rationale behind each set of inputs.
+// Scenarios: each set of inputs exercises one framing rule; its `id` and the
+// inline comments say which.
 // ---------------------------------------------------------------------------
 
 const scenarios = [
