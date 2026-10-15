@@ -1665,6 +1665,22 @@ server's to add (a read returns it). Code that re-encoded a decoded entry to
 compare or store it, rather than to write it, must keep the decoded value
 instead.
 
+### matter-clusters: Changed (breaking) — `CLUSTER_REVISION` is the Matter 1.4.2 revision
+
+Each module's `CLUSTER_REVISION` is now the cluster's revision in Matter
+1.4.2 (from chip's 1.4.2 data model; matter.js 0.16.11 has the same value for
+all 113 clusters), not the codegen model's (Matter 1.5.1). The value drops
+for 28 clusters, for example LevelControl 7 → 6, ColorControl 9 → 7,
+WindowCovering 8 → 6, Thermostat 10 → 9, DoorLock 10 → 9 and the ten
+concentration-measurement clusters 4 → 3. A device reports its own revision
+in the global `ClusterRevision` attribute; where the model's revision is
+higher, the constant's rustdoc says the module follows the model for what
+changed after 1.4.2. Identify is 6 (chip's current 1.4.2 data model and
+matter.js); chip's v1.4.2.0 SDK, and the copy of the 1.4.2 data model at that
+tag, say 5. The revisions are frozen in the repository
+(`xtask/scripts/dump-model/chip-1.4.2.json`, written by
+`scripts/chip-facts.py`), so generating needs no chip checkout.
+
 ## matter-transport 0.7.3 + matter-controller 0.18.1
 
 A subscription waiting for its device to come back no longer depends on the

@@ -31,8 +31,16 @@ pub struct Cluster {
     pub id: u32,
     /// `PascalCase` cluster name (e.g. `OnOff`).
     pub name: String,
-    /// Cluster revision.
+    /// The cluster's revision in Matter 1.4.2 (chip's 1.4.2 XML, frozen in
+    /// `xtask/scripts/dump-model/chip-1.4.2.json`): the generated
+    /// `CLUSTER_REVISION`.
     pub revision: u16,
+    /// The cluster's revision in the codegen model (Matter 1.5.1), when the
+    /// dump recorded it; higher than [`revision`](Self::revision) for a
+    /// cluster the model has newer elements of. Absent in a hand-written
+    /// fixture.
+    #[serde(default, rename = "modelRevision")]
+    pub model_revision: Option<u16>,
     /// The Matter specification marks the whole cluster provisional
     /// (`<provisionalConform/>` on its cluster id; the dump's
     /// `PROVISIONAL_CLUSTERS`): its shape may change between specification

@@ -405,8 +405,97 @@ fn level_control_with_on_off_commands_carry_their_base_fields() {
 }
 
 #[test]
-fn dump_script_version_is_11() {
-    assert_eq!(load()["meta"]["dumpScriptVersion"], 11);
+fn dump_script_version_is_12() {
+    assert_eq!(load()["meta"]["dumpScriptVersion"], 12);
+}
+
+/// The clusters whose codegen-model (Matter 1.5.1) revision is above their
+/// Matter 1.4.2 one, as `(cluster, 1.4.2 revision, model revision)`.
+const NEWER_IN_THE_MODEL: [(&str, u64, u64); 28] = [
+    ("BooleanState", 1, 2),
+    ("CarbonDioxideConcentrationMeasurement", 3, 4),
+    ("CarbonMonoxideConcentrationMeasurement", 3, 4),
+    ("ColorControl", 7, 9),
+    ("DoorLock", 9, 10),
+    ("ElectricalEnergyMeasurement", 1, 2),
+    ("EnergyEvse", 3, 4),
+    ("FanControl", 5, 6),
+    ("FlowMeasurement", 3, 4),
+    ("FormaldehydeConcentrationMeasurement", 3, 4),
+    ("IlluminanceMeasurement", 3, 4),
+    ("LevelControl", 6, 7),
+    ("NitrogenDioxideConcentrationMeasurement", 3, 4),
+    ("OccupancySensing", 5, 6),
+    ("OzoneConcentrationMeasurement", 3, 4),
+    ("Pm10ConcentrationMeasurement", 3, 4),
+    ("Pm1ConcentrationMeasurement", 3, 4),
+    ("Pm25ConcentrationMeasurement", 3, 4),
+    ("PressureMeasurement", 3, 4),
+    ("PumpConfigurationAndControl", 4, 5),
+    ("RadonConcentrationMeasurement", 3, 4),
+    ("RelativeHumidityMeasurement", 3, 4),
+    ("RvcCleanMode", 4, 5),
+    ("RvcRunMode", 3, 4),
+    ("TemperatureMeasurement", 4, 5),
+    ("Thermostat", 9, 10),
+    (
+        "TotalVolatileOrganicCompoundsConcentrationMeasurement",
+        3,
+        4,
+    ),
+    ("WindowCovering", 6, 8),
+];
+
+#[test]
+fn cluster_revisions_are_the_frozen_1_4_2_ones() {
+    // `revision` (CLUSTER_REVISION) comes from chip-1.4.2.json, which
+    // scripts/chip-facts.py writes from chip's 1.4.2 XML; `modelRevision` is
+    // the model's. The gate has no chip checkout, so this ties the two files
+    // together: every generated cluster has its frozen revision, and the
+    // table names no other cluster.
+    let facts: Value = serde_json::from_str(
+        &fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/dump-model/chip-1.4.2.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let table = facts["revisions"].as_object().unwrap();
+    let v = load();
+    let mut names = Vec::new();
+    let mut newer = Vec::new();
+    for c in clusters(&v) {
+        let name = c["name"].as_str().unwrap();
+        names.push(name);
+        assert_eq!(c["revision"], table[name], "{name}");
+        let (rev, model) = (
+            c["revision"].as_u64().unwrap(),
+            c["modelRevision"].as_u64().unwrap(),
+        );
+        assert!(
+            model >= rev,
+            "{name}: model revision {model} below 1.4.2's {rev}"
+        );
+        if model > rev {
+            newer.push((name, rev, model));
+        }
+    }
+    let mut keys: Vec<&str> = table.keys().map(String::as_str).collect();
+    names.sort_unstable();
+    keys.sort_unstable();
+    assert_eq!(keys, names);
+    newer.sort_unstable();
+    assert_eq!(newer, NEWER_IN_THE_MODEL);
+}
+
+#[test]
+fn chip_facts_were_not_bootstrapped() {
+    // A CHIP_FACTS_BOOTSTRAP=1 dump tolerates a stale chip-1.4.2.json so
+    // scripts/chip-facts.py can be rerun; its output must never be committed.
+    assert!(
+        load()["meta"]["chipFactsBootstrap"].is_null(),
+        "clusters.json came from a bootstrap dump: run scripts/chip-facts.py <chip> --write, then cargo xtask dump-model"
+    );
 }
 
 #[test]

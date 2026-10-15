@@ -11,7 +11,7 @@
 //             relaxed: [{cluster,element,class,reason}],
 //             supplemented: [{cluster,element,source}] },
 //     clusters: [ {
-//       id, name, revision,
+//       id, name, revision (Matter 1.4.2, chip-1.4.2.json), modelRevision,
 //       features:   [{ bit, code, name, description }],
 //       attributes: [{ id, name, type, metatype, entryType?, nullable, optional, writable, description }],
 //       commands:   [{ id, name, direction, responseId, fields: [field] }],
@@ -53,6 +53,22 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..', '..'); // dump-model -> scripts -> xtask -> repo root
 const OUT_PATH = join(REPO_ROOT, 'xtask', 'model', 'clusters.json');
 const SUPPLEMENT_PATH = join(__dirname, 'supplement-1.4.json');
+const CHIP_FACTS_PATH = join(__dirname, 'chip-1.4.2.json');
+// CHIP_FACTS_BOOTSTRAP=1: a stale chip-1.4.2.json (a cluster added to or
+// removed from ALLOWLIST, a model upgrade that renamed or newly marks an
+// element) is warned about instead of stopping the dump, so clusters.json can
+// be regenerated for scripts/chip-facts.py to read. The output records
+// `meta.chipFactsBootstrap: true`, which a freeze test refuses: rerun
+// chip-facts.py --write and a plain dump before committing.
+const CHIP_FACTS_BOOTSTRAP = process.env.CHIP_FACTS_BOOTSTRAP === '1';
+const CHIP_FACTS_RECOVERY =
+  'run `CHIP_FACTS_BOOTSTRAP=1 cargo xtask dump-model`, then `python3 scripts/chip-facts.py <chip> --write`, then `cargo xtask dump-model`';
+// A stale chip-1.4.2.json entry: fail, or (bootstrap) warn and let the caller
+// skip it.
+function staleChipFact(msg) {
+  if (!CHIP_FACTS_BOOTSTRAP) fail(`${msg} — ${CHIP_FACTS_RECOVERY}`);
+  console.warn(`dump-model (bootstrap): ${msg}; skipped`);
+}
 
 // Bump when the JSON shape changes (recorded in the header for audit).
 // v2: per-cluster `events` array (dumped for EVENT_ALLOWLIST clusters).
@@ -76,7 +92,11 @@ const SUPPLEMENT_PATH = join(__dirname, 'supplement-1.4.json');
 //     qualified cross-cluster reference (M9-A3 B7).
 // v11: `nullableReason` on a field a class-N FIELD_RELAXATIONS entry made
 //     nullable, for generated rustdoc (M9-A3 B7).
-const DUMP_SCRIPT_VERSION = 11;
+// v12: `revision` is the cluster's Matter 1.4.2 revision (chip-1.4.2.json,
+//     written by scripts/chip-facts.py from chip's 1.4.2 XML), and
+//     `modelRevision` the model's own; `meta.chipFactsBootstrap` marks a
+//     CHIP_FACTS_BOOTSTRAP=1 dump.
+const DUMP_SCRIPT_VERSION = 12;
 // @matter/model 0.17.x tracks Matter spec 1.5.1. Recorded for provenance;
 // the freeze test only asserts it is a non-empty string, so correcting it
 // later does not break the gate.
@@ -1835,7 +1855,12 @@ function dumpCluster(entry) {
   datatypes.sort((x, y) => x.name.localeCompare(y.name));
   features.sort((x, y) => (x.bit ?? 0) - (y.bit ?? 0));
 
-  const out = { id: cluster.id, name: cluster.name, revision: cluster.revision };
+  let revision = CHIP_FACTS.revisions[cluster.name];
+  if (!Number.isInteger(revision) || revision < 1) {
+    staleChipFact(`chip-1.4.2.json has no Matter 1.4.2 revision for ${cluster.name}`);
+    revision = cluster.revision;
+  }
+  const out = { id: cluster.id, name: cluster.name, revision, modelRevision: cluster.revision };
   if (PROVISIONAL_CLUSTERS.has(cluster.name)) out.provisional = true;
   return { ...out, features, attributes, commands, events, datatypes };
 }
@@ -2374,6 +2399,23 @@ function responseProblem(model, el) {
   return null;
 }
 
+// The facts the dump takes from chip's Matter 1.4.2 data, frozen by
+// scripts/chip-facts.py so the dump needs no chip checkout: each generated
+// cluster's 1.4.2 revision (emitted as CLUSTER_REVISION; a device reports its
+// own in the ClusterRevision attribute).
+function loadChipFacts() {
+  const doc = JSON.parse(readFileSync(CHIP_FACTS_PATH, 'utf8'));
+  for (const k of Object.keys(doc)) {
+    if (!['comment', 'chip', 'revisions'].includes(k)) fail(`chip-1.4.2.json: unknown top-level key \`${k}\``);
+  }
+  const names = new Set(ALLOWLIST.map((e) => e.name));
+  for (const name of Object.keys(doc.revisions || {})) {
+    if (!names.has(name)) staleChipFact(`chip-1.4.2.json revisions: ${name} is not allowlisted`);
+  }
+  return doc;
+}
+const CHIP_FACTS = loadChipFacts();
+
 function applySupplement() {
   const doc = JSON.parse(readFileSync(SUPPLEMENT_PATH, 'utf8'));
   for (const k of Object.keys(doc)) {
@@ -2517,6 +2559,7 @@ const doc = {
     excluded,
     relaxed,
     supplemented,
+    ...(CHIP_FACTS_BOOTSTRAP ? { chipFactsBootstrap: true } : {}),
   },
   clusters,
 };

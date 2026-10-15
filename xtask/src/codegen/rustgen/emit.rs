@@ -341,8 +341,31 @@ fn emit_header(s: &mut String, c: &Cluster) {
     );
     line!(s, "/// Cluster ID.");
     line!(s, "pub const CLUSTER_ID: u32 = 0x{:04X};", c.id);
-    line!(s, "/// Cluster revision.");
+    for doc in cluster_revision_doc(c) {
+        line!(s, "{doc}");
+    }
     line!(s, "pub const CLUSTER_REVISION: u16 = {};\n", c.revision);
+}
+
+/// The rustdoc lines of `CLUSTER_REVISION`: the Matter 1.4.2 revision this
+/// crate was generated against, and that a device reports its own. When the
+/// codegen model's revision is higher, a last line says the module follows
+/// the model for what changed after 1.4.2.
+pub(crate) fn cluster_revision_doc(c: &Cluster) -> Vec<String> {
+    let mut doc = vec![
+        "/// The cluster revision this crate was generated against (Matter 1.4.2); a device"
+            .to_string(),
+        "/// reports its own in the `ClusterRevision` attribute.".to_string(),
+    ];
+    if let Some(m) = c.model_revision.filter(|m| *m > c.revision) {
+        doc.push("///".to_string());
+        doc.push(format!(
+            "/// The codegen model (Matter 1.5.1) is at revision {m}: an element it added or \
+             changed after revision {} is generated as the model has it.",
+            c.revision
+        ));
+    }
+    doc
 }
 
 /// True when the cluster defines its own `SemanticTagStruct` datatype, so the
@@ -881,6 +904,7 @@ mod tests {
             id: 0x0050,
             name: "Shadowing".to_string(),
             revision: 1,
+            model_revision: None,
             provisional: false,
             features: vec![],
             attributes,
@@ -941,6 +965,30 @@ mod tests {
             &mut s,
             &cluster_with(vec![struct_dt("SemanticTagStruct")], vec![tag_list]),
         );
+    }
+
+    #[test]
+    fn cluster_revision_doc_names_1_4_2_and_a_newer_model_revision() {
+        let mut c = cluster_with(vec![], vec![]);
+        c.revision = 6;
+        c.model_revision = Some(7);
+        let mut s = String::new();
+        emit_header(&mut s, &c);
+        assert!(
+            s.contains(
+                "/// The cluster revision this crate was generated against (Matter 1.4.2); a device\n\
+                 /// reports its own in the `ClusterRevision` attribute.\n///\n\
+                 /// The codegen model (Matter 1.5.1) is at revision 7: an element it added or \
+                 changed after revision 6 is generated as the model has it.\n\
+                 pub const CLUSTER_REVISION: u16 = 6;\n"
+            ),
+            "{s}"
+        );
+        // The same revision, or none recorded: no model line.
+        for model_revision in [Some(6), None] {
+            c.model_revision = model_revision;
+            assert_eq!(cluster_revision_doc(&c).len(), 2, "{model_revision:?}");
+        }
     }
 
     #[test]

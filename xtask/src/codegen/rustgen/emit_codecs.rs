@@ -2266,6 +2266,7 @@ mod tests {
             id: 0x1,
             name: "T".to_string(),
             revision: 1,
+            model_revision: None,
             provisional: false,
             features: vec![],
             attributes: vec![],

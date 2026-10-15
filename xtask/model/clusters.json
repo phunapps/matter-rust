@@ -2,7 +2,7 @@
   "meta": {
     "matterJsModelVersion": "0.17.1",
     "specRevision": "1.5.1",
-    "dumpScriptVersion": 11,
+    "dumpScriptVersion": 12,
     "generatedClusters": [
       "Identify",
       "Groups",
@@ -969,6 +969,7 @@
       "id": 3,
       "name": "Identify",
       "revision": 6,
+      "modelRevision": 6,
       "features": [],
       "attributes": [
         {
@@ -1134,6 +1135,7 @@
       "id": 4,
       "name": "Groups",
       "revision": 4,
+      "modelRevision": 4,
       "features": [
         {
           "bit": 0,
@@ -1402,6 +1404,7 @@
       "id": 6,
       "name": "OnOff",
       "revision": 6,
+      "modelRevision": 6,
       "features": [
         {
           "bit": 0,
@@ -1664,7 +1667,8 @@
     {
       "id": 8,
       "name": "LevelControl",
-      "revision": 7,
+      "revision": 6,
+      "modelRevision": 7,
       "features": [
         {
           "bit": 0,
@@ -2243,6 +2247,7 @@
       "id": 29,
       "name": "Descriptor",
       "revision": 3,
+      "modelRevision": 3,
       "features": [
         {
           "bit": 0,
@@ -2353,6 +2358,7 @@
       "id": 30,
       "name": "Binding",
       "revision": 1,
+      "modelRevision": 1,
       "features": [],
       "attributes": [
         {
@@ -2444,6 +2450,7 @@
       "id": 31,
       "name": "AccessControl",
       "revision": 2,
+      "modelRevision": 2,
       "features": [
         {
           "bit": 0,
@@ -3073,6 +3080,7 @@
       "id": 37,
       "name": "Actions",
       "revision": 1,
+      "modelRevision": 1,
       "features": [],
       "attributes": [
         {
@@ -3840,6 +3848,7 @@
       "id": 40,
       "name": "BasicInformation",
       "revision": 5,
+      "modelRevision": 5,
       "features": [],
       "attributes": [
         {
@@ -4351,6 +4360,7 @@
       "id": 41,
       "name": "OtaSoftwareUpdateProvider",
       "revision": 1,
+      "modelRevision": 1,
       "features": [],
       "attributes": [],
       "commands": [
@@ -4681,6 +4691,7 @@
       "id": 42,
       "name": "OtaSoftwareUpdateRequestor",
       "revision": 1,
+      "modelRevision": 1,
       "features": [],
       "attributes": [
         {
@@ -5044,6 +5055,7 @@
       "id": 43,
       "name": "LocalizationConfiguration",
       "revision": 1,
+      "modelRevision": 1,
       "features": [],
       "attributes": [
         {
@@ -5076,6 +5088,7 @@
       "id": 44,
       "name": "TimeFormatLocalization",
       "revision": 1,
+      "modelRevision": 1,
       "features": [
         {
           "bit": 0,
@@ -5222,6 +5235,7 @@
       "id": 45,
       "name": "UnitLocalization",
       "revision": 2,
+      "modelRevision": 2,
       "features": [
         {
           "bit": 0,
@@ -5285,6 +5299,7 @@
       "id": 46,
       "name": "PowerSourceConfiguration",
       "revision": 1,
+      "modelRevision": 1,
       "features": [],
       "attributes": [
         {
@@ -5307,6 +5322,7 @@
       "id": 47,
       "name": "PowerSource",
       "revision": 3,
+      "modelRevision": 3,
       "features": [
         {
           "bit": 0,
@@ -6570,6 +6586,7 @@
       "id": 48,
       "name": "GeneralCommissioning",
       "revision": 2,
+      "modelRevision": 2,
       "features": [
         {
           "bit": 0,
@@ -7039,6 +7056,7 @@
       "id": 49,
       "name": "NetworkCommissioning",
       "revision": 2,
+      "modelRevision": 2,
       "features": [
         {
           "bit": 0,
@@ -7820,6 +7838,7 @@
       "id": 50,
       "name": "DiagnosticLogs",
       "revision": 1,
+      "modelRevision": 1,
       "features": [],
       "attributes": [],
       "commands": [
@@ -7985,6 +8004,7 @@
       "id": 51,
       "name": "GeneralDiagnostics",
       "revision": 2,
+      "modelRevision": 2,
       "features": [
         {
           "bit": 0,
@@ -8602,6 +8622,7 @@
       "id": 52,
       "name": "SoftwareDiagnostics",
       "revision": 1,
+      "modelRevision": 1,
       "features": [
         {
           "bit": 0,
@@ -8758,6 +8779,7 @@
       "id": 53,
       "name": "ThreadNetworkDiagnostics",
       "revision": 3,
+      "modelRevision": 3,
       "features": [
         {
           "bit": 0,
@@ -9965,6 +9987,7 @@
       "id": 54,
       "name": "WiFiNetworkDiagnostics",
       "revision": 1,
+      "modelRevision": 1,
       "features": [
         {
           "bit": 0,
@@ -10313,6 +10336,7 @@
       "id": 55,
       "name": "EthernetNetworkDiagnostics",
       "revision": 1,
+      "modelRevision": 1,
       "features": [
         {
           "bit": 0,
@@ -10494,6 +10518,7 @@
       "id": 56,
       "name": "TimeSynchronization",
       "revision": 2,
+      "modelRevision": 2,
       "features": [
         {
           "bit": 0,
@@ -11139,6 +11164,7 @@
       "id": 57,
       "name": "BridgedDeviceBasicInformation",
       "revision": 5,
+      "modelRevision": 5,
       "features": [
         {
           "bit": 20,
@@ -11604,6 +11630,7 @@
       "id": 59,
       "name": "Switch",
       "revision": 2,
+      "modelRevision": 2,
       "features": [
         {
           "bit": 0,
@@ -11813,6 +11840,7 @@
       "id": 60,
       "name": "AdministratorCommissioning",
       "revision": 1,
+      "modelRevision": 1,
       "features": [
         {
           "bit": 0,
@@ -11987,6 +12015,7 @@
       "id": 62,
       "name": "OperationalCredentials",
       "revision": 2,
+      "modelRevision": 2,
       "features": [],
       "attributes": [
         {
@@ -12663,6 +12692,7 @@
       "id": 63,
       "name": "GroupKeyManagement",
       "revision": 2,
+      "modelRevision": 2,
       "features": [
         {
           "bit": 0,
@@ -13036,6 +13066,7 @@
       "id": 64,
       "name": "FixedLabel",
       "revision": 1,
+      "modelRevision": 1,
       "features": [],
       "attributes": [
         {
@@ -13085,6 +13116,7 @@
       "id": 65,
       "name": "UserLabel",
       "revision": 1,
+      "modelRevision": 1,
       "features": [],
       "attributes": [
         {
@@ -13133,7 +13165,8 @@
     {
       "id": 69,
       "name": "BooleanState",
-      "revision": 2,
+      "revision": 1,
+      "modelRevision": 2,
       "features": [],
       "attributes": [
         {
@@ -13172,6 +13205,7 @@
       "id": 70,
       "name": "IcdManagement",
       "revision": 3,
+      "modelRevision": 3,
       "features": [
         {
           "bit": 0,
@@ -13623,6 +13657,7 @@
       "id": 72,
       "name": "OvenCavityOperationalState",
       "revision": 2,
+      "modelRevision": 2,
       "features": [],
       "attributes": [
         {
@@ -13897,6 +13932,7 @@
       "id": 73,
       "name": "OvenMode",
       "revision": 2,
+      "modelRevision": 2,
       "features": [],
       "attributes": [
         {
@@ -14187,6 +14223,7 @@
       "id": 74,
       "name": "LaundryDryerControls",
       "revision": 1,
+      "modelRevision": 1,
       "features": [],
       "attributes": [
         {
@@ -14248,6 +14285,7 @@
       "id": 80,
       "name": "ModeSelect",
       "revision": 2,
+      "modelRevision": 2,
       "features": [
         {
           "bit": 0,
@@ -14408,6 +14446,7 @@
       "id": 81,
       "name": "LaundryWasherMode",
       "revision": 3,
+      "modelRevision": 3,
       "features": [],
       "attributes": [
         {
@@ -14653,6 +14692,7 @@
       "id": 82,
       "name": "RefrigeratorAndTemperatureControlledCabinetMode",
       "revision": 3,
+      "modelRevision": 3,
       "features": [],
       "attributes": [
         {
@@ -14888,6 +14928,7 @@
       "id": 83,
       "name": "LaundryWasherControls",
       "revision": 2,
+      "modelRevision": 2,
       "features": [
         {
           "bit": 0,
@@ -14982,7 +15023,8 @@
     {
       "id": 84,
       "name": "RvcRunMode",
-      "revision": 4,
+      "revision": 3,
+      "modelRevision": 4,
       "features": [
         {
           "bit": 20,
@@ -15269,7 +15311,8 @@
     {
       "id": 85,
       "name": "RvcCleanMode",
-      "revision": 5,
+      "revision": 4,
+      "modelRevision": 5,
       "features": [
         {
           "bit": 20,
@@ -15527,6 +15570,7 @@
       "id": 86,
       "name": "TemperatureControl",
       "revision": 1,
+      "modelRevision": 1,
       "features": [
         {
           "bit": 0,
@@ -15645,6 +15689,7 @@
       "id": 87,
       "name": "RefrigeratorAlarm",
       "revision": 1,
+      "modelRevision": 1,
       "features": [],
       "attributes": [
         {
@@ -15744,6 +15789,7 @@
       "id": 89,
       "name": "DishwasherMode",
       "revision": 3,
+      "modelRevision": 3,
       "features": [],
       "attributes": [
         {
@@ -15984,6 +16030,7 @@
       "id": 91,
       "name": "AirQuality",
       "revision": 1,
+      "modelRevision": 1,
       "features": [
         {
           "bit": 0,
@@ -16074,6 +16121,7 @@
       "id": 92,
       "name": "SmokeCoAlarm",
       "revision": 1,
+      "modelRevision": 1,
       "features": [
         {
           "bit": 0,
@@ -16517,6 +16565,7 @@
       "id": 93,
       "name": "DishwasherAlarm",
       "revision": 1,
+      "modelRevision": 1,
       "features": [
         {
           "bit": 0,
@@ -16693,6 +16742,7 @@
       "id": 94,
       "name": "MicrowaveOvenMode",
       "revision": 2,
+      "modelRevision": 2,
       "features": [],
       "attributes": [
         {
@@ -16856,6 +16906,7 @@
       "id": 95,
       "name": "MicrowaveOvenControl",
       "revision": 1,
+      "modelRevision": 1,
       "features": [
         {
           "bit": 0,
@@ -17075,6 +17126,7 @@
       "id": 96,
       "name": "OperationalState",
       "revision": 3,
+      "modelRevision": 3,
       "features": [],
       "attributes": [
         {
@@ -17363,6 +17415,7 @@
       "id": 97,
       "name": "RvcOperationalState",
       "revision": 3,
+      "modelRevision": 3,
       "features": [],
       "attributes": [
         {
@@ -17754,6 +17807,7 @@
       "id": 98,
       "name": "ScenesManagement",
       "revision": 1,
+      "modelRevision": 1,
       "features": [
         {
           "bit": 0,
@@ -18568,6 +18622,7 @@
       "id": 113,
       "name": "HepaFilterMonitoring",
       "revision": 1,
+      "modelRevision": 1,
       "features": [
         {
           "bit": 0,
@@ -18768,6 +18823,7 @@
       "id": 114,
       "name": "ActivatedCarbonFilterMonitoring",
       "revision": 1,
+      "modelRevision": 1,
       "features": [
         {
           "bit": 0,
@@ -18968,6 +19024,7 @@
       "id": 121,
       "name": "WaterTankLevelMonitoring",
       "revision": 1,
+      "modelRevision": 1,
       "features": [
         {
           "bit": 0,
@@ -19168,6 +19225,7 @@
       "id": 128,
       "name": "BooleanStateConfiguration",
       "revision": 1,
+      "modelRevision": 1,
       "features": [
         {
           "bit": 0,
@@ -19393,6 +19451,7 @@
       "id": 129,
       "name": "ValveConfigurationAndControl",
       "revision": 1,
+      "modelRevision": 1,
       "features": [
         {
           "bit": 0,
@@ -19678,6 +19737,7 @@
       "id": 144,
       "name": "ElectricalPowerMeasurement",
       "revision": 3,
+      "modelRevision": 3,
       "features": [
         {
           "bit": 0,
@@ -20357,7 +20417,8 @@
     {
       "id": 145,
       "name": "ElectricalEnergyMeasurement",
-      "revision": 2,
+      "revision": 1,
+      "modelRevision": 2,
       "features": [
         {
           "bit": 0,
@@ -20876,6 +20937,7 @@
       "id": 148,
       "name": "WaterHeaterManagement",
       "revision": 2,
+      "modelRevision": 2,
       "features": [
         {
           "bit": 0,
@@ -21139,6 +21201,7 @@
       "id": 151,
       "name": "Messages",
       "revision": 3,
+      "modelRevision": 3,
       "features": [
         {
           "bit": 0,
@@ -21616,6 +21679,7 @@
       "id": 152,
       "name": "DeviceEnergyManagement",
       "revision": 4,
+      "modelRevision": 4,
       "features": [
         {
           "bit": 0,
@@ -22718,7 +22782,8 @@
     {
       "id": 153,
       "name": "EnergyEvse",
-      "revision": 4,
+      "revision": 3,
+      "modelRevision": 4,
       "features": [
         {
           "bit": 0,
@@ -23655,6 +23720,7 @@
       "id": 155,
       "name": "EnergyPreference",
       "revision": 1,
+      "modelRevision": 1,
       "provisional": true,
       "features": [
         {
@@ -23788,6 +23854,7 @@
       "id": 156,
       "name": "PowerTopology",
       "revision": 1,
+      "modelRevision": 1,
       "features": [
         {
           "bit": 0,
@@ -23846,6 +23913,7 @@
       "id": 157,
       "name": "EnergyEvseMode",
       "revision": 2,
+      "modelRevision": 2,
       "features": [],
       "attributes": [
         {
@@ -24091,6 +24159,7 @@
       "id": 158,
       "name": "WaterHeaterMode",
       "revision": 1,
+      "modelRevision": 1,
       "features": [],
       "attributes": [
         {
@@ -24331,6 +24400,7 @@
       "id": 159,
       "name": "DeviceEnergyManagementMode",
       "revision": 2,
+      "modelRevision": 2,
       "features": [],
       "attributes": [
         {
@@ -24575,7 +24645,8 @@
     {
       "id": 257,
       "name": "DoorLock",
-      "revision": 10,
+      "revision": 9,
+      "modelRevision": 10,
       "features": [
         {
           "bit": 0,
@@ -27094,7 +27165,8 @@
     {
       "id": 258,
       "name": "WindowCovering",
-      "revision": 8,
+      "revision": 6,
+      "modelRevision": 8,
       "features": [
         {
           "bit": 0,
@@ -27915,6 +27987,7 @@
       "id": 336,
       "name": "ServiceArea",
       "revision": 2,
+      "modelRevision": 2,
       "features": [
         {
           "bit": 0,
@@ -28374,7 +28447,8 @@
     {
       "id": 512,
       "name": "PumpConfigurationAndControl",
-      "revision": 5,
+      "revision": 4,
+      "modelRevision": 5,
       "features": [
         {
           "bit": 0,
@@ -28881,7 +28955,8 @@
     {
       "id": 513,
       "name": "Thermostat",
-      "revision": 10,
+      "revision": 9,
+      "modelRevision": 10,
       "features": [
         {
           "bit": 0,
@@ -30724,7 +30799,8 @@
     {
       "id": 514,
       "name": "FanControl",
-      "revision": 6,
+      "revision": 5,
+      "modelRevision": 6,
       "features": [
         {
           "bit": 0,
@@ -31088,6 +31164,7 @@
       "id": 516,
       "name": "ThermostatUserInterfaceConfiguration",
       "revision": 2,
+      "modelRevision": 2,
       "features": [],
       "attributes": [
         {
@@ -31203,7 +31280,8 @@
     {
       "id": 768,
       "name": "ColorControl",
-      "revision": 9,
+      "revision": 7,
+      "modelRevision": 9,
       "features": [
         {
           "bit": 0,
@@ -33006,7 +33084,8 @@
     {
       "id": 1024,
       "name": "IlluminanceMeasurement",
-      "revision": 4,
+      "revision": 3,
+      "modelRevision": 4,
       "features": [],
       "attributes": [
         {
@@ -33087,7 +33166,8 @@
     {
       "id": 1026,
       "name": "TemperatureMeasurement",
-      "revision": 5,
+      "revision": 4,
+      "modelRevision": 5,
       "features": [],
       "attributes": [
         {
@@ -33138,7 +33218,8 @@
     {
       "id": 1027,
       "name": "PressureMeasurement",
-      "revision": 4,
+      "revision": 3,
+      "modelRevision": 4,
       "features": [
         {
           "bit": 0,
@@ -33246,7 +33327,8 @@
     {
       "id": 1028,
       "name": "FlowMeasurement",
-      "revision": 4,
+      "revision": 3,
+      "modelRevision": 4,
       "features": [],
       "attributes": [
         {
@@ -33297,7 +33379,8 @@
     {
       "id": 1029,
       "name": "RelativeHumidityMeasurement",
-      "revision": 4,
+      "revision": 3,
+      "modelRevision": 4,
       "features": [],
       "attributes": [
         {
@@ -33348,7 +33431,8 @@
     {
       "id": 1030,
       "name": "OccupancySensing",
-      "revision": 6,
+      "revision": 5,
+      "modelRevision": 6,
       "features": [
         {
           "bit": 0,
@@ -33665,7 +33749,8 @@
     {
       "id": 1036,
       "name": "CarbonMonoxideConcentrationMeasurement",
-      "revision": 4,
+      "revision": 3,
+      "modelRevision": 4,
       "features": [
         {
           "bit": 0,
@@ -33928,7 +34013,8 @@
     {
       "id": 1037,
       "name": "CarbonDioxideConcentrationMeasurement",
-      "revision": 4,
+      "revision": 3,
+      "modelRevision": 4,
       "features": [
         {
           "bit": 0,
@@ -34191,7 +34277,8 @@
     {
       "id": 1043,
       "name": "NitrogenDioxideConcentrationMeasurement",
-      "revision": 4,
+      "revision": 3,
+      "modelRevision": 4,
       "features": [
         {
           "bit": 0,
@@ -34454,7 +34541,8 @@
     {
       "id": 1045,
       "name": "OzoneConcentrationMeasurement",
-      "revision": 4,
+      "revision": 3,
+      "modelRevision": 4,
       "features": [
         {
           "bit": 0,
@@ -34717,7 +34805,8 @@
     {
       "id": 1066,
       "name": "Pm25ConcentrationMeasurement",
-      "revision": 4,
+      "revision": 3,
+      "modelRevision": 4,
       "features": [
         {
           "bit": 0,
@@ -34980,7 +35069,8 @@
     {
       "id": 1067,
       "name": "FormaldehydeConcentrationMeasurement",
-      "revision": 4,
+      "revision": 3,
+      "modelRevision": 4,
       "features": [
         {
           "bit": 0,
@@ -35243,7 +35333,8 @@
     {
       "id": 1068,
       "name": "Pm1ConcentrationMeasurement",
-      "revision": 4,
+      "revision": 3,
+      "modelRevision": 4,
       "features": [
         {
           "bit": 0,
@@ -35506,7 +35597,8 @@
     {
       "id": 1069,
       "name": "Pm10ConcentrationMeasurement",
-      "revision": 4,
+      "revision": 3,
+      "modelRevision": 4,
       "features": [
         {
           "bit": 0,
@@ -35769,7 +35861,8 @@
     {
       "id": 1070,
       "name": "TotalVolatileOrganicCompoundsConcentrationMeasurement",
-      "revision": 4,
+      "revision": 3,
+      "modelRevision": 4,
       "features": [
         {
           "bit": 0,
@@ -36032,7 +36125,8 @@
     {
       "id": 1071,
       "name": "RadonConcentrationMeasurement",
-      "revision": 4,
+      "revision": 3,
+      "modelRevision": 4,
       "features": [
         {
           "bit": 0,
@@ -36296,6 +36390,7 @@
       "id": 1105,
       "name": "WiFiNetworkManagement",
       "revision": 1,
+      "modelRevision": 1,
       "features": [],
       "attributes": [
         {
@@ -36353,6 +36448,7 @@
       "id": 1106,
       "name": "ThreadBorderRouterManagement",
       "revision": 1,
+      "modelRevision": 1,
       "features": [
         {
           "bit": 0,
@@ -36509,6 +36605,7 @@
       "id": 1107,
       "name": "ThreadNetworkDirectory",
       "revision": 1,
+      "modelRevision": 1,
       "features": [],
       "attributes": [
         {
@@ -36667,6 +36764,7 @@
       "id": 1283,
       "name": "WakeOnLan",
       "revision": 1,
+      "modelRevision": 1,
       "features": [],
       "attributes": [
         {
@@ -36698,6 +36796,7 @@
       "id": 1284,
       "name": "Channel",
       "revision": 2,
+      "modelRevision": 2,
       "features": [
         {
           "bit": 0,
@@ -37595,6 +37694,7 @@
       "id": 1285,
       "name": "TargetNavigator",
       "revision": 2,
+      "modelRevision": 2,
       "features": [],
       "attributes": [
         {
@@ -37766,6 +37866,7 @@
       "id": 1286,
       "name": "MediaPlayback",
       "revision": 2,
+      "modelRevision": 2,
       "features": [
         {
           "bit": 0,
@@ -38467,6 +38568,7 @@
       "id": 1287,
       "name": "MediaInput",
       "revision": 1,
+      "modelRevision": 1,
       "features": [
         {
           "bit": 0,
@@ -38677,6 +38779,7 @@
       "id": 1288,
       "name": "LowPower",
       "revision": 1,
+      "modelRevision": 1,
       "features": [],
       "attributes": [],
       "commands": [
@@ -38695,6 +38798,7 @@
       "id": 1289,
       "name": "KeypadInput",
       "revision": 1,
+      "modelRevision": 1,
       "features": [
         {
           "bit": 0,
@@ -39216,6 +39320,7 @@
       "id": 1290,
       "name": "ContentLauncher",
       "revision": 2,
+      "modelRevision": 2,
       "features": [
         {
           "bit": 0,
@@ -39949,6 +40054,7 @@
       "id": 1291,
       "name": "AudioOutput",
       "revision": 1,
+      "modelRevision": 1,
       "features": [
         {
           "bit": 0,
@@ -40106,6 +40212,7 @@
       "id": 1292,
       "name": "ApplicationLauncher",
       "revision": 2,
+      "modelRevision": 2,
       "features": [
         {
           "bit": 0,
@@ -40323,6 +40430,7 @@
       "id": 1293,
       "name": "ApplicationBasic",
       "revision": 1,
+      "modelRevision": 1,
       "features": [],
       "attributes": [
         {
@@ -40470,6 +40578,7 @@
       "id": 1294,
       "name": "AccountLogin",
       "revision": 2,
+      "modelRevision": 2,
       "features": [],
       "attributes": [],
       "commands": [
@@ -40586,6 +40695,7 @@
       "id": 1295,
       "name": "ContentControl",
       "revision": 1,
+      "modelRevision": 1,
       "provisional": true,
       "features": [
         {
@@ -41320,6 +41430,7 @@
       "id": 1296,
       "name": "ContentAppObserver",
       "revision": 1,
+      "modelRevision": 1,
       "features": [],
       "attributes": [],
       "commands": [
@@ -41411,6 +41522,7 @@
       "id": 1872,
       "name": "EcosystemInformation",
       "revision": 1,
+      "modelRevision": 1,
       "features": [],
       "attributes": [
         {
@@ -41654,6 +41766,7 @@
       "id": 1873,
       "name": "CommissionerControl",
       "revision": 1,
+      "modelRevision": 1,
       "features": [],
       "attributes": [
         {
