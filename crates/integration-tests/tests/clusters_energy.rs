@@ -8,7 +8,7 @@
     clippy::items_after_statements
 )]
 
-//! M9-A3 B5 energy-management clusters on a live all-clusters-app (endpoint
+//! The energy-management clusters on a live all-clusters-app (endpoint
 //! 1). Which of them all-clusters serves depends on the chip release:
 //! - EnergyPreference: master 5cd2917a and v1.4.2.0 (the nightly's pin), with
 //!   the same delegate (`all-clusters-common/src/energy-preference-delegate.cpp`;
@@ -46,7 +46,7 @@ use matter_clusters::clusters::{
 };
 use matter_controller::{AttributePath, CommandPath, EventPath, ImStatus, MatterController, Node};
 
-/// Every B5 cluster all-clusters serves lives on endpoint 1.
+/// Every energy-management cluster all-clusters serves lives on endpoint 1.
 const EP: u16 = 1;
 
 /// IM status codes the servers answer with (Matter Core spec 8.10.1).
@@ -58,7 +58,7 @@ const CONSTRAINT_ERROR: ImStatus = ImStatus::Failure(0x87);
 async fn connect_all_clusters() -> Option<(DutConfig, MatterController, u64)> {
     let cfg = DutConfig::from_env()?;
     if !cfg.is_app("all-clusters") {
-        eprintln!("skipped: B5 energy sweep needs the all-clusters DUT (`just integration`)");
+        eprintln!("skipped: energy sweep needs the all-clusters DUT (`just integration`)");
         return None;
     }
     let (controller, node_id) = integration_tests::fixture::connect(&cfg)
@@ -68,8 +68,8 @@ async fn connect_all_clusters() -> Option<(DutConfig, MatterController, u64)> {
 }
 
 /// Whether this checkout's all-clusters serves `cluster` on [`EP`]; logs the
-/// skip when it does not (master: only v1.4.2.0 serves the B5 clusters other
-/// than EnergyPreference).
+/// skip when it does not (master: only v1.4.2.0 serves the energy-management
+/// clusters other than EnergyPreference).
 fn served(cfg: &DutConfig, cluster: &str) -> bool {
     let yes = all_clusters_serves(cfg, EP, cluster).unwrap();
     if !yes {

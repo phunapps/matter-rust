@@ -352,7 +352,7 @@ pub async fn invoke_for_status(
     }
 }
 
-/// Sweep one `ModeBase` derivative (M9-A3 B2) on `$endpoint`: decode every
+/// Sweep one `ModeBase` derivative on `$endpoint`: decode every
 /// attribute from a wildcard read (asserting `SupportedModes` and
 /// `CurrentMode` are among them, and that `CurrentMode` is a supported mode),
 /// then invoke `ChangeToMode(CurrentMode)` and decode the response.
@@ -414,7 +414,7 @@ macro_rules! sweep_mode_base {
     }};
 }
 
-/// Sweep one `OperationalState`-family cluster (M9-A3 B3: `OperationalState`,
+/// Sweep one `OperationalState`-family cluster (`OperationalState`,
 /// `OvenCavityOperationalState`, `RvcOperationalState`) on `$endpoint`: decode
 /// every attribute from a wildcard read, assert the standard ids served are
 /// exactly `$ids`, and evaluate to the sweep's `(id, tlv)` pairs for value

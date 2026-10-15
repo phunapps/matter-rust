@@ -118,10 +118,10 @@ async fn wait_for_on_off_and_level(
     }
 }
 
-/// M9-A3 B2 regression for the dump's `members` fix: MoveToLevelWithOnOff
-/// carries MoveToLevel's four fields. Before the fix the generated encoder
-/// took no arguments and sent an empty structure; the regenerated encoder's
-/// bytes level the light to 90 and turn it on from off.
+/// Regression for the dump's `members` fix (`matter-clusters` 0.6.0):
+/// MoveToLevelWithOnOff carries MoveToLevel's four fields. Before the fix the
+/// generated encoder took no arguments and sent an empty structure; the
+/// regenerated encoder's bytes level the light to 90 and turn it on from off.
 #[tokio::test]
 async fn level_control_move_to_level_with_on_off_turns_on() {
     use matter_clusters::clusters::on_off;

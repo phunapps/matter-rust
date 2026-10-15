@@ -2,8 +2,8 @@
 """Check the codegen input (xtask/model/clusters.json) against chip's Matter
 1.4.2 spec-derived XML, for decoder strictness.
 
-Our generated decoders reject valid device data in three ways (M9-A3 spec
-section 3): a field the model calls mandatory but a 1.4 device may omit, a
+Our generated decoders reject valid device data in three ways (the dump's
+mandatory-field and type rules): a field the model calls mandatory but a 1.4 device may omit, a
 non-nullable field the device may send as null, and an integer/enum type
 narrower than what the device may send. The @matter/model input tracks Matter
 1.5.1, so it can be stricter than 1.4. This script finds those cases.
@@ -701,7 +701,7 @@ def excluded_elements(meta, cname):
 
 def with_copied_datatypes(rep, c, xt, xml):
     """`xt` with each datatype the dump copied into cluster `c` from the
-    cluster that owns it (clusters.json `copiedFrom`, M9-A3 B7: Channel's
+    cluster that owns it (clusters.json `copiedFrom`; Channel's
     AdditionalInfoStruct is ContentLauncher's) taken from the owner's 1.4.2
     tables, so the copy is checked against the owner's definition. 1.4.2
     references it by its bare name from `c`'s own XML (`<entry

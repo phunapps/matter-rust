@@ -409,7 +409,7 @@ fn access_control_entry_decodes_subjects_u64() {
         })
     ));
     let e = clusters::access_control::AccessControlEntryStruct::decode_from(&mut r).unwrap();
-    // Subjects/Targets are fabric-sensitive, so `Option`-wrapped (M9-A3 §5.4);
+    // Subjects/Targets are fabric-sensitive, so `Option`-wrapped (M9-A3 B1);
     // our own fabric's entry carries them.
     assert_eq!(
         e.subjects,
@@ -932,8 +932,8 @@ fn own_acl_entry(w: &mut TlvWriter<'_>) {
 
 #[test]
 fn acl_list_with_another_fabrics_entry_decodes() {
-    // The regression: before §5.4 one other-fabric entry failed the WHOLE
-    // list with MissingField("Privilege").
+    // The regression: before fabric-sensitive fields became Option, one
+    // other-fabric entry failed the WHOLE list with MissingField("Privilege").
     let acl =
         clusters::access_control::decode_acl(&list_of(&[&own_acl_entry, &other_fabric_entry]))
             .expect("an unfiltered ACL read with a second fabric must decode");
@@ -1349,8 +1349,9 @@ fn access_control_entry_changed_event_decodes_with_unwrapped_fields() {
         w.put_uint(Tag::Context(254), 1).unwrap();
     });
     let e = AccessControlEntryChangedEvent::decode(&bytes).unwrap();
-    // §5.4 "events are exempt": the event's own fields keep the model's
-    // optionality. These bindings fail to compile if a field became Option.
+    // Events are exempt from the fabric-sensitive Option rule: the event's own
+    // fields keep the model's optionality. These bindings fail to compile if a
+    // field became Option.
     let admin: Nullable<u64> = e.admin_node_id;
     let passcode: Nullable<u16> = e.admin_passcode_id;
     let change: ChangeTypeEnum = e.change_type;
@@ -1634,9 +1635,9 @@ fn supported_modes(derived_tag: u64) -> Vec<u8> {
 
 /// One test per `ModeBase` derivative: `SupportedModes` (its most complex
 /// attribute), `CurrentMode`, the `ChangeToMode` request bytes, and the
-/// response with and without `StatusText` (spec §3.1: chip's `ModeBase`
-/// server omits it from the replies it builds itself; an app delegate may
-/// set it).
+/// response with and without `StatusText` (only an unconditional `M` is
+/// mandatory, and chip's `ModeBase` server omits it from the replies it builds
+/// itself; an app delegate may set it).
 macro_rules! mode_base_cluster_decodes {
     ($test:ident, $m:ident, $first_derived_tag:literal, $derived_variant:ident) => {
         #[test]
@@ -2083,7 +2084,8 @@ fn replacement_product_missing_value_is_an_error() {
 // events OperationalError { ErrorState } and OperationCompletion
 // { CompletionErrorCode, TotalOperationalTime?, PausedTime? }.
 // ErrorStateLabel / OperationalStateLabel have the expression conformance
-// "ID >= 128 & ID <= 191", so they are optional (spec §3.1).
+// "ID >= 128 & ID <= 191", so they are optional (only an unconditional M is
+// mandatory).
 
 /// An anonymous array of anonymous UTF-8 strings.
 fn str_list_attr(values: &[&str]) -> Vec<u8> {
@@ -3323,7 +3325,7 @@ fn valve_commands_encode_and_events_decode() {
 //
 // 1.4.2 Scenes.xml (cluster 0x0062): SceneTableSize, FabricSceneInfo (a
 // fabric-scoped list of SceneInfoStruct whose CurrentScene, CurrentGroup and
-// SceneValid are fabric-sensitive, spec §5.4), eight commands with their
+// SceneValid are fabric-sensitive, so Option), eight commands with their
 // responses, no events. AttributeValuePairStruct's eight value fields are a
 // choice group (O.a): each is an Option, and exactly one should be present.
 
@@ -3378,7 +3380,7 @@ fn scenes_fabric_scene_info_decodes_with_other_fabrics_fields_withheld() {
 #[test]
 fn scenes_scene_info_with_one_sensitive_field_missing_still_decodes() {
     // chip withholds the three sensitive fields together, but each is relaxed
-    // on its own (spec §5.4), so an entry missing any one of them decodes.
+    // on its own, so an entry missing any one of them decodes.
     // SceneInfoStruct is decode-only (FabricSceneInfo is read-only and no
     // request carries it, so it has no encoder: M9-A3 B4 encoder rule).
     for missing in 1..=3 {
@@ -4268,11 +4270,11 @@ fn energy_evse_events_decode() {
 // ---- M9-A3 B5: Messages -----------------------------------------------------
 //
 // 1.4.2 Messages.xml makes the Messages attribute fabric-scoped: on our
-// unfiltered read, another fabric's entry carries only FabricIndex (spec
-// §5.4). chip does not fabric-scope MessageStruct or the three events (zap
-// messages-cluster.xml "TODO: enable isFabricScoped"; no field 254 in its
-// generated types, v1.4.2.0 and master): tv-app sends every field of every
-// entry and no FabricIndex. All three shapes must decode.
+// unfiltered read, another fabric's entry carries only FabricIndex. chip does
+// not fabric-scope MessageStruct or the three events (zap messages-cluster.xml
+// "TODO: enable isFabricScoped"; no field 254 in its generated types, v1.4.2.0
+// and master): tv-app sends every field of every entry and no FabricIndex. All
+// three shapes must decode.
 
 /// One `MessageStruct` entry's fields, as chip's tv-app encodes them: no `FabricIndex`.
 fn message_fields(w: &mut TlvWriter<'_>) {
@@ -4967,7 +4969,7 @@ fn thread_network_diagnostics_events_decode() {
 
 // ---- M9-A3 B6: GeneralCommissioning and NetworkCommissioning ---------------
 //
-// Codecs only (spec §2): matter-commissioning drives commissioning with its
+// Codecs only: matter-commissioning drives commissioning with its
 // own hand-written subset of these commands; its
 // tests/generated_codec_parity.rs pins that the two encode identically.
 // BasicCommissioningInfo 60 / 900 is what chip all-clusters serves (the
@@ -5293,7 +5295,7 @@ fn actions_events_decode() {
 // entries are hand-built to match chip's encoding (zzz_generated/app-common/
 // clusters/EcosystemInformation/Structs.ipp, the same at v1.4.2.0 and master):
 // our own fabric's entry carries every field; another fabric's carries
-// FabricIndex only (spec §5.4).
+// FabricIndex only, so its fabric-sensitive fields are Option.
 
 /// Our fabric's `EcosystemDeviceStruct`, as chip encodes it for its own fabric.
 fn own_ecosystem_device(w: &mut TlvWriter<'_>) {
@@ -5458,7 +5460,7 @@ fn commissioner_control_requests_response_and_event_decode() {
         (180, 97, 3840, 1000, 32)
     );
     // A fabric-sensitive event: chip sends it only to its own fabric, in full
-    // (spec §5.4, events exempt).
+    // (events are exempt from the fabric-sensitive Option rule).
     let result = CommissioningRequestResultEvent::decode(&struct_of(&|w| {
         w.put_uint(Tag::Context(0), 0x1122).unwrap();
         w.put_uint(Tag::Context(1), 0x0102_0304_0506_0708).unwrap();

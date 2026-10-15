@@ -8,7 +8,7 @@
 //! shifts. The fixture this generates feeds the
 //! `commissioning_byte_parity.rs` integration test in
 //! `matter-commissioning`, which skips cleanly when the fixture is
-//! missing/empty so CI stays green during operator wiring (T56).
+//! missing/empty so CI stays green while the capture is not yet wired.
 //!
 //! Mirrors the dispatch pattern used by every other `capture-*` arm in
 //! `main.rs`: resolve the script directory under

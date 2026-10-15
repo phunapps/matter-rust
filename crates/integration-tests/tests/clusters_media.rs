@@ -8,7 +8,7 @@
     clippy::items_after_statements
 )]
 
-//! M9-A3 B7 media clusters on a live tv-app, its video-player endpoint 1:
+//! The media clusters on a live tv-app, its video-player endpoint 1:
 //! WakeOnLan, LowPower, KeypadInput, MediaInput, AudioOutput, TargetNavigator,
 //! MediaPlayback and ContentLauncher.
 //! tv-app serves all of them on endpoint 1 at master 5cd2917a and v1.4.2.0

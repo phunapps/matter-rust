@@ -4,7 +4,7 @@
 // every wire message as JSON fixtures consumed by
 // crates/matter-crypto/tests/case_byte_parity.rs.
 //
-// IMPLEMENTATION NOTES (M4.3 Task 3):
+// IMPLEMENTATION NOTES (M4.3):
 //
 // Strategy: generate certs with normal crypto (different each run), capture
 // all key material in the JSON fixture, then build CASE messages using the

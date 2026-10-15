@@ -8,10 +8,10 @@
     clippy::items_after_statements
 )]
 
-//! M9-A3 B3 on a live all-clusters-app (endpoint 1): every attribute of each
-//! hosted B3 cluster decoded with the generated decoder, the exact attribute
-//! ids served, one or more safe commands per cluster, attribute writes, and
-//! the OperationalState events.
+//! The appliance clusters on a live all-clusters-app (endpoint 1): every
+//! attribute of each hosted appliance cluster decoded with the generated
+//! decoder, the exact attribute ids served, one or more safe commands per
+//! cluster, attribute writes, and the OperationalState events.
 //!
 //! Hosted here, at master and at v1.4.2.0 alike (both `all-clusters-app.matter`
 //! files): OperationalState, OvenCavityOperationalState, RvcOperationalState,
@@ -49,7 +49,7 @@ use matter_clusters::clusters::{
 use matter_clusters::types::Nullable;
 use matter_controller::{AttributePath, CommandPath, EventPath, ImStatus, MatterController, Node};
 
-/// Every B3 cluster all-clusters serves lives on endpoint 1.
+/// Every appliance cluster all-clusters serves lives on endpoint 1.
 const EP: u16 = 1;
 
 /// IM status codes the servers answer with (Matter Core spec 8.10.1).
@@ -66,7 +66,7 @@ const OP_STATE_IDS: [u32; 6] = [0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005];
 async fn connect_all_clusters() -> Option<(DutConfig, MatterController, u64)> {
     let cfg = DutConfig::from_env()?;
     if !cfg.is_app("all-clusters") {
-        eprintln!("skipped: B3 sweep needs the all-clusters DUT (`just integration`)");
+        eprintln!("skipped: appliance sweep needs the all-clusters DUT (`just integration`)");
         return None;
     }
     let (controller, node_id) = integration_tests::fixture::connect(&cfg)
@@ -240,7 +240,8 @@ async fn operational_state_fault_and_stop_emit_their_events() {
 /// and an OperationalError for a manufacturer error id (pipe `OnFault` Param
 /// 128 on the Oven device). chip's GenericOperationalError carries no label,
 /// although 1.4 conformance asks for one on 0x80..=0xBF: ErrorStateLabel's
-/// conformance is an expression, so it is optional (spec §3.1). A Stop
+/// conformance is an expression, so it is optional (only an unconditional M is
+/// mandatory). A Stop
 /// restores Stopped (the oven delegate emits no OperationCompletion).
 #[tokio::test]
 async fn oven_cavity_operational_state_decodes_and_reports_a_manufacturer_error() {

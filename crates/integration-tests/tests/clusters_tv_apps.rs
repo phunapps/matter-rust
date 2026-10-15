@@ -8,7 +8,7 @@
     clippy::items_after_statements
 )]
 
-//! M9-A3 B7 TV-platform clusters on a live tv-app: Channel, ApplicationLauncher
+//! The TV-platform clusters on a live tv-app: Channel, ApplicationLauncher
 //! and ContentControl on the video-player endpoint 1, ApplicationBasic on the
 //! Content App endpoints, and AccountLogin on the Vendor3 one. The Content App
 //! endpoints are the static endpoint 3 and the four dynamic endpoints tv-app

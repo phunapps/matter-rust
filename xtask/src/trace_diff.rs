@@ -34,7 +34,7 @@ pub(crate) struct TraceRecord {
     pub exchange: u64,
     pub protocol: u16,
     pub opcode: u8,
-    #[allow(dead_code)] // retained for Task 7 TLV comparison and human-readable output
+    #[allow(dead_code)] // retained for a TLV-level comparison and human-readable output
     pub payload: String,
 }
 

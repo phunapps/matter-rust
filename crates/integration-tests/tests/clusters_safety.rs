@@ -8,7 +8,7 @@
     clippy::items_after_statements
 )]
 
-//! M9-A3 B4 safety clusters on a live all-clusters-app (endpoint 1):
+//! The safety clusters on a live all-clusters-app (endpoint 1):
 //! SmokeCoAlarm, BooleanStateConfiguration and ValveConfigurationAndControl.
 //! Every attribute is decoded with the generated decoder and the exact
 //! attribute ids served are asserted; the writable attributes are written,
@@ -62,7 +62,7 @@ use matter_clusters::types::Nullable;
 use matter_codec::Value;
 use matter_controller::{AttributePath, CommandPath, EventPath, ImStatus, MatterController, Node};
 
-/// Every B4 safety cluster all-clusters serves lives on endpoint 1.
+/// Every safety cluster all-clusters serves lives on endpoint 1.
 const EP: u16 = 1;
 
 /// IM status codes the servers answer with (Matter Core spec 8.10.1).
@@ -75,7 +75,7 @@ const INVALID_IN_STATE: ImStatus = ImStatus::Failure(0xCB);
 async fn connect_all_clusters() -> Option<(DutConfig, MatterController, u64)> {
     let cfg = DutConfig::from_env()?;
     if !cfg.is_app("all-clusters") {
-        eprintln!("skipped: B4 safety sweep needs the all-clusters DUT (`just integration`)");
+        eprintln!("skipped: safety sweep needs the all-clusters DUT (`just integration`)");
         return None;
     }
     let (controller, node_id) = integration_tests::fixture::connect(&cfg)

@@ -47,7 +47,7 @@ async fn access_control_typed_decode() {
     let acl = read_attr(&node, 0, C, 0x0000).await;
     let entries = access_control::decode_acl(&value_to_tlv(&acl))
         .unwrap_or_else(|e| panic!("AccessControl.Acl typed-decode failed: {e}; {acl:?}"));
-    // Privilege is fabric-sensitive (Option since M9-A3 §5.4): our fabric's
+    // Privilege is fabric-sensitive (Option since M9-A3 B1): our fabric's
     // admin entry carries it.
     assert!(
         entries

@@ -8,7 +8,7 @@
     clippy::items_after_statements
 )]
 
-//! M9-A3 B4 ScenesManagement on a live all-clusters-app (endpoint 1, which
+//! ScenesManagement on a live all-clusters-app (endpoint 1, which
 //! serves it at master and v1.4.2.0 with SceneNames, featureMap 1): both
 //! attributes decoded, then AddScene / ViewScene / RecallScene / StoreScene /
 //! GetSceneMembership / CopyScene / RemoveScene / RemoveAllScenes with every
@@ -63,7 +63,7 @@ const UNDEFINED_SCENE: u8 = 0xFF;
 async fn connect_all_clusters() -> Option<(DutConfig, MatterController, u64)> {
     let cfg = DutConfig::from_env()?;
     if !cfg.is_app("all-clusters") {
-        eprintln!("skipped: B4 scenes tests need the all-clusters DUT (`just integration`)");
+        eprintln!("skipped: scenes tests need the all-clusters DUT (`just integration`)");
         return None;
     }
     let (controller, node_id) = integration_tests::fixture::connect(&cfg)

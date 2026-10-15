@@ -203,7 +203,7 @@ mod golden_tests;
 #[doc = include_str!("../README.md")]
 struct ReadmeDoctests;
 
-/// Edition 2024 (M9-A3 B4): `gen` is a reserved keyword there, so the
+/// Edition 2024: `gen` is a reserved keyword there, so the
 /// generated modules must be reachable under another name. These blocks
 /// compile as edition 2024 crates.
 ///

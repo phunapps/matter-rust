@@ -59,7 +59,7 @@ These are language-idiomatic differences. They do not affect interop.
 ## Where we decode more leniently than matter.js
 
 - **Fabric-sensitive fields of fabric-scoped structs are `Option`**
-  (`matter-clusters` 0.6.0, M9-A3). Our reads are unfiltered
+  (`matter-clusters` 0.6.0). Our reads are unfiltered
   (`IsFabricFiltered=false`), so for a fabric-scoped list such as AccessControl
   `Acl` a device returns every fabric's entries and leaves the fabric-sensitive
   fields out of the entries that belong to another fabric (connectedhomeip
@@ -75,11 +75,10 @@ These are language-idiomatic differences. They do not affect interop.
   these structs has a generated encoder, `AccessControlExtensionStruct`; its
   `encode`/`write_fields` return `ClusterError::MissingField` for a `None` in a
   `mandatoryOnWrite` field, and a complete entry encodes byte-identically to
-  before. `AccessControlEntryStruct`, `AccessRestrictionEntryStruct`, (since
-  M9-A3 B4: IcdManagement `RegisteredClients` is read-only)
-  `MonitoringRegistrationStruct`, (M9-A3 B4) ScenesManagement
-  `SceneInfoStruct`, (M9-A3 B5) Messages `MessageStruct` and (M9-A3 B6)
-  EcosystemInformation `EcosystemDeviceStruct` and `EcosystemLocationStruct`
+  before. `AccessControlEntryStruct`, `AccessRestrictionEntryStruct`,
+  IcdManagement `MonitoringRegistrationStruct` (since 0.6.0: `RegisteredClients`
+  is read-only), ScenesManagement `SceneInfoStruct`, Messages `MessageStruct`
+  and EcosystemInformation `EcosystemDeviceStruct` and `EcosystemLocationStruct`
   are decode-only. matter.js 0.16.11 declares `SceneInfoStruct`'s
   fabric-sensitive fields mandatory too (`TlvSceneInfo`:
   `currentScene: TlvField(1, …)`, `currentGroup`, `sceneValid`,
@@ -94,7 +93,7 @@ These are language-idiomatic differences. They do not affect interop.
   with a withheld field rather than reading it as a wildcard.
 
 - **Messages: `MessageStruct` and the events have an optional
-  `fabric_index`** (`matter-clusters` 0.6.0, M9-A3 B5). The 1.4.2 XML makes
+  `fabric_index`** (`matter-clusters` 0.6.0). The 1.4.2 XML makes
   the `Messages` attribute fabric-scoped and the three events
   fabric-sensitive, so both carry FabricIndex (field 254), and matter.js
   `@matter/types` 0.16.11 declares it mandatory
@@ -114,7 +113,7 @@ These are language-idiomatic differences. They do not affect interop.
   decode-only, since the attribute is read-only and no request carries it.
 
 - **MediaPlayback `TrackStruct.TrackAttributes` is nullable** (`matter-clusters`
-  0.6.0, M9-A3 B7). The 1.4.2 XML and matter.js `@matter/types` 0.16.11 make
+  0.6.0). The 1.4.2 XML and matter.js `@matter/types` 0.16.11 make
   it a non-nullable struct (`trackAttributes: TlvField(1, …)`,
   `clusters/media-playback.js`). chip declares it nullable (zap
   `media-playback-cluster.xml`; its controller codegen has `nullable
@@ -131,7 +130,7 @@ These are language-idiomatic differences. They do not affect interop.
   v1.4.2.0 and master).
 
 - **ModeBase `ChangeToModeResponse.StatusText` is `Option`** (`matter-clusters`
-  0.6.0, M9-A3 B2). Its 1.4 conformance is `[Status == Success], M`, and
+  0.6.0). Its 1.4 conformance is `[Status == Success], M`, and
   matter.js `@matter/types` 0.16.11 declares it mandatory
   (`statusText: TlvField(1, TlvString…)`, `clusters/mode-base.js`). chip's
   ModeBase server leaves it out of the replies it builds itself, including
@@ -147,7 +146,7 @@ These are language-idiomatic differences. They do not affect interop.
 ## Where our generated surface follows chip, not matter.js
 
 - **A datatype another cluster owns is copied into the cluster that
-  references it** (`matter-clusters` 0.6.0, M9-A3 B7). ContentLauncher's
+  references it** (`matter-clusters` 0.6.0). ContentLauncher's
   `TrackPreferenceStruct.Characteristics` lists MediaPlayback's
   `CharacteristicEnum`, and Channel's `ExternalIdList` fields list
   ContentLauncher's `AdditionalInfoStruct`. matter.js `@matter/types` 0.16.11
@@ -158,7 +157,7 @@ These are language-idiomatic differences. They do not affect interop.
   encode identically to the originals but are distinct Rust types.
 
 - **A feature a derived cluster disallows is not generated, nor is anything
-  only it enables** (M9-A3 B2). ModeBase's OnOff dependency (DEPONOFF) is
+  only it enables** (`matter-clusters` 0.6.0). ModeBase's OnOff dependency (DEPONOFF) is
   disallowed in every ModeBase-derived cluster, so they have no `Feature` flag
   for it. The authority is chip's 1.4.2 cluster XML
   (`data_model/1.4.2/clusters/Mode_*.xml`), which marks DEPONOFF
@@ -176,7 +175,7 @@ These are language-idiomatic differences. They do not affect interop.
   RefrigeratorAlarm disallows AlarmBase's RESET, so it has no `Latch`,
   `Reset` or `Feature::RESET`; matter.js keeps them as its `ResetComponent`
   (`clusters/refrigerator-alarm.d.ts`), chip's controller codegen omits them.
-- **ModeSelect `StandardNamespace` is `Nullable<u16>`** (M9-A3 B2). The
+- **ModeSelect `StandardNamespace` is `Nullable<u16>`** (`matter-clusters` 0.6.0). The
   matter.js model (`@matter/model` 0.17.1, which the dump reads) types it as the global `namespace`
   enum, which is enum8. chip's 1.4.2 XML
   (`data_model/1.4.2/clusters/ModeSelect.xml`), its zap XML
@@ -187,14 +186,14 @@ These are language-idiomatic differences. They do not affect interop.
   (`TlvNullable(TlvEnum())`, where `TlvEnum` is `TlvUInt32`), so a value above
   `0xFFFF` decodes there and is an error here.
 - **The global location descriptor is `LocationDescriptorStruct`**
-  (`matter-clusters` 0.6.0, M9-A3 B3). The specification's lowercase
+  (`matter-clusters` 0.6.0). The specification's lowercase
   `locationdesc` struct, used by ServiceArea's `AreaInfoStruct.LocationInfo`
-  and (M9-A3 B6) EcosystemInformation's
-  `EcosystemLocationStruct.LocationDescriptor`, takes chip's name (`global-structs.xml`, `controller-clusters.matter`);
+  and EcosystemInformation's `EcosystemLocationStruct.LocationDescriptor`,
+  takes chip's name (`global-structs.xml`, `controller-clusters.matter`);
   matter.js 0.16.11 calls it `TlvLocationdesc` (`globals`). The wire format is
   the same. Each cluster that uses it gets its own copy of the struct, as with
   `MeasurementAccuracyStruct`.
-- **Matter 1.4 elements the 1.5.1 model removed are generated** (M9-A3 B4).
+- **Matter 1.4 elements the 1.5.1 model removed are generated** (`matter-clusters` 0.6.0).
   The dump reads `@matter/model` 0.17.1 (Matter 1.5.1), which dropped
   Thermostat's weekly schedule (feature SCH: StartOfWeek,
   NumberOfWeekly/DailyTransitions, Set/Get/ClearWeeklySchedule,
@@ -209,7 +208,7 @@ These are language-idiomatic differences. They do not affect interop.
   SetWeeklySchedule encoder matches its `TlvSetWeeklyScheduleRequest` byte
   for byte. The legacy DoorLock PIN/RFID/user-status commands stay out: chip
   never generated them.
-- **Only what a client uses is generated** (M9-A3 B4). A model datatype
+- **Only what a client uses is generated** (`matter-clusters` 0.6.0). A model datatype
   that no generated attribute, command or event uses is not generated
   (chip's controller codegen omits them too); matter.js generates every
   model datatype. Exceptions: a cluster's `StatusCodeEnum`, and four enums
@@ -240,7 +239,7 @@ These are language-idiomatic differences. They do not affect interop.
   `KeySetWrite` request field, optional `fabric_index`) and
   `matter-controller`'s hand-written ACL entry encoder (an `AclEntry` whose
   `fabric_index` is `Some`).
-- **ScenesManagement has no `LogicalSceneTable` type** (M9-A3 B4). The
+- **ScenesManagement has no `LogicalSceneTable` type** (`matter-clusters` 0.6.0). The
   specification describes the Logical Scene Table as data a device keeps,
   not a wire type; matter.js 0.16.11 generates `TlvLogicalSceneTable`,
   chip's controller codegen has no such struct, and our pruning rule drops

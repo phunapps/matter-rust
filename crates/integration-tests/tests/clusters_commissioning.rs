@@ -8,14 +8,14 @@
     clippy::items_after_statements
 )]
 
-//! M9-A3 B6 GeneralCommissioning and NetworkCommissioning, decoded with the
+//! GeneralCommissioning and NetworkCommissioning, decoded with the
 //! generated codecs on an already-commissioned all-clusters-app (endpoint 0;
 //! master 5cd2917a and v1.4.2.0, the nightly's pin).
 //!
-//! These clusters run commissioning, so the tests never send what would
-//! change the DUT's commissioned state (spec §6.3): no CommissioningComplete,
-//! no network configuration command and no NetworkCommissioning write. What
-//! they do send is undone or refused:
+//! These clusters run commissioning, so the tests never send what would change
+//! the DUT's commissioned state (integration tests leave it alone): no
+//! CommissioningComplete, no network configuration command and no
+//! NetworkCommissioning write. What they do send is undone or refused:
 //! - ArmFailSafe(10 s, breadcrumb 7) arms the fail-safe over CASE (no
 //!   commissioning window is open), and ArmFailSafe(0) disarms it at once
 //!   (chip's server forces the timer to expire, which also resets the
@@ -58,9 +58,7 @@ const CONSTRAINT_ERROR: ImStatus = ImStatus::Failure(0x87);
 async fn connect_all_clusters() -> Option<(DutConfig, MatterController, u64)> {
     let cfg = DutConfig::from_env()?;
     if !cfg.is_app("all-clusters") {
-        eprintln!(
-            "skipped: B6 commissioning sweep needs the all-clusters DUT (`just integration`)"
-        );
+        eprintln!("skipped: commissioning sweep needs the all-clusters DUT (`just integration`)");
         return None;
     }
     let (controller, node_id) = integration_tests::fixture::connect(&cfg)

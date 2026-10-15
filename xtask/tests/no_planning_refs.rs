@@ -32,11 +32,103 @@ const EVERYWHERE: &[Rule] = &[Rule {
 }];
 
 /// Searched in the [`POINTER_SCOPE`] pathspecs.
-const POINTERS: &[Rule] = &[];
+const POINTERS: &[Rule] = &[
+    Rule {
+        what: "a plan task",
+        regex: r"\bTask \d+\b",
+        example: "added in Task 7",
+        except: &[],
+    },
+    Rule {
+        what: "a plan task number",
+        regex: r"\bT\d{1,2}\b",
+        example: "(M6.4.2 T18-T21)",
+        // Thermostat's generated enums have members named `T1`..`T3` (the
+        // model's names, not pointers).
+        except: &[
+            ":!crates/matter-clusters/src/gen",
+            ":!xtask/model/clusters.json",
+        ],
+    },
+    Rule {
+        what: "a review id",
+        regex: r"(?i:\breview (?:finding|focus|ruling)\b)|\breview [BCIMNS]\d+\b|\bT\d+ review\b|(?i:\b(?:final|whole-batch|per-task) review\b)",
+        example: "is unchanged (review B1)",
+        except: &[],
+    },
+    Rule {
+        what: "a fix wave",
+        regex: r"(?i)\bfix[- ]wave\b",
+        example: "(B5 fix wave)",
+        except: &[],
+    },
+    Rule {
+        what: "a design-spec citation",
+        regex: r"\b(?:A3|M7) spec\b|\bspec rev(?:ision)? \d+\b|\bSpec (?:test \d+|20\d\d-\d\d-\d\d)\b|(?i:\bdesign doc\b)",
+        example: "/// M9-A3 spec §5.4 against real chip encoding",
+        except: &[],
+    },
+    Rule {
+        what: "the planning brief",
+        regex: r"(?i)\b(?:the|per the|vs) brief\b(?! description)",
+        example: "per the brief's advice",
+        except: &[],
+    },
+    Rule {
+        what: "batch jargon outside a plain `//` comment",
+        regex: r"^(?!\s*//(?![/!])).*\bM9-A3\b",
+        example: "/// Edition 2024 (M9-A3 B4): `gen` is reserved",
+        except: &[],
+    },
+    Rule {
+        what: "an A3 batch label outside a plain `//` comment",
+        regex: r"^(?!\s*//(?![/!])).*(?:(?<![-\w.])B[1-7]\b(?! chunked)|\bA3-B[1-7]\b)",
+        example: "/// Every B3 cluster all-clusters serves lives on endpoint 1.",
+        // The released CHANGELOG and the runbooks use the public M9-B1..B5
+        // milestone labels (CHANGELOG's 0.6.0 section is checked by hand),
+        // and so does the M9-B hardware example.
+        except: &[
+            ":!CHANGELOG.md",
+            ":!docs/runbooks",
+            ":!crates/matter-controller/examples/d_hardware_extras.rs",
+        ],
+    },
+    Rule {
+        what: "a design-decision number",
+        regex: r"(?:design|spec|[Ss]pec:\s*[\w-]+|matter-hardening|M9-C\d(?: design)?) [CD]\d+(?:\.\d+)?|\((?:design |spec )?D\d+(?:\.\d+)?(?:/D\d+(?:\.\d+)?)*\)|\(D\d+(?:\.\d+)?[ ,+]|pre-D\d+|(?<![-\w])D\d+(?:\.\d+)?/D\d+|the D\d+ backstop|per D\d+|(?:matter-hardening )?C\d/D\d+|(?<![-\w\[/])D\d+(?:\.\d+)?(?::|'s)|(?<![-\w])D\d+\.\d+",
+        example: "is derived from that value instead (spec D7) — see",
+        // The runbooks name the public M9-D1..D3 milestones ("D2: reading
+        // operational credentials").
+        except: &[":!docs/runbooks"],
+    },
+    Rule {
+        what: "a planning-process phrase",
+        regex: r"(?i:\bthe plan(?:'s)?\b(?! to))|\bplan template\b|\bmaintainer ruling\b|\bsee the spec's\b|\bthe spec's (?:B\d|negative matrix)",
+        example: "these vectors are the roundtrip floor the plan names",
+        except: &[],
+    },
+    Rule {
+        what: "a milestone's plan or design",
+        // The label must be capitalised ("the M1 plan", "the F design"), so
+        // English such as "the corrected design" or "the whole design" passes.
+        regex: r"\b(?i:the) [A-Z][\w.-]* (?i:plan|design)\b(?! doc)",
+        example: "see the M1 plan when it lands",
+        except: &[],
+    },
+];
 
 /// Where [`POINTERS`] are searched (git pathspecs). Widened area by area as
 /// each area is cleaned; `"."` is every tracked file.
-const POINTER_SCOPE: &[&str] = &[];
+const POINTER_SCOPE: &[&str] = &[
+    "xtask",
+    "scripts",
+    "crates/matter-clusters",
+    "crates/integration-tests",
+    "docs/matter-js-comparison.md",
+    "docs/coverage",
+    "justfile",
+    ".github",
+];
 
 /// Never searched: `.gitignore` names the private directory in order to
 /// ignore it, this file holds the patterns, and fuzz corpora are binary.
@@ -100,8 +192,8 @@ fn public_files_point_to_no_private_planning_document() {
 
 #[test]
 fn every_rule_catches_its_example() {
-    // The negative control, kept: a typo in a regex, or a git without PCRE,
-    // would otherwise pass everything.
+    // The negative control, kept: a typo in a regex would otherwise pass
+    // everything.
     let dir = std::env::temp_dir().join(format!("planning-refs-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     for rule in EVERYWHERE.iter().chain(POINTERS) {
@@ -119,4 +211,38 @@ fn every_rule_catches_its_example() {
         );
     }
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Whether the git pathspec `spec` (an exclusion's `:!` prefix stripped)
+/// selects at least one tracked file.
+fn names_tracked_files(spec: &str) -> bool {
+    let out = Command::new("git")
+        .current_dir(repo_root())
+        .args(["ls-files", "--", spec.trim_start_matches(":!")])
+        .output()
+        .expect("run git ls-files");
+    assert!(out.status.success(), "git ls-files -- {spec} failed");
+    !out.stdout.is_empty()
+}
+
+#[test]
+fn every_pathspec_names_tracked_files() {
+    // `git grep` exits 1 both for "no match" and for "no file selected", so a
+    // misspelt or renamed scope entry would stop its area being searched, and
+    // a misspelt exclusion would hide nothing, without any test failing.
+    let specs = POINTER_SCOPE
+        .iter()
+        .chain(EXCLUDED)
+        .chain(EVERYWHERE.iter().chain(POINTERS).flat_map(|r| r.except));
+    let missing: Vec<&str> = specs
+        .copied()
+        .filter(|spec| !names_tracked_files(spec))
+        .collect();
+    assert_eq!(
+        missing,
+        Vec::<&str>::new(),
+        "these pathspecs select no tracked file"
+    );
+    // The negative control, kept: a path that does not exist selects nothing.
+    assert!(!names_tracked_files("crates/no-such-crate"));
 }

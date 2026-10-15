@@ -8,7 +8,7 @@
     clippy::items_after_statements
 )]
 
-//! Messages on a live tv-app (`just integration-tv`), endpoint 1 (M9-A3 B5).
+//! Messages on a live tv-app (`just integration-tv`), endpoint 1.
 //! No other chip example app serves it, at master or v1.4.2.0. Both
 //! attributes decode with the generated decoders; PresentMessagesRequest and
 //! CancelMessagesRequest (whose MessageIDs is the first request

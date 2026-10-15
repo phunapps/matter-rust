@@ -81,7 +81,7 @@ async fn window_covering_go_to_lift_percentage() {
     );
 }
 
-/// M9-A3 B4: the Matter 1.4 absolute-position (ABS) elements, generated from
+/// The Matter 1.4 absolute-position (ABS) elements, generated from
 /// the dump's 1.4 supplement. all-clusters serves the eight ABS attributes on
 /// endpoint 1 at master and v1.4.2.0 (all-clusters-app.matter) although its
 /// featureMap (0x17: LF, TL, PA_LF, PA_TL) leaves ABS out; each decodes with

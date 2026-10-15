@@ -9,7 +9,7 @@
 //! signs a CD against it for unit and integration testing.
 //!
 //! The verifier (`attestation::cd::verify_certification_declaration`,
-//! M6.4.3 T28+) accepts both real and synthetic CDs equivalently — it
+//! M6.4.3) accepts both real and synthetic CDs equivalently — it
 //! checks against whatever trust store the caller supplies. Production
 //! callers supply CSA-published roots via `CdSigningRoots::from_pem`;
 //! tests use the bundled synthetic root via

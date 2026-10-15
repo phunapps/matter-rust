@@ -42,7 +42,7 @@
 // produces byte-identical output (NodeSession.encode is a thin wrapper).
 //
 // =====================================================================
-// CONVENTIONS (must match Rust test in Task 8)
+// CONVENTIONS (must match matter-transport tests/framing_byte_parity.rs)
 // =====================================================================
 //
 //   * source_node_id / destination_node_id in the JSON fixture are

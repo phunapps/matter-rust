@@ -8,7 +8,7 @@
     clippy::items_after_statements
 )]
 
-//! M9-A3 B6 diagnostics clusters on a live all-clusters-app (endpoint 0;
+//! The diagnostics clusters on a live all-clusters-app (endpoint 0;
 //! master 5cd2917a and v1.4.2.0, the nightly's pin): SoftwareDiagnostics,
 //! ThreadNetworkDiagnostics, WiFiNetworkDiagnostics,
 //! EthernetNetworkDiagnostics and DiagnosticLogs. GeneralDiagnostics lives in
@@ -62,7 +62,7 @@ const ALL_CLUSTERS_MATTER: &str =
 async fn connect_all_clusters() -> Option<(DutConfig, MatterController, u64)> {
     let cfg = DutConfig::from_env()?;
     if !cfg.is_app("all-clusters") {
-        eprintln!("skipped: B6 diagnostics sweep needs the all-clusters DUT (`just integration`)");
+        eprintln!("skipped: diagnostics sweep needs the all-clusters DUT (`just integration`)");
         return None;
     }
     let (controller, node_id) = integration_tests::fixture::connect(&cfg)

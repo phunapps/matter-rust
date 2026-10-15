@@ -386,8 +386,9 @@ fn review_fabric_restrictions_recursive_list_encodes() {
 #[test]
 fn cancel_messages_request_encodes_a_byte_string_list() {
     // M9-A3 B5: CancelMessagesRequest.MessageIDs is a list<octstr>, the first
-    // request list whose elements are byte strings (spec §10), against
-    // matter.js's own TlvCancelMessagesRequest.
+    // request list whose elements are byte strings (a wire shape the emitter
+    // had not generated before), against matter.js's own
+    // TlvCancelMessagesRequest.
     let a: Vec<u8> = (0x00..0x10).collect();
     let b: Vec<u8> = (0xf0..=0xff).collect();
     assert_eq!(
@@ -434,9 +435,9 @@ fn present_messages_request_encodes_an_optional_list() {
 #[test]
 fn launch_url_encodes_nested_structs_and_doubles() {
     // M9-A3 B7: BrandingInformationStruct nests StyleInformationStruct, which
-    // nests DimensionStruct: the first request struct with struct fields
-    // (spec §10), and its Width / Height the first `double` (TLV FLOAT64),
-    // against matter.js's own TlvLaunchUrlRequest.
+    // nests DimensionStruct: the first request struct with struct fields (a new
+    // wire shape for the emitter), and its Width / Height the first `double`
+    // (TLV FLOAT64), against matter.js's own TlvLaunchUrlRequest.
     use clusters::content_launcher::{
         encode_launch_url, BrandingInformationStruct, DimensionStruct, MetricTypeEnum,
         StyleInformationStruct,
@@ -487,8 +488,8 @@ fn launch_content_encodes_optional_and_nullable_lists_in_structs() {
     // absent), PlaybackPreferencesStruct's null PlaybackPosition, its TextTrack
     // with a null Characteristics list, and an AudioTracks list whose entry
     // carries a Characteristics list of two enums: optional and nullable lists
-    // inside request structs (spec §10), against matter.js's own
-    // TlvLaunchContentRequest.
+    // inside request structs (a new wire shape for the emitter), against
+    // matter.js's own TlvLaunchContentRequest.
     use clusters::content_launcher::{
         encode_launch_content, AdditionalInfoStruct, CharacteristicEnum, ContentSearchStruct,
         ParameterEnum, ParameterStruct, PlaybackPreferencesStruct, TrackPreferenceStruct,

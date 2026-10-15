@@ -1,5 +1,5 @@
 //! `matter_clusters::gen` stays a working alias of `matter_clusters::clusters`
-//! for edition 2015–2021 code (M9-A3 B4: the module was renamed because `gen`
+//! for edition 2015–2021 code (the module was renamed in 0.6.0 because `gen`
 //! is a reserved keyword from edition 2024). This crate is edition 2021.
 
 #![allow(clippy::unwrap_used)]

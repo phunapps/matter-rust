@@ -75,7 +75,7 @@ function staleChipFact(msg) {
 // Bump when the JSON shape changes (recorded in the header for audit).
 // v2: per-cluster `events` array (dumped for EVENT_ALLOWLIST clusters).
 // v3: `fabricSensitive` / `mandatoryOnWrite` on datatype struct fields +
-//     `meta.relaxed` (M9-A3 §5.4).
+//     `meta.relaxed` (M9-A3 B1).
 // v4: `provisional` (features, attributes, commands, events, fields),
 //     `choice` (fields) and `globalName` (datatypes), for generated rustdoc
 //     (M9-A3 B4).
@@ -83,11 +83,11 @@ function staleChipFact(msg) {
 //     added from supplement-1.4.json (M9-A3 B4).
 // v6: per-element `supplemented` provenance and `deprecated` on every element
 //     the supplement adds, and `keptFor` on each KEEP_DATATYPES enum, for
-//     generated rustdoc (M9-A3 B4 fix wave).
+//     generated rustdoc (M9-A3 B4).
 // v7: `provisional` on clusters (PROVISIONAL_CLUSTERS) and `requiredWhen` on
 //     datatype struct fields (M9-A3 B5).
 // v8: `relaxedReason` on each FIELD_RELAXATIONS field, for generated rustdoc
-//     (M9-A3 B5 fix wave).
+//     (M9-A3 B5).
 // v9: `secret` on fields (SECRET_FIELDS), for the generated redacting `Debug`
 //     (M9-A3 B6).
 // v10: `copiedFrom` on a datatype copied from the cluster that owns it, for a
@@ -225,7 +225,8 @@ const ALLOWLIST = [
   // M9-A3 B4, ValveConfigurationAndControl (nullable attributes, an Open
   // request with an optional nullable field, two events):
   { id: 0x0081, name: 'ValveConfigurationAndControl' },
-  // M9-A3 B4, ScenesManagement (fabric-scoped FabricSceneInfo, spec §5.4;
+  // M9-A3 B4, ScenesManagement (fabric-scoped FabricSceneInfo: its
+  // fabric-sensitive fields are Option;
   // AddScene's list of ExtensionFieldSetStruct of AttributeValuePairStruct;
   // no events):
   { id: 0x0062, name: 'ScenesManagement' },
@@ -247,7 +248,8 @@ const ALLOWLIST = [
   // carry a list of schedules, each a list of targets whose TargetSoC and
   // AddedEnergy form an at-least-one choice group):
   { id: 0x0099, name: 'EnergyEvse' },
-  // M9-A3 B5, Messages (the fabric-scoped Messages list, spec §5.4;
+  // M9-A3 B5, Messages (the fabric-scoped Messages list: its fabric-sensitive
+  // fields are Option;
   // CancelMessagesRequest's list<octstr>; FIELD_RELAXATIONS for chip's
   // FabricIndex-less MessageStruct and events):
   { id: 0x0097, name: 'Messages' },
@@ -271,7 +273,7 @@ const ALLOWLIST = [
   // of NetworkFaultEnum):
   { id: 0x0035, name: 'ThreadNetworkDiagnostics' },
   // M9-A3 B6, commissioning (codecs only: matter-commissioning drives
-  // commissioning with its own hand-written subset of these commands, spec §2):
+  // commissioning with its own hand-written subset of these commands):
   // ArmFailSafe / SetRegulatoryConfig / CommissioningComplete and their
   // responses, BasicCommissioningInfo; the network list, scan results and the
   // network configuration commands. No events.
@@ -282,7 +284,8 @@ const ALLOWLIST = [
   // transition time or duration; StateChanged and ActionFailed events):
   { id: 0x0025, name: 'Actions' },
   // M9-A3 B6, Fabric Synchronization: EcosystemInformation (fabric-scoped
-  // DeviceDirectory and LocationDirectory, spec §5.4; the global
+  // DeviceDirectory and LocationDirectory, whose fabric-sensitive fields are
+  // Option; the global
   // `locationdesc` inlined as LocationDescriptorStruct, GLOBAL_DATATYPE_NAMES)
   // and CommissionerControl (the approval request, the reverse commissioning
   // window response, and the fabric-sensitive CommissioningRequestResult
@@ -422,10 +425,10 @@ const EVENT_ALLOWLIST = new Set([
 // cluster-level conformance, so the list is kept here, each entry with its
 // source. The dump marks the cluster `provisional: true`; the emitter writes a
 // module rustdoc paragraph saying its shape may change between specification
-// revisions (spec §2: included, marked provisional; a later shape change is
-// still a breaking matter-clusters release). scripts/chip-xml-conformance.py
-// checks the marking against the 1.4.2 XML both ways (class V). A key that is
-// not allowlisted fails the dump.
+// revisions (a provisional cluster is generated, not skipped, and marked; a
+// later shape change is still a breaking matter-clusters release).
+// scripts/chip-xml-conformance.py checks the marking against the 1.4.2 XML both
+// ways (class V). A key that is not allowlisted fails the dump.
 const PROVISIONAL_CLUSTERS = new Map([
   ['EnergyPreference', 'chip data_model/1.4.2/clusters/EnergyPreference.xml: <clusterId id="0x009B"> carries <provisionalConform/> (also 1.5, 1.5.1)'],
   ['ContentControl', 'chip data_model/1.4.2/clusters/ContentControl.xml: <clusterId id="0x050F"> carries <provisionalConform/> (also 1.5, 1.5.1)'],
@@ -446,15 +449,17 @@ function recordRelaxation(cluster, element, findingClass, reason) {
   relaxed.push({ cluster, element, class: findingClass, reason });
 }
 
-// M9-A3 spec §5.4. Our reads are unfiltered (IsFabricFiltered=false), so for a
-// fabric-scoped list attribute chip returns every fabric's entries and leaves
-// the fabric-sensitive fields out of the entries that belong to another fabric
+// Fabric-sensitive fields are Option (another fabric's entry omits them), and
+// the encoders refuse a None one; events are exempt. Our reads are unfiltered
+// (IsFabricFiltered=false), so for a fabric-scoped list attribute chip returns
+// every fabric's entries and leaves the fabric-sensitive fields out of the
+// entries that belong to another fabric
 // (zzz_generated/app-common/clusters/AccessControl/Structs.ipp: encoded only
 // when `includeSensitive`). @matter/model marks no struct as fabric-scoped, so
 // field 254 (FabricIndex) is the signal.
 const FABRIC_SENSITIVE_REASON = 'fabric-sensitive (withheld for other fabrics)';
 
-// M9-A3 spec §5.2/§5.3: an element whose model type is narrower than chip's
+// Type widenings: an element whose model type is narrower than chip's
 // 1.4.2 XML (a W finding of scripts/chip-xml-conformance.py) is widened here to
 // the 1.4.2 type and recorded in meta.relaxed with class W. Keys use the
 // checker's element spelling, `<Cluster>.Attribute.<Name>`. A key that matches
@@ -476,22 +481,22 @@ const TYPE_WIDENINGS = new Map([
 ]);
 const appliedWidenings = new Set();
 
-// M9-A3 spec §5.1 step 3: a datatype struct or event field that a real 1.4
-// server sends in a shape the model (and the 1.4.2 XML) does not allow. Class
-// P: the server leaves out a field the model makes mandatory, so it is dumped
-// optional. Class N (M9-A3 B7): the server sends null in a field the model
-// makes non-nullable, so it is dumped nullable. Each is recorded in
-// meta.relaxed with its class and reason. Keys use the checker's spelling,
-// `<Cluster>.<Struct|Event>.<Field>`. The dump fails when a key whose cluster
-// is allowlisted matches no field, when the field is already optional (P) or
-// nullable (N) (the model changed: review the entry), or when the field is
-// one we send (a request field, or a field of a struct the emitter encodes):
+// Where chip's real behaviour wins over the model: a datatype struct or event
+// field that a real 1.4 server sends in a shape the model (and the 1.4.2 XML)
+// does not allow. Class P: the server leaves out a field the model makes
+// mandatory, so it is dumped optional. Class N (M9-A3 B7): the server sends
+// null in a field the model makes non-nullable, so it is dumped nullable. Each
+// is recorded in meta.relaxed with its class and reason. Keys use the checker's
+// spelling, `<Cluster>.<Struct|Event>.<Field>`. The dump fails when a key whose
+// cluster is allowlisted matches no field, when the field is already optional
+// (P) or nullable (N) (the model changed: review the entry), or when the field
+// is one we send (a request field, or a field of a struct the emitter encodes):
 // relaxing it would let an encoder omit a mandatory field or send a null the
-// model forbids. Each value is `{ class, reason, doc }`: `class` is 'P' or
-// 'N'; `reason` is the audit text recorded in meta.relaxed; `doc` is the short
+// model forbids. Each value is `{ class, reason, doc }`: `class` is 'P' or 'N';
+// `reason` is the audit text recorded in meta.relaxed; `doc` is the short
 // clause dumped on the field as `relaxedReason` (P) or `nullableReason` (N),
-// which the emitter renders as "Optional: <doc>." or "Nullable: <doc>." in
-// the field's rustdoc.
+// which the emitter renders as "Optional: <doc>." or "Nullable: <doc>." in the
+// field's rustdoc.
 //
 // Messages: chip does not fabric-scope MessageStruct or the three Messages
 // events (zap messages-cluster.xml: "TODO: enable isFabricScoped"; the
@@ -924,10 +929,11 @@ function entryTypeOf(el) {
   return undefined; // omitted by JSON.stringify
 }
 
-// M9-A3 spec §3.1: a field is mandatory (`optional: false`) only when its
-// effective conformance is an unconditional `M`. @matter/model's isMandatory
-// is also true for an otherwise-form such as "[Status == Success], M", which
-// the field's sender may legitimately leave out: ModeBase's
+// Only an unconditional M is mandatory: a field is mandatory
+// (`optional: false`) only when its effective conformance is an unconditional
+// `M`. @matter/model's isMandatory is also true for an otherwise-form such as
+// "[Status == Success], M", which the field's sender may legitimately leave
+// out: ModeBase's
 // ChangeToModeResponse.StatusText, which chip's ModeBase server omits from
 // the replies it builds itself, UnsupportedMode included
 // (src/app/clusters/mode-base-server/ModeBaseCluster.cpp HandleChangeToMode:
@@ -941,7 +947,7 @@ function isUnconditionallyMandatory(el) {
   return !!c && c.type === Conformance.Flag.Mandatory;
 }
 
-// True for a conformance the §3.1 rule relaxes: mandatory under
+// True for a conformance the only-unconditional-M rule relaxes: mandatory under
 // @matter/model's isMandatory (e.g. "[Status == Success], M"), but not an
 // unconditional M, so the field is dumped optional.
 function isConditionalRelaxation(c) {
@@ -951,7 +957,7 @@ function isConditionalRelaxation(c) {
 // Load-time self-check of isConditionalRelaxation over hand-written
 // conformance forms (parsed by @matter/model itself), so a model upgrade that
 // changes isMandatory's meaning fails the dump instead of silently relaxing or
-// tightening fields. Each row: conformance, whether §3.1 relaxes it.
+// tightening fields. Each row: conformance, whether the rule relaxes it.
 for (const [text, want] of [
   ['M', false],
   ['O', false],
@@ -965,15 +971,15 @@ for (const [text, want] of [
   ['ErrorStateID >= 128 & ErrorStateID <= 191', false],
 ]) {
   if (isConditionalRelaxation(new Conformance(text)) !== want) {
-    fail(`isConditionalRelaxation self-check: \`${text}\` should ${want ? '' : 'not '}be relaxed by spec §3.1`);
+    fail(`isConditionalRelaxation self-check: \`${text}\` should ${want ? '' : 'not '}be relaxed by the only-unconditional-M rule`);
   }
 }
 
-// Every field the §3.1 rule relaxed in the cluster being dumped, checked and
-// recorded by checkConditionalRelaxations once the cluster's commands and
-// datatypes are known. `role` is where the field lives: `request` /
-// `response` (command fields), `event`, or `struct` (a datatype struct field,
-// `owner` naming the struct).
+// Every field the only-unconditional-M rule relaxed in the cluster being
+// dumped, checked and recorded by checkConditionalRelaxations once the
+// cluster's commands and datatypes are known. `role` is where the field lives:
+// `request` / `response` (command fields), `event`, or `struct` (a datatype
+// struct field, `owner` naming the struct).
 let _conditional = [];
 
 // Every FIELD_RELAXATIONS entry applied in the cluster being dumped, checked
@@ -1197,7 +1203,7 @@ function dumpDatatype(dt, where, nameOverride) {
           siblings: siblingNames(dt.members, c),
         });
         // Datatype struct fields only: event and command payload fields go
-        // through dumpField directly and never get the marker (§5.4: chip
+        // through dumpField directly and never get the marker (chip
         // drops other fabrics' fabric-sensitive events outright and sends our
         // own in full, so event payloads are exempt).
         if (c.effectiveAccess && c.effectiveAccess.fabricSensitive) {
@@ -1925,7 +1931,7 @@ function encodedStructs(attributes, commands, datatypes) {
 //
 // A pruned struct takes its records with it, so no meta.relaxed or
 // meta.excluded entry names a struct that is no longer generated: its
-// fabric-sensitive (class P) relaxations, its §3.1 conditional fields (not yet
+// fabric-sensitive (class P) relaxations, its conditional fields (not yet
 // recorded: checkConditionalRelaxations runs after pruning and would record
 // them as class C) and its unreadable-field (`struct-field`) exclusions.
 // checkNoRecordNamesAPrunedDatatype asserts this once every cluster is dumped.
@@ -1977,7 +1983,7 @@ function pruneUnreferencedDatatypes(clusterName, attributes, commands, events, d
       for (let i = relaxed.length - 1; i >= 0; i--) {
         if (relaxed[i].cluster === clusterName && relaxed[i].element.startsWith(`${d.name}.`)) relaxed.splice(i, 1);
       }
-      // So do its §3.1 conditional fields, before they are recorded as class C.
+      // So do its conditional fields, before they are recorded as class C.
       _conditional = _conditional.filter((r) => !(r.role === 'struct' && r.owner === d.name));
       // And its unreadable-field exclusions (recorded by dumpDatatype under
       // "<cluster>.datatype", "<cluster>.global" or "<cluster>.synth").
@@ -2013,7 +2019,7 @@ function checkNoRecordNamesAPrunedDatatype() {
   }
 }
 
-// M9-A3 (B2 review ruling, landed in B3): the §3.1 rule may relax only fields
+// M9-A3 B3: the only-unconditional-M rule may relax only fields
 // we DECODE. A relaxed field we SEND — a command request field, or a field of
 // a struct the emitter encodes — would make its encoder take an Option and
 // silently omit a field the model says is mandatory, so the dump stops for a
@@ -2026,11 +2032,11 @@ function checkConditionalRelaxations(clusterName, attributes, commands, datatype
     const sent = r.role === 'request' || (r.role === 'struct' && encoded.has(r.owner));
     if (sent) {
       fail(
-        `${clusterName}.${r.element}: conformance "${r.conformance}" is conditional, so spec §3.1 would dump it ` +
+        `${clusterName}.${r.element}: conformance "${r.conformance}" is conditional, so the only-unconditional-M rule would dump it ` +
           `optional, but it is a field we send (${r.role === 'request' ? 'a command request field' : `${r.owner} is encoded`}) — review it before relaxing`,
       );
     }
-    recordRelaxation(clusterName, r.element, 'C', `conditional conformance "${r.conformance}" (spec §3.1: only an unconditional M is mandatory)`);
+    recordRelaxation(clusterName, r.element, 'C', `conditional conformance "${r.conformance}" (only an unconditional M is mandatory)`);
   }
   for (const r of _fieldRelaxed) {
     if (r.role === 'struct' && encoded.has(r.owner)) {
@@ -2046,17 +2052,19 @@ function checkConditionalRelaxations(clusterName, attributes, commands, datatype
 // 1.4 device may still implement and chip's controller codegen still generates
 // (src/controller/data_model/controller-clusters.matter): Thermostat's weekly
 // schedule (feature SCH) and WindowCovering's absolute positioning (feature
-// ABS). The user's decision (spec rev 6, §2): follow chip and synthesise them.
+// ABS). The decision: follow chip and synthesise them, so a controller can
+// drive a 1.4 device.
 //
 // supplement-1.4.json holds them, transcribed from chip's
 // data_model/1.4.2/clusters/*.xml, one element per entry with its `source`.
 // Before any cluster is dumped, each entry becomes a real @matter/model element
 // (AttributeModel / CommandModel / FieldModel) added to its cluster, so it goes
 // through exactly the path model elements take: exclusionReason, dumpField (the
-// §3.1 rule and its class-C recording), dumpCommand, the send-side guard,
-// inlining and the emitter. Datatypes are never supplemented: an element refers
-// to the model's own (Thermostat keeps ScheduleDayOfWeekBitmap,
-// ScheduleModeBitmap, StartOfWeekEnum and WeeklyScheduleTransitionStruct).
+// only-unconditional-M rule and its class-C recording), dumpCommand, the
+// send-side guard, inlining and the emitter. Datatypes are never supplemented:
+// an element refers to the model's own (Thermostat keeps
+// ScheduleDayOfWeekBitmap, ScheduleModeBitmap, StartOfWeekEnum and
+// WeeklyScheduleTransitionStruct).
 //
 // The merge is additive only. The dump stops when: a cluster is not
 // allowlisted; its model revision is not the one the entry was reviewed

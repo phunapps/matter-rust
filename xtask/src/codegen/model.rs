@@ -45,7 +45,7 @@ pub struct Cluster {
     /// (`<provisionalConform/>` on its cluster id; the dump's
     /// `PROVISIONAL_CLUSTERS`): its shape may change between specification
     /// revisions. Drives a module rustdoc paragraph. Absent in the JSON means
-    /// `false` (M9-A3 B5).
+    /// `false`.
     #[serde(default)]
     pub provisional: bool,
     /// chip marks it provisional in its Matter 1.4.2 data although the
@@ -96,7 +96,7 @@ pub struct Feature {
 }
 
 /// Provenance of an element the dump added from the Matter 1.4 supplement
-/// (`xtask/scripts/dump-model/supplement-1.4.json`, M9-A3 B4): an element the
+/// (`xtask/scripts/dump-model/supplement-1.4.json`): an element the
 /// 1.5.1 model removed but a Matter 1.4 device may still implement, transcribed
 /// from chip's 1.4.2 data model. Drives the element's generated rustdoc line,
 /// which replaces the generic provisional note (that one names the model's
@@ -239,15 +239,15 @@ pub struct FieldDef {
     pub optional: bool,
     /// The field has the fabric-sensitive (`S`) access quality: in a
     /// fabric-scoped struct (one carrying field 254, `FabricIndex`) a device
-    /// withholds it for another fabric's entries on an unfiltered read (M9-A3
-    /// spec §5.4). The dump records it on **datatype struct** fields only
+    /// withholds it for another fabric's entries on an unfiltered read. The
+    /// dump records it on **datatype struct** fields only
     /// (never on event or command payload fields); it drives the generated
     /// "`None` when withheld" rustdoc. Absent in the JSON means `false`.
     #[serde(default, rename = "fabricSensitive")]
     pub fabric_sensitive: bool,
     /// The dump relaxed this field from mandatory to `optional` only for
-    /// decoding (M9-A3 spec §5.4: a fabric-sensitive field the device
-    /// withholds for other fabrics' entries). On write it is still required,
+    /// decoding (a fabric-sensitive field the device withholds for other
+    /// fabrics' entries). On write it is still required,
     /// so every encoder of its struct refuses `None` instead of omitting it.
     /// A field optional in the model itself never carries it. Absent in the
     /// JSON means `false`.
@@ -271,26 +271,26 @@ pub struct FieldDef {
     #[serde(default)]
     pub choice: Option<Choice>,
     /// The sibling field this field's presence depends on (conformance
-    /// `TargetReheat, [TP]`, `Endpoint`, `!Group`; M9-A3 B5). Datatype struct
+    /// `TargetReheat, [TP]`, `Endpoint`, `!Group`). Datatype struct
     /// fields only. The generated encoders do not enforce it, so it drives a
     /// generated rustdoc line.
     #[serde(default, rename = "requiredWhen")]
     pub required_when: Option<RequiredWhen>,
     /// Why the dump made this mandatory field optional, for a
-    /// `FIELD_RELAXATIONS` entry (M9-A3 B5: a field chip's servers do not
-    /// send): a short clause the emitter renders as `Optional: <clause>.` in
+    /// `FIELD_RELAXATIONS` entry (a field chip's servers do not send): a
+    /// short clause the emitter renders as `Optional: <clause>.` in
     /// the field's rustdoc. Only on an `optional` field.
     #[serde(default, rename = "relaxedReason")]
     pub relaxed_reason: Option<String>,
     /// Why the dump made this non-nullable field nullable, for a class-N
-    /// `FIELD_RELAXATIONS` entry (M9-A3 B7: a field chip's servers send null,
+    /// `FIELD_RELAXATIONS` entry (a field chip's servers send null,
     /// `MediaPlayback` `TrackStruct.TrackAttributes`): a short clause the
     /// emitter renders as `Nullable: <clause>.` in the field's rustdoc. Only on
     /// a `nullable` field.
     #[serde(default, rename = "nullableReason")]
     pub nullable_reason: Option<String>,
     /// The field carries a secret (a key, a Thread dataset, a passphrase, a
-    /// PAKE verifier; the dump's `SECRET_FIELDS`, M9-A3 B6). The generated
+    /// PAKE verifier; the dump's `SECRET_FIELDS`). The generated
     /// struct keeps it out of its `Debug` output, like the hand-written
     /// redactions elsewhere in the workspace. Absent in the JSON means
     /// `false`.
@@ -298,7 +298,7 @@ pub struct FieldDef {
     pub secret: bool,
 }
 
-/// A presence dependency between two fields of one struct (M9-A3 B5): the
+/// A presence dependency between two fields of one struct: the
 /// field carrying it is required when `field` is present (`present: true`,
 /// conformance `Field`) or when it is absent (`present: false`, `!Field`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -362,7 +362,7 @@ pub struct Datatype {
     pub kept_for: Option<String>,
     /// The cluster that owns this datatype, when the dump copied it into this
     /// one for a qualified reference (`ContentLauncher.AdditionalInfoStruct`
-    /// in Channel; M9-A3 B7). Drives a generated rustdoc line.
+    /// in Channel). Drives a generated rustdoc line.
     #[serde(default, rename = "copiedFrom")]
     pub copied_from: Option<String>,
 }
@@ -398,8 +398,9 @@ pub struct BitDef {
 }
 
 /// One `meta.relaxed` entry: a field the dump made optional although the model
-/// does not (`class` `P`: fabric-sensitive, §5.4; `W`: a recorded type
-/// widening, §5.3; `C`: a conditional conformance the §3.1 rule relaxes). Only
+/// does not (`class` `P`: fabric-sensitive, or a field chip's servers do not
+/// send; `W`: a recorded type widening to chip's type; `C`: a conditional
+/// conformance, since only an unconditional `M` is mandatory). Only
 /// the keys [`validate`] checks are parsed; the rest of `meta` stays an opaque
 /// [`serde_json::Value`].
 #[derive(Debug, Deserialize)]
@@ -607,7 +608,8 @@ fn check_required_when(cluster: &str, d: &Datatype, f: &FieldDef) -> Result<(), 
 
 /// A `relaxedReason` documents why a mandatory field was dumped optional, so it
 /// may sit only on an `optional` field, and never next to `mandatoryOnWrite`
-/// (a §5.4 field already carries its own "withheld" rustdoc): either would
+/// (a fabric-sensitive field already carries its own "withheld" rustdoc):
+/// either would
 /// make the generated "Optional: …" line contradict the field.
 fn check_relaxed_reason(cluster: &str, owner: &str, f: &FieldDef) -> Result<(), String> {
     if f.relaxed_reason.is_none() {
@@ -626,7 +628,7 @@ fn check_relaxed_reason(cluster: &str, owner: &str, f: &FieldDef) -> Result<(), 
 }
 
 /// A `nullableReason` documents why a non-nullable field was dumped nullable
-/// (a class-N `FIELD_RELAXATIONS` entry, M9-A3 B7), so it may sit only on a
+/// (a class-N `FIELD_RELAXATIONS` entry), so it may sit only on a
 /// `nullable` field: elsewhere the generated "Nullable: …" line would
 /// contradict the field's type.
 fn check_nullable_reason(cluster: &str, owner: &str, f: &FieldDef) -> Result<(), String> {
@@ -640,11 +642,12 @@ fn check_nullable_reason(cluster: &str, owner: &str, f: &FieldDef) -> Result<(),
 }
 
 /// A class-C relaxation (a field whose conformance is conditional, which the
-/// §3.1 rule dumps optional) is safe only on a field we **decode**: a field we
-/// send would make its encoder take an `Option` and could silently omit a
-/// field the model says is mandatory. So every class-C `meta.relaxed` entry
-/// must resolve to a response command, event, or decode-only struct field —
-/// never a request command field, nor a field of a struct the emitter encodes
+/// dump's only-unconditional-`M`-is-mandatory rule dumps optional) is safe only
+/// on a field we **decode**: a field we send would make its encoder take an
+/// `Option` and could silently omit a field the model says is mandatory. So
+/// every class-C `meta.relaxed` entry must resolve to a response command,
+/// event, or decode-only struct field — never a request command field, nor a
+/// field of a struct the emitter encodes
 /// ([`encoded_struct_names`](crate::codegen::rustgen::emit_codecs::encoded_struct_names),
 /// the emitter's own rule). The dump enforces the same on regeneration; this
 /// half runs on every `codegen --check`. An entry naming no generated field is
@@ -652,7 +655,7 @@ fn check_nullable_reason(cluster: &str, owner: &str, f: &FieldDef) -> Result<(),
 fn check_conditional_relaxations(model: &Model) -> Result<(), String> {
     // Every class-C entry is written by the dump, so the fix is never a
     // hand edit of clusters.json: point at the rule that produced it.
-    const FIX_AT: &str = "class-C entries come from the spec §3.1 rule in \
+    const FIX_AT: &str = "class-C entries come from the only-unconditional-M-is-mandatory rule in \
         xtask/scripts/dump-model/index.js (isConditionalRelaxation, checkConditionalRelaxations): \
         fix the model or the dump and regenerate, not clusters.json";
     let relaxed: Vec<Relaxation> = match model.meta.get("relaxed") {
@@ -715,9 +718,9 @@ fn check_conditional_relaxations(model: &Model) -> Result<(), String> {
 }
 
 /// A class-P relaxation whose field does not carry `mandatoryOnWrite` is a
-/// `FIELD_RELAXATIONS` entry (M9-A3 B5: a field chip's servers do not send,
-/// such as Messages' `FabricIndex`), not a §5.4 fabric-sensitive one; every
-/// class-N relaxation is one too (M9-A3 B7: a field chip's servers send null,
+/// `FIELD_RELAXATIONS` entry (a field chip's servers do not send, such as
+/// Messages' `FabricIndex`), not a fabric-sensitive one; every class-N
+/// relaxation is one too (a field chip's servers send null,
 /// `MediaPlayback` `TrackStruct.TrackAttributes`). No encoder guard backs
 /// them, so, like class C, they are safe only on a field we **decode**: a
 /// request command field, or a field of a struct the emitter encodes ([`encoded_struct_names`](crate::codegen::rustgen::emit_codecs::encoded_struct_names)),
@@ -725,7 +728,8 @@ fn check_conditional_relaxations(model: &Model) -> Result<(), String> {
 /// send a null the model forbids. The dump refuses the same on regeneration
 /// (`dumpField`, `checkConditionalRelaxations`); this is the Rust-side twin,
 /// run on every `codegen --check`. An entry naming no generated field is an
-/// error too, so a stale entry cannot disable the check. A class-P §5.4 entry
+/// error too, so a stale entry cannot disable the check. A class-P
+/// fabric-sensitive entry
 /// (its field carries `mandatoryOnWrite`) is checked by
 /// [`check_struct_write_marker`] instead; the marker's encoder guard refuses
 /// `None`, not `Null`, so it never excuses a class-N entry.
@@ -798,7 +802,7 @@ fn check_chip_omits_relaxations(model: &Model) -> Result<(), String> {
         }
         for (mandatory_on_write, sent) in found {
             if mandatory_on_write && class == "P" {
-                // §5.4: encoders refuse None (check_struct_write_marker). They
+                // Fabric-sensitive: encoders refuse None (check_struct_write_marker). They
                 // do not refuse Null, so a class-N entry is checked below.
                 continue;
             }
@@ -820,14 +824,14 @@ fn check_chip_omits_relaxations(model: &Model) -> Result<(), String> {
     Ok(())
 }
 
-/// `mandatoryOnWrite` (M9-A3 spec §5.4) is legal only on a datatype struct
-/// field that is `optional` (relaxed for decode), `fabricSensitive`, and in a
-/// struct carrying field 254 (`FabricIndex`, the fabric-scoped signal). The
-/// emitter's encoder guard keys only on field 254 plus the marker, so a marker
-/// elsewhere would be ignored or misgenerate: in a struct without field 254 it
-/// is ignored and the encoder omits a `None` the device must receive (the
-/// hazard §5.4 closes); on a non-optional field the guard does not compile; on
-/// a non-sensitive optional field it refuses a `None` that is legal to omit.
+/// `mandatoryOnWrite` is legal only on a datatype struct field that is
+/// `optional` (relaxed for decode), `fabricSensitive`, and in a struct carrying
+/// field 254 (`FabricIndex`, the fabric-scoped signal). The emitter's encoder
+/// guard keys only on field 254 plus the marker, so a marker elsewhere would be
+/// ignored or misgenerate: in a struct without field 254 it is ignored and the
+/// encoder omits a `None` the device must receive (the hazard the marker
+/// closes); on a non-optional field the guard does not compile; on a
+/// non-sensitive optional field it refuses a `None` that is legal to omit.
 /// Reject it.
 fn check_struct_write_marker(cluster: &str, d: &Datatype, f: &FieldDef) -> Result<(), String> {
     if !f.mandatory_on_write {
@@ -859,8 +863,8 @@ fn check_struct_write_marker(cluster: &str, d: &Datatype, f: &FieldDef) -> Resul
 }
 
 /// Event and command payload fields never carry `mandatoryOnWrite`: the
-/// encoder guard exists only for datatype structs (spec §5.4, "Events are
-/// exempt"; request payloads are never write-guarded).
+/// encoder guard exists only for datatype structs (events are exempt from
+/// the fabric-sensitive rule; request payloads are never write-guarded).
 fn reject_payload_write_marker(
     cluster: &str,
     payload: &str,
@@ -1038,7 +1042,7 @@ mod tests {
         assert!(!marked.mandatory_on_write);
     }
 
-    // ---- mandatoryOnWrite placement (M9-A3 spec §5.4) -------------------
+    // ---- mandatoryOnWrite placement -------------------------------------
 
     /// The marked field as the dump writes it: optional for decode,
     /// fabric-sensitive, still required on write.
@@ -1291,8 +1295,7 @@ mod tests {
     }
 
     // ---- class-P relaxations without mandatoryOnWrite are decode-only -----
-    // (M9-A3 B5 fix wave, T7 I1: the Rust twin of the dump's
-    // FIELD_RELAXATIONS check.)
+    // (M9-A3 B5: the Rust twin of the dump's FIELD_RELAXATIONS check.)
 
     /// [`relaxed_model`] with its one entry made class P (no
     /// `mandatoryOnWrite` on any field): a `FIELD_RELAXATIONS` entry.
@@ -1429,8 +1432,9 @@ mod tests {
 
     #[test]
     fn rejects_a_class_n_relaxation_of_a_guarded_encoded_struct_field() {
-        // M9-A3 B7 review I1, the shape of AccessControlExtensionStruct.Data:
-        // a §5.4 field (mandatoryOnWrite) of an encoded fabric-scoped struct.
+        // M9-A3 B7, the shape of AccessControlExtensionStruct.Data: a
+        // fabric-sensitive field (mandatoryOnWrite) of an encoded fabric-scoped
+        // struct.
         // The marker's encoder guard refuses `None`, not `Null`, so unlike
         // class P it does not make a class-N relaxation safe; the dump refuses
         // it (checkConditionalRelaxations), and so must this twin.
@@ -1466,7 +1470,7 @@ mod tests {
 
     #[test]
     fn accepts_a_fabric_sensitive_relaxation_of_an_encoded_struct_field() {
-        // Class P with mandatoryOnWrite (§5.4) legitimately sits on an encoded
+        // Class P with mandatoryOnWrite (fabric-sensitive) legitimately sits on an encoded
         // struct: its encoder refuses None instead of omitting the field.
         let mut m = chip_omits_model("ScalarStruct.Label");
         let scalar = &mut m.clusters[0].datatypes[0];
@@ -1483,7 +1487,7 @@ mod tests {
 
     #[test]
     fn relaxed_reason_sits_only_on_an_optional_field_without_mandatory_on_write() {
-        // M9-A3 B5 fix wave, T7 M3: the "Optional: …" rustdoc must not
+        // M9-A3 B5: the "Optional: …" rustdoc must not
         // contradict the field.
         let mut m = chip_omits_model("ReadStruct.Label");
         let read = &mut m.clusters[0].datatypes[2];
@@ -1497,7 +1501,7 @@ mod tests {
             "got: {err}"
         );
 
-        // Beside mandatoryOnWrite (a legal §5.4 field otherwise).
+        // Beside mandatoryOnWrite (a legal fabric-sensitive field otherwise).
         let mut m = chip_omits_model("ScalarStruct.Label");
         let scalar = &mut m.clusters[0].datatypes[0];
         scalar.fields[0].fabric_sensitive = true;
@@ -1593,7 +1597,7 @@ mod tests {
         assert!(validate(&m).is_ok());
     }
 
-    // ---- M9-A3 B4 fix wave: supplement provenance ----
+    // ---- M9-A3 B4: supplement provenance ----
 
     /// A Thermostat with the supplemented SCH feature and one attribute it
     /// gates, both stamped; `attr_feature` is the feature the attribute's

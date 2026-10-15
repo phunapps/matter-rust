@@ -146,7 +146,7 @@ async fn eem_wait_for_count(node: &Node, event: u32, baseline: Option<u64>, coun
     }
 }
 
-/// ElectricalEnergyMeasurement events (M9-A3 B1) on evse-app ep1: chip's
+/// ElectricalEnergyMeasurement events on evse-app ep1: chip's
 /// energy-reporting `TestEventTrigger` starts fake 1 kW import readings every
 /// 2 s (EnergyReportingTestEventTriggerHandler.h
 /// `kFakeReadingsLoadStart_1kW_2s`), and each reading emits

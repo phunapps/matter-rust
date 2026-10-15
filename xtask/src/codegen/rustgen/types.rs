@@ -1,15 +1,13 @@
 //! Pure mapping from Matter type strings + names to Rust.
 //!
 //! No I/O, no model access — just `&str` in, `String`/`bool` out — so every
-//! branch is cheaply unit-tested (the M7 spec calls this out explicitly).
-
-// Items in this module are scaffolding wired up by the emitter (next task).
+//! branch is cheaply unit-tested.
 
 /// Map a non-list scalar/semantic Matter type to its backing Rust scalar,
 /// or `None` if `ty` is not a known scalar (then it is a datatype name).
 ///
 /// Semantic globals map to their underlying primitive (semantic newtypes are
-/// deferred — YAGNI per spec §2). Bare `enum8`/`enum16` (an attribute typed
+/// deferred until a caller needs them). Bare `enum8`/`enum16` (an attribute typed
 /// as a generic enum with no named datatype) map to the raw integer.
 fn scalar_rust(ty: &str) -> Option<&'static str> {
     Some(match ty {

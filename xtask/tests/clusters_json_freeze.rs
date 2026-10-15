@@ -11,7 +11,7 @@ use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 
-/// The M7 target clusters (CLAUDE.md milestone / spec §8) plus the M9-A2.1
+/// The M7 target clusters (CLAUDE.md's Milestone 7 list) plus the M9-A2.1
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
@@ -279,7 +279,7 @@ fn doorlock_aliro_surface_is_excluded_and_recorded() {
     assert!(recorded, "DoorLock Aliro exclusions not recorded in header");
 }
 
-// ---- M9-A3 B1: fabric-sensitive fields (spec §5.4) ---------------------------
+// ---- M9-A3 B1: fabric-sensitive fields --------------------------------------
 
 /// Every datatype-struct field the dump relaxes because a device withholds it
 /// for other fabrics' entries: `(cluster, struct, field)`. Each is
@@ -561,7 +561,8 @@ fn relaxed_fabric_sensitive_fields_are_optional_mandatory_on_write_and_recorded(
 
 #[test]
 fn no_event_or_command_field_is_marked_fabric_sensitive() {
-    // Spec §5.4 "Events are exempt": the marker is for datatype structs only.
+    // Events are exempt from the fabric-sensitive Option rule: the marker is
+    // for datatype structs only.
     let v = load();
     for c in clusters(&v) {
         let cname = c["name"].as_str().unwrap();
@@ -833,9 +834,9 @@ fn mode_base_derived_clusters_carry_inherited_fields_and_values() {
 
 #[test]
 fn only_an_unconditional_m_is_mandatory() {
-    // Spec §3.1: StatusText's conformance is "[Status == Success], M", which
-    // chip never satisfies (it sends no StatusText), so it is optional.
-    // Status ("M") and the request's NewMode ("M") stay mandatory.
+    // Only an unconditional M is mandatory: StatusText's conformance is
+    // "[Status == Success], M", which chip never satisfies (it sends no
+    // StatusText), so it is optional. Status ("M") and the request's NewMode ("M") stay mandatory.
     let v = load();
     for name in MODE_BASE_WITH_CHANGE_TO_MODE {
         let c = cluster(&v, name);
@@ -882,10 +883,11 @@ fn microwave_oven_mode_has_inherited_fields_and_no_commands() {
 
 #[test]
 fn every_relaxation_is_fabric_sensitive_widened_conditional_or_chip_nullable() {
-    // meta.relaxed holds exactly the §5.4 presence relaxations (class P), the
-    // fields chip's servers leave out (class P, FIELD_RELAXATIONS: see
-    // `fields_chip_omits_are_optional_and_recorded`), the §5.3 widenings
-    // (class W), the §3.1 conditional-conformance relaxations (class C,
+    // meta.relaxed holds exactly the fabric-sensitive presence relaxations
+    // (class P), the fields chip's servers leave out (class P,
+    // FIELD_RELAXATIONS: see `fields_chip_omits_are_optional_and_recorded`),
+    // the type widenings to chip's type (class W), the conditional-conformance
+    // relaxations (class C,
     // decode-only: codegen's model.rs refuses one on a field we send) and the
     // fields chip's servers send null (class N, FIELD_RELAXATIONS: see
     // `fields_chip_sends_null_are_nullable_and_recorded`). The one W today is ModeSelect StandardNamespace: model `namespace` is enum8,
@@ -982,17 +984,18 @@ fn refrigerator_alarm_drops_what_its_disallowed_reset_feature_gates() {
     }
 }
 
-// ---- M9-A3 B3: §3.1 relaxations are recorded and never touch what we send ----
+// ---- M9-A3 B3: conditional relaxations are recorded, never on what we send ----
 
 #[test]
 fn conditional_conformance_relaxations_are_exactly_the_mode_base_status_texts() {
-    // Spec §3.1 relaxes a field whose conformance is mandatory but not an
-    // unconditional M. The dump records each one in meta.relaxed with class C
-    // and stops if one is a field we send (a request field, or a field of an
-    // encoded struct). Today: ChangeToModeResponse.StatusText ("[Status ==
-    // Success], M") in the nine generated ModeBase derivatives with
-    // ChangeToMode, and nothing else. A new entry here (a later batch, a
-    // model upgrade) is a decoder change to review.
+    // Only an unconditional M is mandatory, so the dump relaxes a field whose
+    // conformance is mandatory but not an unconditional M. The dump records
+    // each one in meta.relaxed with class C and stops if one is a field we send
+    // (a request field, or a field of an encoded struct). Today:
+    // ChangeToModeResponse.StatusText ("[Status == Success], M") in the nine
+    // generated ModeBase derivatives with ChangeToMode, and nothing else. A new
+    // entry here (a later batch, a model upgrade) is a decoder change to
+    // review.
     let v = load();
     let mut got: Vec<(&str, &str)> = v["meta"]["relaxed"]
         .as_array()
@@ -1002,7 +1005,7 @@ fn conditional_conformance_relaxations_are_exactly_the_mode_base_status_texts() 
         .map(|r| {
             assert_eq!(
                 r["reason"],
-                "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)",
+                "conditional conformance \"[Status == Success], M\" (only an unconditional M is mandatory)",
                 "{r}"
             );
             (
@@ -1561,7 +1564,8 @@ fn service_area_location_struct_records_its_global_name() {
 // ---- M9-A3 B4: the Matter 1.4 supplement ------------------------------------
 
 /// Matter 1.4 elements the 1.5.1 model removed, added by the dump from
-/// `xtask/scripts/dump-model/supplement-1.4.json` (spec §2, rev 6), as
+/// `xtask/scripts/dump-model/supplement-1.4.json` (kept so a controller can
+/// drive a 1.4 device), as
 /// `(cluster, "<Feature|Attribute|Command>.<name>")`. Each is checked against
 /// chip's 1.4.2 XML by `scripts/chip-xml-conformance.py` (class S).
 const SUPPLEMENTED: [(&str, &str); 19] = [
@@ -1931,7 +1935,7 @@ fn valve_open_fields_are_optional_and_open_duration_nullable() {
 fn scenes_management_shape_follows_1_4() {
     // FabricSceneInfo is a list of the fabric-scoped SceneInfoStruct (field
     // 254): its three fabric-sensitive fields are relaxed for decode and
-    // mandatory on write (spec §5.4, asserted with the other relaxations).
+    // mandatory on write (asserted with the other relaxations).
     // ViewSceneResponse's and GetSceneMembershipResponse's success-only fields
     // ("Status == Success") are optional, so a NotFound reply decodes. The
     // descriptive DoNotUse attribute (0x0000, conformance X) is excluded. No
@@ -1973,11 +1977,11 @@ fn scenes_management_shape_follows_1_4() {
 
 // ---- M9-A3 B5: provisional clusters and presence dependencies -------------
 
-/// Clusters the Matter specification marks provisional as a whole (spec §2:
-/// `EnergyPreference` and `ContentControl`, included and marked provisional), from
-/// the dump's `PROVISIONAL_CLUSTERS`. Each gets a module rustdoc paragraph;
-/// `scripts/chip-xml-conformance.py` checks the marking against chip's 1.4.2
-/// XML both ways (class V).
+/// Clusters the Matter specification marks provisional as a whole
+/// (`EnergyPreference` and `ContentControl`, generated and marked provisional),
+/// from the dump's `PROVISIONAL_CLUSTERS`. Each gets a module rustdoc
+/// paragraph; `scripts/chip-xml-conformance.py` checks the marking against
+/// chip's 1.4.2 XML both ways (class V).
 const PROVISIONAL_CLUSTERS: [&str; 2] = ["EnergyPreference", "ContentControl"];
 
 /// Datatype struct fields whose presence depends on a sibling field
@@ -2323,9 +2327,9 @@ fn energy_evse_keeps_its_shapes() {
 // ---- M9-A3 B5: fields a real chip server leaves out (FIELD_RELAXATIONS) -----
 
 /// Fields the dump relaxed to optional because chip's servers leave them out
-/// although the model and the 1.4.2 XML make them mandatory (spec §5.1 step
-/// 3), as `(cluster, "<Struct|Event>.<Field>")`. Recorded in `meta.relaxed`
-/// with class P.
+/// although the model and the 1.4.2 XML make them mandatory (chip's real
+/// behaviour wins), as `(cluster, "<Struct|Event>.<Field>")`. Recorded in
+/// `meta.relaxed` with class P.
 const CHIP_OMITS_RELAXED: [(&str, &str); 4] = [
     ("Messages", "MessageComplete.FabricIndex"),
     ("Messages", "MessagePresented.FabricIndex"),
@@ -2368,9 +2372,8 @@ fn fields_chip_omits_are_optional_and_recorded() {
 }
 
 /// The per-field `relaxedReason` of every `FIELD_RELAXATIONS` field, as
-/// `(cluster, owner, field, relaxedReason)`, sorted (M9-A3 B5 fix wave, T7
-/// M3): the emitter renders it as "Optional: <reason>." on the field. No
-/// other field carries one.
+/// `(cluster, owner, field, relaxedReason)`, sorted: the emitter renders it as
+/// "Optional: <reason>." on the field. No other field carries one.
 const RELAXED_REASONS: [(&str, &str, &str, &str); 4] = [
     (
         "Messages",
@@ -2780,7 +2783,7 @@ fn fabric_synchronization_clusters_keep_their_shapes() {
     );
     assert_eq!(element_names(eco, "commands"), Vec::<&str>::new());
     assert_eq!(writable_attributes(eco), Vec::<&str>::new());
-    // Every field but FabricIndex is fabric-sensitive (§5.4: all Option).
+    // Every field but FabricIndex is fabric-sensitive (so all Option).
     for name in ["EcosystemDeviceStruct", "EcosystemLocationStruct"] {
         for f in datatype(eco, name)["fields"].as_array().unwrap() {
             let fabric_index = f["id"] == 254;
@@ -2807,7 +2810,8 @@ fn fabric_synchronization_clusters_keep_their_shapes() {
     assert_eq!(command(cc, "CommissionNode")["responseId"], 2);
     assert_eq!(element_names(cc, "events"), ["CommissioningRequestResult"]);
     // The event's fields are fabric-sensitive in the specification, but
-    // events are exempt (§5.4): chip sends them only to their own fabric.
+    // events are exempt from the Option rule: chip sends them only to their
+    // own fabric.
     let payload = cc["events"][0]["fields"].as_array().unwrap();
     assert!(payload.iter().all(|f| f["fabricSensitive"].is_null()));
     assert!(payload.iter().all(|f| f["optional"] == false));
@@ -2949,8 +2953,8 @@ fn secret_fields_are_exactly_these() {
 
 #[test]
 fn every_generated_cluster_with_events_has_them_dumped() {
-    // M9-A3 spec §1 success criterion 2: once A3 is done, no generated cluster
-    // keeps the "event dump not enabled" exclusion; every one with events has
+    // M9-A3: no generated cluster keeps the "event dump not enabled"
+    // exclusion; every one with events has
     // them in clusters.json. EVENT_ALLOWLIST stays, to gate later additions.
     let v = load();
     let off: Vec<&str> = v["meta"]["excluded"]
@@ -3091,7 +3095,7 @@ fn content_app_platform_keeps_its_shapes() {
 }
 
 /// The class-N `FIELD_RELAXATIONS` fields, as `(cluster, "<Owner>.<Field>",
-/// nullableReason)` (M9-A3 B7): fields chip's servers send null although the
+/// nullableReason)`: fields chip's servers send null although the
 /// model makes them non-nullable. The test checks that each is `nullable`,
 /// is in `meta.relaxed`, and has exactly this `nullableReason`. That a class-N
 /// field is decode-only is enforced elsewhere: by the dump and by codegen's

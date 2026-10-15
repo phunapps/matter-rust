@@ -15,22 +15,22 @@
 # absent today.
 
 # DoorLock legacy PIN/RFID/user-status/user-type commands (!USR).
-DoorLock.Command.SetPINCode legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap (spec rev 6)
-DoorLock.Command.GetPINCode legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap (spec rev 6)
-DoorLock.Command.GetPINCodeResponse legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap (spec rev 6)
-DoorLock.Command.ClearPINCode legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap (spec rev 6)
-DoorLock.Command.ClearAllPINCodes legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap (spec rev 6)
-DoorLock.Command.SetRFIDCode legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap (spec rev 6)
-DoorLock.Command.GetRFIDCode legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap (spec rev 6)
-DoorLock.Command.GetRFIDCodeResponse legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap (spec rev 6)
-DoorLock.Command.ClearRFIDCode legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap (spec rev 6)
-DoorLock.Command.ClearAllRFIDCodes legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap (spec rev 6)
-DoorLock.Command.SetUserStatus legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap (spec rev 6)
-DoorLock.Command.GetUserStatus legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap (spec rev 6)
-DoorLock.Command.GetUserStatusResponse legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap (spec rev 6)
-DoorLock.Command.SetUserType legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap (spec rev 6)
-DoorLock.Command.GetUserType legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap (spec rev 6)
-DoorLock.Command.GetUserTypeResponse legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap (spec rev 6)
+DoorLock.Command.SetPINCode legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap
+DoorLock.Command.GetPINCode legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap
+DoorLock.Command.GetPINCodeResponse legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap
+DoorLock.Command.ClearPINCode legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap
+DoorLock.Command.ClearAllPINCodes legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap
+DoorLock.Command.SetRFIDCode legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap
+DoorLock.Command.GetRFIDCode legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap
+DoorLock.Command.GetRFIDCodeResponse legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap
+DoorLock.Command.ClearRFIDCode legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap
+DoorLock.Command.ClearAllRFIDCodes legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap
+DoorLock.Command.SetUserStatus legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap
+DoorLock.Command.GetUserStatus legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap
+DoorLock.Command.GetUserStatusResponse legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap
+DoorLock.Command.SetUserType legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap
+DoorLock.Command.GetUserType legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap
+DoorLock.Command.GetUserTypeResponse legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap
 
-# AccountLogin LoggedOut's implicit FabricIndex (M9-A3 B7).
+# AccountLogin LoggedOut's implicit FabricIndex.
 AccountLogin.LoggedOut.FabricIndex implicit in 1.4.2 (LoggedOut is fabricSensitive) but absent from @matter/model 0.17.1 and matter.js 0.16.11; chip's controller codegen carries it (both refs), yet chip's server never logs the event (account-login-server.cpp leaves FabricIndex unset, and LogEvent in EventLogging.h refuses a fabric-sensitive event with no fabric, both refs); the generated decoder skips tag 254

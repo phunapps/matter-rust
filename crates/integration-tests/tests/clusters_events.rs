@@ -8,7 +8,7 @@
     clippy::items_after_statements
 )]
 
-//! M9-A3 B1: the events of the already-generated clusters, read from a live
+//! The events of the clusters generated before 0.6.0, read from a live
 //! all-clusters-app and decoded with the generated `<Name>Event` decoders.
 //!
 //! Stimulus per event (chip's all-clusters, master and v1.4.2.0 alike unless
@@ -117,7 +117,7 @@ async fn last_event_tlv(node: &Node, cluster: u32, event: u32) -> Vec<u8> {
 async fn basic_information_and_general_diagnostics_events_decode() {
     let cfg = integration_tests::dut_or_skip!();
     if !cfg.is_app("all-clusters") {
-        eprintln!("skipped: B1 event test needs the all-clusters DUT (`just integration`)");
+        eprintln!("skipped: event test needs the all-clusters DUT (`just integration`)");
         return;
     }
     let (controller, node_id) = integration_tests::fixture::connect(&cfg)
@@ -215,7 +215,7 @@ async fn basic_information_and_general_diagnostics_events_decode() {
 async fn occupancy_and_boolean_state_events_decode() {
     let cfg = integration_tests::dut_or_skip!();
     if !cfg.is_app("all-clusters") {
-        eprintln!("skipped: B1 event test needs the all-clusters DUT (`just integration`)");
+        eprintln!("skipped: event test needs the all-clusters DUT (`just integration`)");
         return;
     }
     let (controller, node_id) = integration_tests::fixture::connect(&cfg)
@@ -377,7 +377,7 @@ async fn write_and_clear_extension(node: &Node) {
 async fn access_control_events_decode() {
     let cfg = integration_tests::dut_or_skip!();
     if !cfg.is_app("all-clusters") {
-        eprintln!("skipped: B1 event test needs the all-clusters DUT (`just integration`)");
+        eprintln!("skipped: event test needs the all-clusters DUT (`just integration`)");
         return;
     }
     let (controller, node_id) = integration_tests::fixture::connect(&cfg)
@@ -433,7 +433,8 @@ async fn access_control_events_decode() {
         })
         .find(|e| e.change_type == access_control::ChangeTypeEnum::from_raw(1))
         .expect("an Added AccessControlEntryChanged event from our write");
-    // Our fabric's event arrives in full (spec §5.4 "events are exempt"): the
+    // Our fabric's event arrives in full (events are exempt from the
+    // fabric-sensitive Option rule): the
     // admin is our CASE node, and LatestValue carries its sensitive fields.
     assert_eq!(
         added.admin_node_id,
@@ -474,7 +475,7 @@ async fn access_control_events_decode() {
 async fn time_sync_power_source_pump_and_ota_events_decode() {
     let cfg = integration_tests::dut_or_skip!();
     if !cfg.is_app("all-clusters") {
-        eprintln!("skipped: B1 event test needs the all-clusters DUT (`just integration`)");
+        eprintln!("skipped: event test needs the all-clusters DUT (`just integration`)");
         return;
     }
     let (controller, node_id) = integration_tests::fixture::connect(&cfg)

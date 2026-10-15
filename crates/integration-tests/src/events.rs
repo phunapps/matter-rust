@@ -1,4 +1,4 @@
-//! Event helpers for the event integration tests (M9-A3 B1): stimulate an
+//! Event helpers for the event integration tests: stimulate an
 //! event on the DUT (`GeneralDiagnostics.TestEventTrigger`, or the app's
 //! out-of-band `--app-pipe` command FIFO), then read it back from the event
 //! path and hand its payload to a generated `matter-clusters` decoder.

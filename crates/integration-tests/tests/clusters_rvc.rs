@@ -14,14 +14,14 @@
 //! Rosetta 2 to build on Apple silicon, so it runs there, not on the Mac. Every
 //! expected value below is also read from chip source.
 //!
-//! M9-A3 B2: RvcRunMode and RvcCleanMode. rvc-app's modes come from
+//! The mode clusters: RvcRunMode and RvcCleanMode. rvc-app's modes come from
 //! examples/rvc-app/rvc-common/include/rvc-mode-delegates.h; its mode-change
 //! rules from rvc-common/src/rvc-device.cpp (`HandleRvcRunChangeToMode`,
 //! `HandleRvcCleanChangeToMode`). Line numbers cited below are chip master
 //! 5cd2917a; v1.4.2.0's rvc-mode-delegates.h is byte-identical and its two
 //! change handlers differ only in whitespace.
 //!
-//! M9-A3 B3: RvcOperationalState (and its OperationalError /
+//! The appliance clusters: RvcOperationalState (and its OperationalError /
 //! OperationCompletion events) and ServiceArea, which only rvc-app serves.
 //! Their behaviour comes from rvc-common/src/rvc-device.cpp, the service-area
 //! delegate (rvc-service-area-delegate.cpp) and chip's servers

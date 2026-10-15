@@ -4,7 +4,7 @@
 // Status: scaffolding. The `@matter/protocol` NOC-mint API surface shifts
 // between matter.js minor versions (0.16.x in particular). Wiring the
 // capture against the current symbol path is an operator-touch step —
-// see TODO-1.0.md and the M6.3.3 plan task list.
+// see TODO-1.0.md.
 //
 // Output (when fully wired):
 //   test-vectors/commissioning/noc/csr_request/<n>.json

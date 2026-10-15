@@ -84,11 +84,12 @@ fn tags_of_entries_for(list: &Value, fabric_index: u8) -> Vec<Vec<Tag>> {
         .collect()
 }
 
-/// M9-A3 spec §5.4 against real chip encoding, AccessControl `Acl` and
-/// `Extension`. With B's fabric on the device, A reads both unfiltered (our
-/// reads always are): chip returns B's entries carrying only FabricIndex, and
-/// the generated decoders must accept them with every fabric-sensitive field
-/// `None` while A's own entries keep theirs.
+/// The fabric-sensitive `Option` rule (another fabric's entries omit those
+/// fields) against real chip encoding, AccessControl `Acl` and `Extension`.
+/// With B's fabric on the device, A reads both unfiltered (our reads always
+/// are): chip returns B's entries carrying only FabricIndex, and the generated
+/// decoders must accept them with every fabric-sensitive field `None` while A's
+/// own entries keep theirs.
 async fn assert_acl_entries_withheld(node_a: &Node, node_b: &Node, a_index: u8, b_index: u8) {
     const ACL: u32 = access_control::attribute_id::ACL;
     const EXTENSION: u32 = access_control::attribute_id::EXTENSION;
@@ -235,14 +236,15 @@ async fn remove_all_scenes(node: &Node) {
     );
 }
 
-/// M9-A3 spec §5.4 against real chip encoding, ScenesManagement
-/// `FabricSceneInfo` (endpoint 1). A empties its group-0 scenes (which gives
-/// A an entry) and B adds a scene (which gives B one); A's unfiltered read
-/// returns B's entry with only SceneCount, RemainingCapacity and FabricIndex
-/// (chip's `SceneInfoStruct::EncodeForRead`), the generated decoder accepts it
-/// with CurrentScene, CurrentGroup and SceneValid `None`, and A's own entry
-/// keeps all three. (SceneInfoStruct is decode-only: nothing a client sends
-/// carries it.) Both scene tables are emptied after.
+/// The fabric-sensitive `Option` rule (another fabric's entries omit those
+/// fields) against real chip encoding, ScenesManagement `FabricSceneInfo`
+/// (endpoint 1). A empties its group-0 scenes (which gives A an entry) and B
+/// adds a scene (which gives B one); A's unfiltered read returns B's entry with
+/// only SceneCount, RemainingCapacity and FabricIndex (chip's
+/// `SceneInfoStruct::EncodeForRead`), the generated decoder accepts it with
+/// CurrentScene, CurrentGroup and SceneValid `None`, and A's own entry keeps
+/// all three. (SceneInfoStruct is decode-only: nothing a client sends carries
+/// it.) Both scene tables are emptied after.
 async fn assert_fabric_scene_info_withheld(node_a: &Node, node_b: &Node, a_index: u8, b_index: u8) {
     use scenes::command_id as c;
     remove_all_scenes(node_a).await;
@@ -381,13 +383,13 @@ async fn fabric_indices(node_a: &Node) -> (usize, u8, u8) {
 ///   3. Controller B (its own store + fabric 2, same dev-cert trust) commissions
 ///      the device via the window's manual pairing code.
 ///   4. A.list_fabrics() shows ≥ 2 fabrics; both A and B can read OnOff; the
-///      §5.4 fabric-sensitive regressions run with B present.
+///      fabric-sensitive `Option` regressions run with B present.
 ///   5. A removes B's fabric by index; the fabric count drops back.
 ///
-/// Plan T9 flagged a risk that `commission` might not consume an open-window
-/// manual code directly. That is now validated live: the full loop runs (B
-/// commissions through the window, A removes B's fabric), so a commission
-/// failure here is a hard error (see [`commission_through_window`]).
+/// A risk to rule out: `commission` might not consume an open-window manual
+/// code directly. That is now validated live: the full loop runs (B commissions
+/// through the window, A removes B's fabric), so a commission failure here is a
+/// hard error (see [`commission_through_window`]).
 #[tokio::test]
 async fn open_window_second_controller_and_remove_fabric() {
     let cfg = integration_tests::dut_or_skip!();
@@ -422,7 +424,8 @@ async fn open_window_second_controller_and_remove_fabric() {
     );
     let (count, a_index, b_index) = fabric_indices(&node_a).await;
 
-    // §5.4 regressions against real chip: unfiltered reads with B present.
+    // Fabric-sensitive regressions against real chip: unfiltered reads with B
+    // present.
     assert_acl_entries_withheld(&node_a, &node_b, a_index, b_index).await;
     assert_acl_round_trip_keeps_other_fabric(&node_a, &node_b, b_index).await;
     assert_fabric_scene_info_withheld(&node_a, &node_b, a_index, b_index).await;

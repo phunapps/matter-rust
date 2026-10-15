@@ -33,10 +33,10 @@ const TEST_EVENT_ENABLE_KEY_HEX: &str = "00112233445566778899aabbccddeeff";
 /// File name of the app's out-of-band command FIFO under the DUT dir.
 const APP_PIPE_FILE: &str = "app-pipe";
 
-/// How the event tests (M9-A3 B1) may stimulate events on a DUT.
+/// How the event tests may stimulate events on a DUT.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EventStimulus {
-    /// Neither: the app is launched exactly as before B1.
+    /// Neither: the app is launched exactly as before the event tests needed it.
     None,
     /// `--enable-key` [`TEST_EVENT_ENABLE_KEY_HEX`], so
     /// `GeneralDiagnostics.TestEventTrigger` works. Which triggers exist is
@@ -350,7 +350,7 @@ fn host_target() -> &'static str {
 
 /// The `build_examples.py` host target for an OS / CPU pair, as
 /// `std::env::consts` names them: `darwin-arm64` on macOS, `linux-arm64` on
-/// an aarch64 Linux host (a Raspberry Pi; M9-A3 B6), `linux-x64` otherwise.
+/// an aarch64 Linux host (a Raspberry Pi), `linux-x64` otherwise.
 fn host_target_for(os: &str, arch: &str) -> &'static str {
     match (os, arch) {
         ("macos", _) => "darwin-arm64",
@@ -487,7 +487,7 @@ const APP_NAMES: [&str; 8] = [
 ];
 
 /// chip example-app binaries the harness has no [`AppSpec`] for yet but that
-/// are built on harness hosts (the Linux arm64 Pi, M9-A3 B6), so a stale one
+/// are built on harness hosts (the Linux arm64 Pi), so a stale one
 /// can still hold the DUT's port. Their `build_examples.py` targets are
 /// `<host>-network-manager`, `<host>-water-heater` and
 /// `<host>-fabric-bridge-rpc`: fabric-bridge builds only with the `-rpc`
@@ -877,7 +877,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
 
-    /// `spawn_dut` holds the DUT's stdin open (M9-A3 B5 fix wave, T11 I1): a
+    /// `spawn_dut` holds the DUT's stdin open: a
     /// stand-in DUT that exits on stdin EOF, as tv-app's chip shell does,
     /// stays up while the guard lives, and exits cleanly once the guard
     /// closes the pipe.

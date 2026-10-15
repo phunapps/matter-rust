@@ -8,7 +8,7 @@
     clippy::items_after_statements
 )]
 
-//! M9-A3 B7 WakeOnLan and LowPower on a live all-clusters-app, endpoint 1.
+//! WakeOnLan and LowPower on a live all-clusters-app, endpoint 1.
 //! all-clusters serves both at master 5cd2917a and v1.4.2.0
 //! (`all-clusters-app.matter`: WakeOnLan with only `MACAddress`, a `ram`
 //! attribute with no default; LowPower with `Sleep`), so they run in `just

@@ -279,7 +279,7 @@ writeFixture('read', 'events_basic_information.json', {
 });
 
 // ---------------------------------------------------------------------
-// WRITE fixtures (gate matter-interaction::write — Task 6)
+// WRITE fixtures (gate matter-interaction::write — im_byte_parity.rs)
 // ---------------------------------------------------------------------
 
 // Single write: BasicInformation.NodeLabel (0x28 / 0x05, string) — the

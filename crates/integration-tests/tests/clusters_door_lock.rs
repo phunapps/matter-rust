@@ -151,7 +151,7 @@ async fn dl_new_event(node: &Node, event: u32, baseline: Option<u64>) -> (u64, V
     events.remove(0)
 }
 
-/// DoorLock events (M9-A3 B1) on lock-app ep1, each stimulated, then decoded
+/// DoorLock events on lock-app ep1, each stimulated, then decoded
 /// with the generated `<Name>Event` decoder and its fields asserted against
 /// what chip's door-lock-server / lock-app emit for that stimulus:
 /// - `LockOperation`: a remote UnlockDoor (Unlatch + Unlock), then LockDoor.

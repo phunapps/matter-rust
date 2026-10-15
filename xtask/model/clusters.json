@@ -671,13 +671,13 @@
         "cluster": "DeviceEnergyManagementMode",
         "element": "ChangeToModeResponse.StatusText",
         "class": "C",
-        "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
+        "reason": "conditional conformance \"[Status == Success], M\" (only an unconditional M is mandatory)"
       },
       {
         "cluster": "DishwasherMode",
         "element": "ChangeToModeResponse.StatusText",
         "class": "C",
-        "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
+        "reason": "conditional conformance \"[Status == Success], M\" (only an unconditional M is mandatory)"
       },
       {
         "cluster": "EcosystemInformation",
@@ -719,7 +719,7 @@
         "cluster": "EnergyEvseMode",
         "element": "ChangeToModeResponse.StatusText",
         "class": "C",
-        "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
+        "reason": "conditional conformance \"[Status == Success], M\" (only an unconditional M is mandatory)"
       },
       {
         "cluster": "IcdManagement",
@@ -743,7 +743,7 @@
         "cluster": "LaundryWasherMode",
         "element": "ChangeToModeResponse.StatusText",
         "class": "C",
-        "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
+        "reason": "conditional conformance \"[Status == Success], M\" (only an unconditional M is mandatory)"
       },
       {
         "cluster": "MediaPlayback",
@@ -821,25 +821,25 @@
         "cluster": "OvenMode",
         "element": "ChangeToModeResponse.StatusText",
         "class": "C",
-        "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
+        "reason": "conditional conformance \"[Status == Success], M\" (only an unconditional M is mandatory)"
       },
       {
         "cluster": "RefrigeratorAndTemperatureControlledCabinetMode",
         "element": "ChangeToModeResponse.StatusText",
         "class": "C",
-        "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
+        "reason": "conditional conformance \"[Status == Success], M\" (only an unconditional M is mandatory)"
       },
       {
         "cluster": "RvcCleanMode",
         "element": "ChangeToModeResponse.StatusText",
         "class": "C",
-        "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
+        "reason": "conditional conformance \"[Status == Success], M\" (only an unconditional M is mandatory)"
       },
       {
         "cluster": "RvcRunMode",
         "element": "ChangeToModeResponse.StatusText",
         "class": "C",
-        "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
+        "reason": "conditional conformance \"[Status == Success], M\" (only an unconditional M is mandatory)"
       },
       {
         "cluster": "ScenesManagement",
@@ -863,7 +863,7 @@
         "cluster": "WaterHeaterMode",
         "element": "ChangeToModeResponse.StatusText",
         "class": "C",
-        "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
+        "reason": "conditional conformance \"[Status == Success], M\" (only an unconditional M is mandatory)"
       }
     ],
     "supplemented": [

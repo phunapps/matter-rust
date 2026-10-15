@@ -1,4 +1,4 @@
-# Accepted findings for scripts/chip-xml-conformance.py (M9-A3 spec §5.2).
+# Accepted findings for scripts/chip-xml-conformance.py.
 #
 # One finding per line:
 #   <Cluster>.<Struct|Event|Command>.<Field> <P|N|W> <justification>

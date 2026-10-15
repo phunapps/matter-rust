@@ -18,7 +18,7 @@ fn all_real_clusters_generate_and_format() {
     assert_eq!(
         model.clusters.len(),
         113,
-        "expected the 10 M7 + 5 A2.1 + 4 A2.2 + 5 A2.3 + 5 A2.4 + 4 A2.5 mgmt + 1 D2 + 1 F1 + 1 G-a + 1 G-c + 10 concentration-measurement + 1 bridge (BDBI) + 10 A3-B2 ModeBase + 1 ModeSelect + 2 AlarmBase + 3 ResourceMonitoring + 3 A3-B3 OperationalState + 4 appliance-control + 1 ServiceArea + 2 A3-B4 safety-sensor + 1 valve + 1 ScenesManagement + 2 A3-B5 attribute-only energy clusters + 1 WaterHeaterManagement + 1 DeviceEnergyManagement + 1 EnergyEvse + 1 Messages + 4 A3-B6 localization / power-source configuration clusters + 4 flat diagnostics and DiagnosticLogs + 1 ThreadNetworkDiagnostics + 2 commissioning (codecs only) + 1 Actions + 2 Fabric Synchronization + 3 network infrastructure + 6 A3-B7 media basics + 4 Content App platform + 1 MediaPlayback + 1 ContentLauncher + 1 Channel + 1 ContentControl (provisional)"
+        "expected the 10 M7 + 5 A2.1 + 4 A2.2 + 5 A2.3 + 5 A2.4 + 4 A2.5 mgmt + 1 D2 + 1 F1 + 1 G-a + 1 G-c + 10 concentration-measurement + 1 bridge (BDBI) + 10 ModeBase + 1 ModeSelect + 2 AlarmBase + 3 ResourceMonitoring + 3 OperationalState + 4 appliance-control + 1 ServiceArea + 2 safety-sensor + 1 valve + 1 ScenesManagement + 2 attribute-only energy clusters + 1 WaterHeaterManagement + 1 DeviceEnergyManagement + 1 EnergyEvse + 1 Messages + 4 localization / power-source configuration clusters + 4 flat diagnostics and DiagnosticLogs + 1 ThreadNetworkDiagnostics + 2 commissioning (codecs only) + 1 Actions + 2 Fabric Synchronization + 3 network infrastructure + 6 media basics + 4 Content App platform + 1 MediaPlayback + 1 ContentLauncher + 1 Channel + 1 ContentControl (provisional)"
     );
     for c in &model.clusters {
         let src = xtask::codegen::rustgen::emit::generate_cluster(c);
@@ -33,7 +33,7 @@ fn all_real_clusters_generate_and_format() {
 }
 
 /// Every datatype struct the emitter gives `write_fields`/`encode`, as
-/// `(cluster, struct)`, sorted (M9-A3 B4 rule, `emit_codecs::struct_is_encoded`:
+/// `(cluster, struct)`, sorted (`emit_codecs::struct_is_encoded`:
 /// reachable from a request command, or a scalar struct reachable from a
 /// writable attribute). A new entry is a new public encoder to review; a
 /// missing one is a breaking removal.
@@ -179,7 +179,7 @@ fn writable_attribute_only_encoded_structs_are_constructible_and_say_so() {
 }
 
 /// The generated fields that carry a `relaxedReason` line, as `(cluster,
-/// line, next line)` (M9-A3 B5 fix wave, T7 M3): the four Messages
+/// line, next line)`: the four Messages
 /// `fabric_index` fields, which chip's servers do not send.
 #[test]
 fn fields_chip_omits_say_why_they_are_optional() {

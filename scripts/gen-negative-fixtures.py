@@ -10,7 +10,8 @@ This script is run ONCE, by a human, and the output is committed.
 CI does NOT re-run it (would require a Python toolchain in CI).
 
 Re-run when:
-- The spec adds or removes a fixture.
+- The negative-path fixture matrix in attestation_negative.rs gains or loses
+  a fixture.
 - An upstream cryptographic library changes its default output format
   enough to break our fixture parsing.
 

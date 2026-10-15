@@ -8,9 +8,9 @@
     clippy::items_after_statements
 )]
 
-//! M9-A3 B2 on a live all-clusters-app (endpoint 1): every attribute of each
-//! hosted B2 cluster decoded with the generated decoder, one safe command per
-//! cluster, and the alarm Notify events.
+//! The mode and alarm clusters on a live all-clusters-app (endpoint 1): every
+//! attribute of each hosted mode or alarm cluster decoded with the generated
+//! decoder, one safe command per cluster, and the alarm Notify events.
 //!
 //! Hosted here: ModeSelect, OvenMode, LaundryWasherMode,
 //! RefrigeratorAndTemperatureControlledCabinetMode, RvcRunMode, RvcCleanMode,
@@ -27,8 +27,8 @@
 //! Safe commands, chosen from what is generated:
 //! - ModeBase `ChangeToMode(CurrentMode)`: chip answers Success without
 //!   calling the delegate (ModeBaseCluster.cpp `HandleChangeToMode`), and
-//!   leaves StatusText out of that reply (spec §3.1; only a delegate's reply
-//!   may carry it). MicrowaveOvenMode has no ChangeToMode.
+//!   leaves StatusText out of that reply (so it is optional; only a
+//!   delegate's reply may carry it). MicrowaveOvenMode has no ChangeToMode.
 //! - ModeSelect `ChangeToMode(CurrentMode)`: a bare Success.
 //! - DishwasherAlarm `Reset(InflowError)`: clears one State bit and emits
 //!   Notify (dishwasher-alarm-server.cpp `ResetLatchedAlarms`).
@@ -56,7 +56,7 @@ use matter_clusters::clusters::{
 use matter_clusters::types::Nullable;
 use matter_controller::{CommandPath, ImStatus, MatterController};
 
-/// Every B2 cluster all-clusters serves lives on endpoint 1.
+/// Every mode and alarm cluster all-clusters serves lives on endpoint 1.
 const EP: u16 = 1;
 
 /// The DUT config, controller and node id, or `None` (skip) unless the DUT is
@@ -64,7 +64,7 @@ const EP: u16 = 1;
 async fn connect_all_clusters() -> Option<(DutConfig, MatterController, u64)> {
     let cfg = DutConfig::from_env()?;
     if !cfg.is_app("all-clusters") {
-        eprintln!("skipped: B2 sweep needs the all-clusters DUT (`just integration`)");
+        eprintln!("skipped: mode and alarm sweep needs the all-clusters DUT (`just integration`)");
         return None;
     }
     let (controller, node_id) = integration_tests::fixture::connect(&cfg)
@@ -159,7 +159,8 @@ async fn energy_mode_clusters_decode_where_served() {
 
 /// An unsupported mode: chip answers UnsupportedMode with no StatusText,
 /// although 1.4 conformance makes StatusText mandatory for a non-Success
-/// status ("[Status == Success], M"). This is why spec §3.1 dumps it optional.
+/// status ("[Status == Success], M"). This is why the dump makes it optional:
+/// only an unconditional M is mandatory.
 #[tokio::test]
 async fn change_to_an_unsupported_mode_decodes_without_status_text() {
     let Some((_, controller, node_id)) = connect_all_clusters().await else {

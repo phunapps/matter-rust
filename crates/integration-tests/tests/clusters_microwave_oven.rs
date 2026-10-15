@@ -9,7 +9,7 @@
 )]
 
 //! MicrowaveOvenControl on a live microwave-oven-app
-//! (`just integration-microwave-oven`), endpoint 1 (M9-A3 B3). No other chip
+//! (`just integration-microwave-oven`), endpoint 1. No other chip
 //! example app serves it, at master or v1.4.2.0.
 //!
 //! Live on a Linux arm64 Pi (chip master 5cd2917a; 3 passed): microwave-oven-app

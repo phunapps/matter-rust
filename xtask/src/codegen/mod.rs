@@ -1,7 +1,7 @@
 //! Cluster code generation (Milestone 7.3).
 //!
-//! Turns the frozen `xtask/model/clusters.json` (produced by `dump-model`,
-//! M7.2) into the uniform per-cluster Rust module shape (M7 spec §2).
+//! Turns the frozen `xtask/model/clusters.json` (produced by `dump-model`)
+//! into one Rust module per cluster.
 //!
 //! Pipeline: [`model::load`] (deserialize + validate) → [`rustgen`] (map
 //! types, emit strings) → rustfmt. The generator is pure: same JSON in →

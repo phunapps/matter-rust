@@ -3,7 +3,7 @@
  *
  * Drive matter.js's Spake2p implementation through full PASE handshakes
  * using FIXED scalars and nonces. Emit JSON fixtures consumed by
- * crates/matter-crypto/tests/pase_byte_parity.rs (Task 2 of M3.3).
+ * crates/matter-crypto/tests/pase_byte_parity.rs (M3.3).
  *
  * DISCOVERY (probed 2026-05-19 against @matter/general 0.16.11):
  *

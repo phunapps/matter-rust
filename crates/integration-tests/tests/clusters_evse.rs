@@ -8,7 +8,7 @@
     clippy::items_after_statements
 )]
 
-//! M9-A3 B5 energy management on a live evse-app (endpoint 1): EnergyEvse,
+//! Energy management on a live evse-app (endpoint 1): EnergyEvse,
 //! DeviceEnergyManagement and PowerTopology. Every attribute is decoded with
 //! the generated decoder and the exact attribute ids served are asserted;
 //! EnergyEvse's writable settings are written, refused where chip refuses
@@ -77,7 +77,7 @@ async fn connect_evse() -> Option<(MatterController, u64)> {
     let cfg = integration_tests::dut::DutConfig::from_env()?;
     if !cfg.is_app("evse") {
         eprintln!(
-            "skipped: B5 energy-management test needs the evse-app DUT (`just integration-energy`)"
+            "skipped: energy-management test needs the evse-app DUT (`just integration-energy`)"
         );
         return None;
     }

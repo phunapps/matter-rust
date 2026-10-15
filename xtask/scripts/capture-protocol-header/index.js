@@ -43,7 +43,7 @@
 // opcode(1) + exchangeId(2) + protocol_short(2)).
 //
 // =====================================================================
-// CONVENTIONS (must match the Rust test in Task 7)
+// CONVENTIONS (must match matter-transport tests/protocol_header_byte_parity.rs)
 // =====================================================================
 //
 //   * JSON fixture shape:

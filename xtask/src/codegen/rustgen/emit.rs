@@ -1,7 +1,7 @@
-//! String-building emitter for the uniform cluster module shape (spec §2).
+//! String-building emitter for the uniform cluster module shape.
 //!
-//! Plain `String` building with an indent helper — no template engine (the
-//! CHIP codegen's templating is the cautionary tale the spec cites). Output
+//! Plain `String` building with an indent helper — no template engine (CHIP's
+//! codegen templates are hard to read and debug). Output
 //! is later normalized by rustfmt, so we optimise for correctness, not
 //! whitespace.
 
@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 
 /// The rustdoc sentence on every generated item the specification marks
-/// provisional (`FieldDef::provisional` and its siblings; M9-A3 B4). It names
+/// provisional (`FieldDef::provisional` and its siblings). It names
 /// the revision the mark comes from: the codegen model follows Matter 1.5.1
 /// (`meta.specRevision` in `clusters.json`; `codegen_real_model` pins the two
 /// together), and an element provisional there may be plain in 1.4.2. An
@@ -54,13 +54,13 @@ pub const OMITTED_FABRIC_INDEX_FIELD_DOC: [&str; 3] = [
     "    /// fails with `ClusterError::MissingField(\"FabricIndex\")`.",
 ];
 
-/// The rustdoc line on a field that carries a secret (`FieldDef::secret`,
-/// M9-A3 B6): its struct's `Debug` output shows a placeholder instead.
+/// The rustdoc line on a field that carries a secret (`FieldDef::secret`):
+/// its struct's `Debug` output shows a placeholder instead.
 pub const SECRET_DOC: &str =
     "Secret: this struct's `Debug` output shows `<redacted>` instead, even when it is null or absent.";
 
 /// The rustdoc paragraph on a datatype the dump copied from the cluster that
-/// owns it (`Datatype::copied_from`, M9-A3 B7): Channel's
+/// owns it (`Datatype::copied_from`): Channel's
 /// `AdditionalInfoStruct` is `ContentLauncher`'s, referenced by qualified name.
 pub(crate) fn copied_from_doc(owner: &str, name: &str) -> String {
     format!(
@@ -70,7 +70,7 @@ pub(crate) fn copied_from_doc(owner: &str, name: &str) -> String {
 }
 
 /// The one rustdoc note of a generated feature, attribute or command item, or
-/// `None` (M9-A3 B4). An element added from the Matter 1.4 supplement
+/// `None`. An element added from the Matter 1.4 supplement
 /// (`supplemented`) gets a line saying where it comes from, whether 1.4 itself
 /// deprecates it (its own conformance, or its feature's) or marks it
 /// provisional, and which Matter release and cluster revision removed it. That
@@ -136,7 +136,8 @@ pub(crate) fn provisional_note(provisional: bool, chip_provisional: bool) -> Opt
 }
 
 /// The module rustdoc paragraph of a cluster the specification marks
-/// provisional as a whole (`Cluster::provisional`; M9-A3 B5, spec §2).
+/// provisional as a whole (`Cluster::provisional`). Provisional clusters
+/// are generated, not skipped, and marked so.
 pub(crate) const PROVISIONAL_CLUSTER_DOC: [&str; 3] = [
     "Provisional cluster: the Matter specification marks the whole cluster",
     "provisional (Matter 1.4.2, and still 1.5.1), so a later revision may change",
@@ -144,7 +145,7 @@ pub(crate) const PROVISIONAL_CLUSTER_DOC: [&str; 3] = [
 ];
 
 /// The rustdoc line on a struct field whose presence depends on a sibling
-/// field (`FieldDef::required_when`; M9-A3 B5). The sibling is named by its
+/// field (`FieldDef::required_when`). The sibling is named by its
 /// generated Rust identifier. An exclusive dependency (a bare conformance
 /// such as `Endpoint` or `!Group`) also states the disallowed half: chip's
 /// Binding server refuses a target carrying Group with Endpoint or Node.
@@ -166,21 +167,21 @@ pub(crate) fn required_when_doc(dep: &RequiredWhen) -> String {
 }
 
 /// The rustdoc line on a field the dump made optional because chip's servers
-/// do not send it (`FieldDef::relaxed_reason`, a `FIELD_RELAXATIONS` entry;
-/// M9-A3 B5 fix wave): `Optional: <reason>.`.
+/// do not send it (`FieldDef::relaxed_reason`, a `FIELD_RELAXATIONS`
+/// entry): `Optional: <reason>.`.
 pub(crate) fn relaxed_reason_doc(reason: &str) -> String {
     format!("Optional: {reason}.")
 }
 
 /// The rustdoc line on a field the dump made nullable because chip's servers
 /// send it null (`FieldDef::nullable_reason`, a class-N `FIELD_RELAXATIONS`
-/// entry; M9-A3 B7): `Nullable: <reason>.`.
+/// entry): `Nullable: <reason>.`.
 pub(crate) fn nullable_reason_doc(reason: &str) -> String {
     format!("Nullable: {reason}.")
 }
 
 /// One rustdoc sentence per choice-conformance group among `fields`, in the
-/// order the groups first appear (M9-A3 B4): the generated types take every
+/// order the groups first appear: the generated types take every
 /// field of a group as an `Option`, so the rule "exactly one" (`O.a`) or "at
 /// least one" (`O.a+`) is stated, not enforced. Field names are the generated
 /// Rust identifiers.
@@ -290,7 +291,7 @@ pub(crate) use line;
 
 /// The `#[derive(..)]` line of a generated struct with these fields: `Debug`
 /// is derived unless a field is secret, in which case
-/// [`emit_redacting_debug`] writes it by hand (M9-A3 B6). Every other derived
+/// [`emit_redacting_debug`] writes it by hand. Every other derived
 /// trait is the same either way, so marking a field secret never changes a
 /// struct's trait set.
 pub(crate) fn struct_derive(fields: &[FieldDef]) -> &'static str {
@@ -302,7 +303,7 @@ pub(crate) fn struct_derive(fields: &[FieldDef]) -> &'static str {
 }
 
 /// Emit (into `s`) a hand-written `Debug` impl for struct `name` when one of
-/// its `fields` is secret, nothing otherwise (M9-A3 B6). It prints what the
+/// its `fields` is secret, nothing otherwise. It prints what the
 /// derive would, except that each secret field reads `"<redacted>"`: a Thread
 /// dataset or a Wi-Fi passphrase logged with `{:?}` must not leak (the same
 /// discipline as `matter-commissioning`'s `ThreadDataset` and
@@ -839,7 +840,7 @@ mod tests {
     fn fabric_sensitive_field_doc_says_none_means_withheld() {
         use crate::codegen::model::FieldDef;
         // `relaxed_for_decode`: mandatory in the model, dumped optional with
-        // mandatoryOnWrite (§5.4); otherwise a sensitive field is optional in
+        // mandatoryOnWrite (fabric-sensitive); otherwise a sensitive field is optional in
         // the model itself.
         let f = |id: u32, name: &str, sensitive: bool, relaxed_for_decode: bool| FieldDef {
             id,
@@ -885,7 +886,7 @@ mod tests {
             ),
             "{s}"
         );
-        // A field optional in the model (M9-A3 B5 fix wave, T7 M2): None also
+        // A field optional in the model (M9-A3 B5): None also
         // means the sender left it out.
         assert!(
             s.contains(
@@ -900,7 +901,7 @@ mod tests {
 
     #[test]
     fn a_relaxed_field_states_why_it_is_optional() {
-        // M9-A3 B5 fix wave, T7 M3: a FIELD_RELAXATIONS field (Messages'
+        // M9-A3 B5: a FIELD_RELAXATIONS field (Messages'
         // FabricIndex) carries its relaxedReason, on a datatype struct and on
         // an event payload alike.
         use crate::codegen::model::FieldDef;
@@ -1294,7 +1295,7 @@ mod tests {
         assert_eq!(s.matches(PROVISIONAL_DOC).count(), 1, "{s}");
     }
 
-    // ---- M9-A3 B4 fix wave: supplemented-element rustdoc ----
+    // ---- M9-A3 B4: supplemented-element rustdoc ----
 
     fn supplemented(feature: &str, conformance: &str, removed_in: &str, rev: u16) -> Supplemented {
         Supplemented {

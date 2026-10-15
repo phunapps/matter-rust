@@ -42,7 +42,7 @@ pub(crate) fn command_encode_reachable_structs<'a>(
 }
 
 /// Struct datatype names reachable from a **writable** attribute's type or
-/// list entry type, transitively (M9-A3 B4 encoder rule): the structs a client
+/// list entry type, transitively: the structs a client
 /// may write back. `AccessControl` `Extension` reaches
 /// `AccessControlExtensionStruct`; `IcdManagement` `RegisteredClients` is
 /// read-only, so `MonitoringRegistrationStruct` is not reached.
@@ -413,7 +413,7 @@ fn entry_metatype(entry: &str, dts: &DatatypeMap<'_>) -> &'static str {
 /// iterated by value (`iter().copied()`) and `el` is the value itself. A byte
 /// string (`Vec<u8>`) or a string (`String`) is not `Copy`: the list is iterated
 /// by reference, and `el` (`&Vec<u8>` / `&String`) is passed straight to
-/// `put_bytes` / `put_utf8`, which take `&[u8]` / `&str` (M9-A3 B5: Messages
+/// `put_bytes` / `put_utf8`, which take `&[u8]` / `&str` (Messages'
 /// `CancelMessagesRequest.MessageIDs` is a `list<octstr>`).
 fn list_scalar_element_write(
     entry_meta: &str,
@@ -1083,7 +1083,7 @@ pub(crate) fn struct_is_fabric_scoped(d: &Datatype) -> bool {
 }
 
 /// True for a fabric-scoped struct with a field the dump relaxed to optional
-/// for decoding only (`mandatory_on_write`, M9-A3 spec §5.4). Every encoder of
+/// for decoding only (`mandatory_on_write`). Every encoder of
 /// such a struct must refuse `None` in those fields: writing
 /// `{privilege: Administer, subjects: None}` back would grant fabric-wide
 /// admin. A sensitive field optional in the model itself is not guarded (it
@@ -1102,7 +1102,7 @@ pub(crate) fn struct_has_write_guarded_fields(d: &Datatype) -> bool {
 /// encoder (`acl.rs`), and `ScheduleStruct` (reached by `Thermostat`
 /// `Schedules`; `Transitions` is a list). A struct a request command reaches
 /// is encoded whatever its fields (`emit_composite_field_write_self` writes
-/// nested structs and lists, M9-A3 B7).
+/// nested structs and lists).
 fn struct_is_write_capable(d: &Datatype) -> bool {
     d.fields.iter().all(|f| {
         matches!(
@@ -1113,7 +1113,7 @@ fn struct_is_write_capable(d: &Datatype) -> bool {
 }
 
 /// True when the emitter generates `write_fields`/`encode` for the datatype
-/// struct `d` (M9-A3 B4 rule): a request command reaches it
+/// struct `d`: a request command reaches it
 /// ([`command_encode_reachable_structs`]), or a writable attribute reaches it
 /// ([`writable_attribute_reachable_structs`]) and its fields are all scalars
 /// ([`struct_is_write_capable`]: a list or nested-struct field keeps it
@@ -1134,7 +1134,7 @@ fn struct_is_encoded(
 
 /// Names of the datatype structs of `c` whose fields the emitter **encodes**:
 /// those a request command reaches, and the all-scalar ones a writable
-/// attribute reaches (M9-A3 B4; `struct_is_encoded`). `model::validate` uses
+/// attribute reaches (`struct_is_encoded`). `model::validate` uses
 /// it to keep a class-C `meta.relaxed` field (a conditional conformance the
 /// dump relaxed to optional) out of every encoder, from the same rule the
 /// emitter follows.
@@ -1609,7 +1609,7 @@ fn emit_field_write_self(s: &mut String, f: &FieldDef, dts: &DatatypeMap<'_>) {
 
 /// The `write_fields` lines for a nested struct or list field `f` of an
 /// encoded struct, bound as `self.<var>`, with its optional (`Option`, absent
-/// = left out) and nullable (`Nullable::Null` = a TLV null) guards (M9-A3 B7).
+/// = left out) and nullable (`Nullable::Null` = a TLV null) guards.
 /// Inside `write_fields(&self, w: &mut TlvWriter)` the writer `w` is already
 /// `&mut`.
 ///
@@ -1895,7 +1895,8 @@ mod tests {
         // M9-A3 B5: Messages CancelMessagesRequest.MessageIDs is a
         // list<octstr>. `Vec<u8>` and `String` are not Copy, so the elements
         // are iterated by reference and passed to put_bytes / put_utf8 as is;
-        // `iter().copied()` there does not compile (spec §10).
+        // `iter().copied()` there does not compile (a new wire shape the
+        // emitter had to learn).
         let ids = field(0, "MessageIDs", "list", "array", Some("octstr"));
         let mut s = String::new();
         emit_field_write(&mut s, &ids, "message_i_ds", &HashMap::new());
@@ -2513,7 +2514,7 @@ mod tests {
     #[test]
     fn entry_metatype_classifies_boolean_elements() {
         // A list<boolean> element is a TLV Bool, not an unsigned integer
-        // (M9-A3 B5 Task 1 minor: without this arm a future list<boolean>
+        // (M9-A3 B5: without this arm a future list<boolean>
         // would encode each element with put_uint).
         let dts: DatatypeMap<'_> = HashMap::new();
         assert_eq!(entry_metatype("bool", &dts), "boolean");
@@ -2553,7 +2554,7 @@ mod tests {
         );
     }
 
-    // ---- write-guarded (fabric-sensitive) structs (M9-A3 spec §5.4) -----
+    // ---- write-guarded (fabric-sensitive) structs ------------------------
 
     /// A fabric-scoped struct shaped like `AccessControlExtensionStruct` after
     /// the dump: sensitive `Data` relaxed to optional for decode, still
@@ -2696,7 +2697,8 @@ mod tests {
     #[test]
     fn fabric_sensitive_event_fields_are_not_wrapped() {
         // Even if the markers reached an event payload, the event struct keeps
-        // the model's optionality (spec §5.4 "Events are exempt"): chip sends
+        // the model's optionality (events are exempt from the fabric-sensitive
+        // Option rule): chip sends
         // our own fabric's events in full and drops other fabrics'
         // fabric-sensitive events entirely.
         let mut admin = field(1, "AdminNodeId", "node-id", "integer", None);

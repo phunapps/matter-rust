@@ -8,7 +8,7 @@
     clippy::items_after_statements
 )]
 
-//! M9-A3 B6 node-configuration clusters on a live all-clusters-app: the
+//! The node-configuration clusters on a live all-clusters-app: the
 //! three localization clusters and PowerSourceConfiguration (endpoint 0), and
 //! Actions (endpoint 1). all-clusters serves all five at master 5cd2917a and
 //! v1.4.2.0 (the nightly's pin), with the same attribute lists.
@@ -44,9 +44,7 @@ const NOT_FOUND: ImStatus = ImStatus::Failure(0x8B);
 async fn connect_all_clusters() -> Option<(DutConfig, MatterController, u64)> {
     let cfg = DutConfig::from_env()?;
     if !cfg.is_app("all-clusters") {
-        eprintln!(
-            "skipped: B6 configuration sweep needs the all-clusters DUT (`just integration`)"
-        );
+        eprintln!("skipped: configuration sweep needs the all-clusters DUT (`just integration`)");
         return None;
     }
     let (controller, node_id) = integration_tests::fixture::connect(&cfg)

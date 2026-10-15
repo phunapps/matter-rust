@@ -6,8 +6,8 @@ One-shot utility scripts. NOT run from CI.
 
 Generates the 8 synthetic negative-path attestation chain fixtures
 consumed by `crates/matter-commissioning/tests/attestation_negative.rs`.
-Run once when the spec's negative matrix changes; commit the output
-under `test-vectors/certs/attestation/negative/`.
+Run once when the negative-path fixture matrix in `attestation_negative.rs`
+changes; commit the output under `test-vectors/certs/attestation/negative/`.
 
 **Requires:** Python 3.10+, `cryptography>=41`.
 
