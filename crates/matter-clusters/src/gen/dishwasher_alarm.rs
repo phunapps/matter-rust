@@ -60,16 +60,21 @@ bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
     pub struct AlarmBitmap: u32 {
         /// InflowError.
+        /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
         const INFLOW_ERROR = 1 << 0;
         /// DrainError.
+        /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
         const DRAIN_ERROR = 1 << 1;
         /// DoorError.
         const DOOR_ERROR = 1 << 2;
         /// TempTooLow.
+        /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
         const TEMP_TOO_LOW = 1 << 3;
         /// TempTooHigh.
+        /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
         const TEMP_TOO_HIGH = 1 << 4;
         /// WaterLevelError.
+        /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
         const WATER_LEVEL_ERROR = 1 << 5;
     }
 }

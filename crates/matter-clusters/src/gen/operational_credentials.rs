@@ -48,10 +48,13 @@ pub mod command_id {
     /// `AddTrustedRootCertificate` (request).
     pub const ADD_TRUSTED_ROOT_CERTIFICATE: u32 = 0x0B;
     /// `SetVidVerificationStatement` (request).
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     pub const SET_VID_VERIFICATION_STATEMENT: u32 = 0x0C;
     /// `SignVidVerificationRequest` (request).
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     pub const SIGN_VID_VERIFICATION_REQUEST: u32 = 0x0D;
     /// `SignVidVerificationResponse` (response).
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     pub const SIGN_VID_VERIFICATION_RESPONSE: u32 = 0x0E;
 }
 
@@ -118,6 +121,7 @@ pub struct FabricDescriptorStruct {
     /// Field Label (tag 5).
     pub label: String,
     /// Field VidVerificationStatement (tag 6).
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     pub vid_verification_statement: Option<Vec<u8>>,
     /// Field FabricIndex (tag 254).
     pub fabric_index: u8,
@@ -132,6 +136,7 @@ pub struct NOCStruct {
     /// Field Icac (tag 2).
     pub icac: Nullable<Vec<u8>>,
     /// Field Vvsc (tag 3).
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     pub vvsc: Option<Vec<u8>>,
     /// Field FabricIndex (tag 254).
     pub fabric_index: u8,
@@ -913,6 +918,8 @@ pub fn encode_add_trusted_root_certificate(root_ca_certificate: &Vec<u8>) -> Vec
 
 /// Encode the `SetVidVerificationStatement` command request payload.
 ///
+/// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
+///
 /// Choice group `a`: a sender includes at least one of `vendor_id`, `vid_verification_statement`, `vvsc`. Neither encoding nor decoding checks it.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
@@ -942,6 +949,8 @@ pub fn encode_set_vid_verification_statement(
 }
 
 /// Encode the `SignVidVerificationRequest` command request payload.
+///
+/// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_sign_vid_verification_request(
@@ -961,6 +970,8 @@ pub fn encode_sign_vid_verification_request(
 }
 
 /// Decoded `SignVidVerificationResponse` payload.
+///
+/// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct SignVidVerificationResponse {

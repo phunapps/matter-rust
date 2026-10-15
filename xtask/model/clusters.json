@@ -2,7 +2,7 @@
   "meta": {
     "matterJsModelVersion": "0.17.1",
     "specRevision": "1.5.1",
-    "dumpScriptVersion": 12,
+    "dumpScriptVersion": 13,
     "generatedClusters": [
       "Identify",
       "Groups",
@@ -2320,7 +2320,8 @@
           "nullable": false,
           "optional": true,
           "writable": false,
-          "description": "Indicates an identifier which allows to uniquely identify the functionality exposed on an endpoint, and therefore shall be unique within the device. It is constructed in a manufacturer specific manner.\n  - If a globally unique identifier is used, the same rules as defined for the UniqueID attribute in the Basic Information cluster apply.\n  - If the identifier is only unique in the scope of the device, and cannot be used to track the device, then it may remain unchanged at factory reset.\nThe value does not need to be human readable, since it is intended for machine to machine (M2M) communication."
+          "description": "Indicates an identifier which allows to uniquely identify the functionality exposed on an endpoint, and therefore shall be unique within the device. It is constructed in a manufacturer specific manner.\n  - If a globally unique identifier is used, the same rules as defined for the UniqueID attribute in the Basic Information cluster apply.\n  - If the identifier is only unique in the scope of the device, and cannot be used to track the device, then it may remain unchanged at factory reset.\nThe value does not need to be human readable, since it is intended for machine to machine (M2M) communication.",
+          "chipProvisional": true
         }
       ],
       "commands": [],
@@ -5264,7 +5265,8 @@
           "nullable": false,
           "optional": true,
           "writable": false,
-          "description": "Indicates a list of units supported by the Node to be used when writing the TemperatureUnit attribute of this cluster. Each entry in the list shall be unique."
+          "description": "Indicates a list of units supported by the Node to be used when writing the TemperatureUnit attribute of this cluster. Each entry in the list shall be unique.",
+          "chipProvisional": true
         }
       ],
       "commands": [],
@@ -6661,7 +6663,8 @@
           "nullable": false,
           "optional": true,
           "writable": false,
-          "description": "Indicates the last version of the T&Cs for which the device received user acknowledgements. On factory reset this field shall be reset to 0.\nWhen Custom Commissioning Flow is used to obtain user consent (e. g. because the Commissioner does not support the TC feature), the manufacturer-provided means for obtaining user consent shall ensure that this attribute is set to a value which is greater than or equal to TCMinRequiredVersion before returning the user back to the originating Commissioner (see Section 5.7.4, \"Enhanced Setup Flow (ESF)\")."
+          "description": "Indicates the last version of the T&Cs for which the device received user acknowledgements. On factory reset this field shall be reset to 0.\nWhen Custom Commissioning Flow is used to obtain user consent (e. g. because the Commissioner does not support the TC feature), the manufacturer-provided means for obtaining user consent shall ensure that this attribute is set to a value which is greater than or equal to TCMinRequiredVersion before returning the user back to the originating Commissioner (see Section 5.7.4, \"Enhanced Setup Flow (ESF)\").",
+          "chipProvisional": true
         },
         {
           "id": 6,
@@ -6671,7 +6674,8 @@
           "nullable": false,
           "optional": true,
           "writable": false,
-          "description": "Indicates the minimum version of the texts presented by the Enhanced Setup Flow that need to be accepted by the user for this device. This attribute may change as the result of an OTA update.\nIf an event such as a software update causes TCAcceptedVersion to become less than TCMinRequiredVersion, then the device shall update TCAcknowledgementsRequired to True so that an administrator can detect that a newer version of the texts needs to be presented to the user."
+          "description": "Indicates the minimum version of the texts presented by the Enhanced Setup Flow that need to be accepted by the user for this device. This attribute may change as the result of an OTA update.\nIf an event such as a software update causes TCAcceptedVersion to become less than TCMinRequiredVersion, then the device shall update TCAcknowledgementsRequired to True so that an administrator can detect that a newer version of the texts needs to be presented to the user.",
+          "chipProvisional": true
         },
         {
           "id": 7,
@@ -6681,7 +6685,8 @@
           "nullable": false,
           "optional": true,
           "writable": false,
-          "description": "Indicates the user’s response to the presented terms. Each bit position corresponds to a user response for the associated index of matching text, such that bit 0 (bit value 1) is for text index 0. Bit 15 (bit value 0x8000) is for text index 15. A bit value of 1 indicates acceptance and a value of 0 indicates non-acceptance. For example, if there are two texts that were presented where the first (bit 0, value 1) was declined and the second accepted (bit 1, value 2), we would expect the resulting value of the map to be 2.\nWhenever a user provides responses to newly presented terms and conditions, this attribute shall be updated with the latest responses. This may happen in response to updated terms that were presented to the user. On a factory reset this field shall be reset with all bits set to 0."
+          "description": "Indicates the user’s response to the presented terms. Each bit position corresponds to a user response for the associated index of matching text, such that bit 0 (bit value 1) is for text index 0. Bit 15 (bit value 0x8000) is for text index 15. A bit value of 1 indicates acceptance and a value of 0 indicates non-acceptance. For example, if there are two texts that were presented where the first (bit 0, value 1) was declined and the second accepted (bit 1, value 2), we would expect the resulting value of the map to be 2.\nWhenever a user provides responses to newly presented terms and conditions, this attribute shall be updated with the latest responses. This may happen in response to updated terms that were presented to the user. On a factory reset this field shall be reset with all bits set to 0.",
+          "chipProvisional": true
         },
         {
           "id": 8,
@@ -6691,7 +6696,8 @@
           "nullable": false,
           "optional": true,
           "writable": false,
-          "description": "Indicates whether SetTCAcknowledgements is currently required to be called with the inclusion of mandatory terms accepted.\nThis attribute may be present and False in the case where no terms and conditions are currently mandatory to accept for CommissioningComplete command to succeed.\nThis attribute may appear, or become True after commissioning (e.g. due to a firmware update) to indicate that new Terms & Conditions are available that the user must accept.\nUpon Factory Data Reset, this attribute shall be set to a value of True.\nWhen Section 5.7.3, \"Custom Commissioning Flow\" is used to obtain user consent (e.g. because the Commissioner does not support the TC feature), the manufacturer-provided means for obtaining user consent shall ensure that this attribute is set to False before returning the user back to the original Commissioner (see Section 5.7.4, \"Enhanced Setup Flow (ESF)\")."
+          "description": "Indicates whether SetTCAcknowledgements is currently required to be called with the inclusion of mandatory terms accepted.\nThis attribute may be present and False in the case where no terms and conditions are currently mandatory to accept for CommissioningComplete command to succeed.\nThis attribute may appear, or become True after commissioning (e.g. due to a firmware update) to indicate that new Terms & Conditions are available that the user must accept.\nUpon Factory Data Reset, this attribute shall be set to a value of True.\nWhen Section 5.7.3, \"Custom Commissioning Flow\" is used to obtain user consent (e.g. because the Commissioner does not support the TC feature), the manufacturer-provided means for obtaining user consent shall ensure that this attribute is set to False before returning the user back to the original Commissioner (see Section 5.7.4, \"Enhanced Setup Flow (ESF)\").",
+          "chipProvisional": true
         },
         {
           "id": 9,
@@ -6701,7 +6707,8 @@
           "nullable": true,
           "optional": true,
           "writable": false,
-          "description": "Indicates the System Time in seconds when any functionality limitations will begin due to a lack of acceptance of updated Terms and Conditions, as described in Section 5.7.4.6, \"Presenting Updated Terms and Conditions\".\nA null value indicates that there is no pending deadline for updated TC acceptance."
+          "description": "Indicates the System Time in seconds when any functionality limitations will begin due to a lack of acceptance of updated Terms and Conditions, as described in Section 5.7.4.6, \"Presenting Updated Terms and Conditions\".\nA null value indicates that there is no pending deadline for updated TC acceptance.",
+          "chipProvisional": true
         },
         {
           "id": 10,
@@ -7168,7 +7175,8 @@
           "nullable": false,
           "optional": true,
           "writable": false,
-          "description": "Indicates all the frequency bands supported by the Wi-Fi interface configured by the cluster instance."
+          "description": "Indicates all the frequency bands supported by the Wi-Fi interface configured by the cluster instance.",
+          "chipProvisional": true
         },
         {
           "id": 9,
@@ -7178,7 +7186,8 @@
           "nullable": false,
           "optional": true,
           "writable": false,
-          "description": "Indicates all of the Thread features supported by the Thread interface configured by the cluster instance.\nThis attribute is primarily used to determine the most important general capabilities of the Thread interface associated with the cluster instance, as opposed to the current runtime dynamic configuration. Note that most run-time details of the actual Thread interface are found in the Thread Network Diagnostics cluster, if supported."
+          "description": "Indicates all of the Thread features supported by the Thread interface configured by the cluster instance.\nThis attribute is primarily used to determine the most important general capabilities of the Thread interface associated with the cluster instance, as opposed to the current runtime dynamic configuration. Note that most run-time details of the actual Thread interface are found in the Thread Network Diagnostics cluster, if supported.",
+          "chipProvisional": true
         },
         {
           "id": 10,
@@ -7188,7 +7197,8 @@
           "nullable": false,
           "optional": true,
           "writable": false,
-          "description": "Indicates the Thread version supported by the Thread interface configured by the cluster instance.\nThe format shall match the value mapping found in the \"Version TLV\" section of Thread specification. For example, Thread 1.3.0 would have ThreadVersion set to 4."
+          "description": "Indicates the Thread version supported by the Thread interface configured by the cluster instance.\nThe format shall match the value mapping found in the \"Version TLV\" section of Thread specification. For example, Thread 1.3.0 would have ThreadVersion set to 4.",
+          "chipProvisional": true
         }
       ],
       "commands": [
@@ -12429,7 +12439,8 @@
                 "orLess": false
               }
             }
-          ]
+          ],
+          "chipProvisional": true
         },
         {
           "id": 13,
@@ -12455,7 +12466,8 @@
               "optional": false,
               "description": null
             }
-          ]
+          ],
+          "chipProvisional": true
         },
         {
           "id": 14,
@@ -12490,7 +12502,8 @@
               "optional": false,
               "description": null
             }
-          ]
+          ],
+          "chipProvisional": true
         }
       ],
       "events": [],
@@ -12571,7 +12584,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": true,
-              "description": "This field, if present, shall contain a previously-installed administrator-set vid_verification_statement value (see Section 6.4.10, \"Fabric Table Vendor ID Verification Procedure\") for the fabric referenced by FabricIndex. This field is set by the SetVIDVerificationStatement command."
+              "description": "This field, if present, shall contain a previously-installed administrator-set vid_verification_statement value (see Section 6.4.10, \"Fabric Table Vendor ID Verification Procedure\") for the fabric referenced by FabricIndex. This field is set by the SetVIDVerificationStatement command.",
+              "chipProvisional": true
             },
             {
               "id": 254,
@@ -12615,7 +12629,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": true,
-              "description": "This field shall contain the Vendor Verification Signer Certificate (VVSC) for the struct's associated fabric, encoded using Matter Certificate Encoding. If no VVSC is needed, this field shall be omitted (in that there shall NOT be a value present, not even an empty octet string). If the ICAC field is non-null, this field shall NOT be present."
+              "description": "This field shall contain the Vendor Verification Signer Certificate (VVSC) for the struct's associated fabric, encoded using Matter Certificate Encoding. If no VVSC is needed, this field shall be omitted (in that there shall NOT be a value present, not even an empty octet string). If the ICAC field is non-null, this field shall NOT be present.",
+              "chipProvisional": true
             },
             {
               "id": 254,
@@ -13047,7 +13062,8 @@
               "metatype": "enum",
               "nullable": false,
               "optional": true,
-              "description": "This field specifies how the IPv6 Multicast Address shall be formed for groups using this operational group key set.\nThe PerGroupID method maximizes filtering of multicast messages, so that receiving nodes receive only multicast messages for groups to which they are subscribed.\nThe AllNodes method minimizes the number of multicast addresses to which a receiver node needs to subscribe.\n> [!NOTE]\n> NOTE: Support for GroupKeyMulticastPolicy is provisional. Correct default behavior is that implied by value PerGroupID."
+              "description": "This field specifies how the IPv6 Multicast Address shall be formed for groups using this operational group key set.\nThe PerGroupID method maximizes filtering of multicast messages, so that receiving nodes receive only multicast messages for groups to which they are subscribed.\nThe AllNodes method minimizes the number of multicast addresses to which a receiver node needs to subscribe.\n> [!NOTE]\n> NOTE: Support for GroupKeyMulticastPolicy is provisional. Correct default behavior is that implied by value PerGroupID.",
+              "chipProvisional": true
             },
             {
               "id": 254,
@@ -16707,12 +16723,14 @@
             {
               "bit": 0,
               "name": "InflowError",
-              "description": null
+              "description": null,
+              "chipProvisional": true
             },
             {
               "bit": 1,
               "name": "DrainError",
-              "description": null
+              "description": null,
+              "chipProvisional": true
             },
             {
               "bit": 2,
@@ -16722,17 +16740,20 @@
             {
               "bit": 3,
               "name": "TempTooLow",
-              "description": null
+              "description": null,
+              "chipProvisional": true
             },
             {
               "bit": 4,
               "name": "TempTooHigh",
-              "description": null
+              "description": null,
+              "chipProvisional": true
             },
             {
               "bit": 5,
               "name": "WaterLevelError",
-              "description": null
+              "description": null,
+              "chipProvisional": true
             }
           ]
         }
@@ -17643,37 +17664,44 @@
             {
               "value": 72,
               "name": "LowBattery",
-              "description": null
+              "description": null,
+              "chipProvisional": true
             },
             {
               "value": 73,
               "name": "CannotReachTargetArea",
-              "description": null
+              "description": null,
+              "chipProvisional": true
             },
             {
               "value": 74,
               "name": "DirtyWaterTankFull",
-              "description": null
+              "description": null,
+              "chipProvisional": true
             },
             {
               "value": 75,
               "name": "DirtyWaterTankMissing",
-              "description": null
+              "description": null,
+              "chipProvisional": true
             },
             {
               "value": 76,
               "name": "WheelsJammed",
-              "description": null
+              "description": null,
+              "chipProvisional": true
             },
             {
               "value": 77,
               "name": "BrushJammed",
-              "description": null
+              "description": null,
+              "chipProvisional": true
             },
             {
               "value": 78,
               "name": "NavigationSensorObscured",
-              "description": null
+              "description": null,
+              "chipProvisional": true
             }
           ]
         },
@@ -17756,22 +17784,26 @@
             {
               "value": 67,
               "name": "EmptyingDustBin",
-              "description": null
+              "description": null,
+              "chipProvisional": true
             },
             {
               "value": 68,
               "name": "CleaningMop",
-              "description": null
+              "description": null,
+              "chipProvisional": true
             },
             {
               "value": 69,
               "name": "FillingWaterTank",
-              "description": null
+              "description": null,
+              "chipProvisional": true
             },
             {
               "value": 70,
               "name": "UpdatingMaps",
-              "description": null
+              "description": null,
+              "chipProvisional": true
             }
           ]
         },
@@ -18616,7 +18648,8 @@
             }
           ]
         }
-      ]
+      ],
+      "chipProvisional": true
     },
     {
       "id": 113,
@@ -21195,7 +21228,8 @@
             }
           ]
         }
-      ]
+      ],
+      "chipProvisional": true
     },
     {
       "id": 151,
@@ -21673,7 +21707,8 @@
             }
           ]
         }
-      ]
+      ],
+      "chipProvisional": true
     },
     {
       "id": 152,
@@ -22777,7 +22812,8 @@
             }
           ]
         }
-      ]
+      ],
+      "chipProvisional": true
     },
     {
       "id": 153,
@@ -22795,13 +22831,15 @@
           "bit": 1,
           "code": "SOC",
           "name": "SoCReporting",
-          "description": "Vehicles and EVSEs which support ISO 15118 may allow the vehicle to report its battery size and state of charge. If the EVSE supports PLC it may have a vehicle connected which optionally supports reporting of its battery size and current State of Charge (SoC).\nIf the EVSE supports reporting of State of Charge this feature will only work if a compatible EV is connected.\nNote some EVSEs may use other undefined mechanisms to obtain vehicle State of Charge outside the scope of this cluster."
+          "description": "Vehicles and EVSEs which support ISO 15118 may allow the vehicle to report its battery size and state of charge. If the EVSE supports PLC it may have a vehicle connected which optionally supports reporting of its battery size and current State of Charge (SoC).\nIf the EVSE supports reporting of State of Charge this feature will only work if a compatible EV is connected.\nNote some EVSEs may use other undefined mechanisms to obtain vehicle State of Charge outside the scope of this cluster.",
+          "chipProvisional": true
         },
         {
           "bit": 2,
           "code": "PNC",
           "name": "PlugAndCharge",
-          "description": "If the EVSE supports PLC, it may be able to support the Plug and Charge feature. e.g. this may allow the vehicle ID to be obtained which may allow an energy management system to track energy usage per vehicle (e.g. to give the owner an indicative cost of charging, or for work place charging).\nIf the EVSE supports the Plug and Charge feature, it will only work if a compatible EV is connected."
+          "description": "If the EVSE supports PLC, it may be able to support the Plug and Charge feature. e.g. this may allow the vehicle ID to be obtained which may allow an energy management system to track energy usage per vehicle (e.g. to give the owner an indicative cost of charging, or for work place charging).\nIf the EVSE supports the Plug and Charge feature, it will only work if a compatible EV is connected.",
+          "chipProvisional": true
         },
         {
           "bit": 3,
@@ -22813,7 +22851,8 @@
           "bit": 4,
           "code": "V2X",
           "name": "V2X",
-          "description": "If the EVSE can support bi-directional charging, it may be possible to request that the vehicle can discharge to the home or grid.\nThe charging and discharging may be controlled by a home Energy Management System (EMS) using the Device Energy Management cluster of the associated Device Energy Management device. For example, an EMS may use the PA (PowerAdjustment) feature to continually adjust the charge/discharge current to/from the EV so as to minimise the energy flow from/to the grid as the demand in the home and the solar supply to the home both fluctuate."
+          "description": "If the EVSE can support bi-directional charging, it may be possible to request that the vehicle can discharge to the home or grid.\nThe charging and discharging may be controlled by a home Energy Management System (EMS) using the Device Energy Management cluster of the associated Device Energy Management device. For example, an EMS may use the PA (PowerAdjustment) feature to continually adjust the charge/discharge current to/from the EV so as to minimise the energy flow from/to the grid as the demand in the home and the solar supply to the home both fluctuate.",
+          "chipProvisional": true
         }
       ],
       "attributes": [
@@ -24640,7 +24679,8 @@
             }
           ]
         }
-      ]
+      ],
+      "chipProvisional": true
     },
     {
       "id": 257,
@@ -36785,7 +36825,8 @@
           "nullable": false,
           "optional": true,
           "writable": false,
-          "description": "Indicates the current link-local address of the device. Only 128-bit IPv6 link-local addresses shall be used for this attribute.\n> [!NOTE]\n> NOTE: Some companies may consider MAC Address to be protected data subject to PII handling considerations and will therefore choose not to include it or read it. The MAC Address can often be determined using ARP in IPv4 or NDP in IPv6."
+          "description": "Indicates the current link-local address of the device. Only 128-bit IPv6 link-local addresses shall be used for this attribute.\n> [!NOTE]\n> NOTE: Some companies may consider MAC Address to be protected data subject to PII handling considerations and will therefore choose not to include it or read it. The MAC Address can often be determined using ARP in IPv4 or NDP in IPv6.",
+          "chipProvisional": true
         }
       ],
       "commands": [],
@@ -41516,7 +41557,8 @@
             }
           ]
         }
-      ]
+      ],
+      "chipProvisional": true
     },
     {
       "id": 1872,
@@ -41760,7 +41802,8 @@
           ],
           "globalName": "locationdesc"
         }
-      ]
+      ],
+      "chipProvisional": true
     },
     {
       "id": 1873,

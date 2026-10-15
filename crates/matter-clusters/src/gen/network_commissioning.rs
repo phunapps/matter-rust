@@ -62,10 +62,13 @@ pub mod attribute_id {
     /// `LastConnectErrorValue`.
     pub const LAST_CONNECT_ERROR_VALUE: u32 = 0x0007;
     /// `SupportedWiFiBands`.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     pub const SUPPORTED_WIFI_BANDS: u32 = 0x0008;
     /// `SupportedThreadFeatures`.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     pub const SUPPORTED_THREAD_FEATURES: u32 = 0x0009;
     /// `ThreadVersion`.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     pub const THREAD_VERSION: u32 = 0x000A;
 }
 
@@ -717,6 +720,8 @@ pub fn decode_last_connect_error_value(tlv: &[u8]) -> Result<Nullable<i32>, Clus
 
 /// Decode the `SupportedWiFiBands` attribute value.
 ///
+/// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
+///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
 pub fn decode_supported_wifi_bands(tlv: &[u8]) -> Result<Vec<WiFiBandEnum>, ClusterError> {
@@ -755,6 +760,8 @@ pub fn decode_supported_wifi_bands(tlv: &[u8]) -> Result<Vec<WiFiBandEnum>, Clus
 
 /// Decode the `SupportedThreadFeatures` attribute value.
 ///
+/// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
+///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
 pub fn decode_supported_thread_features(
@@ -775,6 +782,8 @@ pub fn decode_supported_thread_features(
 }
 
 /// Decode the `ThreadVersion` attribute value.
+///
+/// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.

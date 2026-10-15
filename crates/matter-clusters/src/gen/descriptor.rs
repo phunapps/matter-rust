@@ -36,6 +36,7 @@ pub mod attribute_id {
     /// `TagList`.
     pub const TAG_LIST: u32 = 0x0004;
     /// `EndpointUniqueId`.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     pub const ENDPOINT_UNIQUE_ID: u32 = 0x0005;
 }
 
@@ -292,6 +293,8 @@ pub fn decode_tag_list(tlv: &[u8]) -> Result<Vec<SemanticTagStruct>, ClusterErro
 }
 
 /// Decode the `EndpointUniqueId` attribute value.
+///
+/// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.

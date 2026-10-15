@@ -53,14 +53,19 @@ pub mod attribute_id {
     /// `SupportsConcurrentConnection`.
     pub const SUPPORTS_CONCURRENT_CONNECTION: u32 = 0x0004;
     /// `TcAcceptedVersion`.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     pub const TC_ACCEPTED_VERSION: u32 = 0x0005;
     /// `TcMinRequiredVersion`.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     pub const TC_MIN_REQUIRED_VERSION: u32 = 0x0006;
     /// `TcAcknowledgements`.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     pub const TC_ACKNOWLEDGEMENTS: u32 = 0x0007;
     /// `TcAcknowledgementsRequired`.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     pub const TC_ACKNOWLEDGEMENTS_REQUIRED: u32 = 0x0008;
     /// `TcUpdateDeadline`.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     pub const TC_UPDATE_DEADLINE: u32 = 0x0009;
     /// `RecoveryIdentifier`.
     /// Provisional in Matter 1.5.1, the codegen model's revision: a later revision may change or remove it.
@@ -379,6 +384,8 @@ pub fn decode_supports_concurrent_connection(tlv: &[u8]) -> Result<bool, Cluster
 
 /// Decode the `TcAcceptedVersion` attribute value.
 ///
+/// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
+///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
 pub fn decode_tc_accepted_version(tlv: &[u8]) -> Result<u16, ClusterError> {
@@ -395,6 +402,8 @@ pub fn decode_tc_accepted_version(tlv: &[u8]) -> Result<u16, ClusterError> {
 }
 
 /// Decode the `TcMinRequiredVersion` attribute value.
+///
+/// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
@@ -413,6 +422,8 @@ pub fn decode_tc_min_required_version(tlv: &[u8]) -> Result<u16, ClusterError> {
 
 /// Decode the `TcAcknowledgements` attribute value.
 ///
+/// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
+///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
 pub fn decode_tc_acknowledgements(tlv: &[u8]) -> Result<u16, ClusterError> {
@@ -430,6 +441,8 @@ pub fn decode_tc_acknowledgements(tlv: &[u8]) -> Result<u16, ClusterError> {
 
 /// Decode the `TcAcknowledgementsRequired` attribute value.
 ///
+/// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
+///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
 pub fn decode_tc_acknowledgements_required(tlv: &[u8]) -> Result<bool, ClusterError> {
@@ -446,6 +459,8 @@ pub fn decode_tc_acknowledgements_required(tlv: &[u8]) -> Result<bool, ClusterEr
 }
 
 /// Decode the `TcUpdateDeadline` attribute value.
+///
+/// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.

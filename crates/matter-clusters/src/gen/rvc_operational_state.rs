@@ -84,18 +84,25 @@ pub enum ErrorStateEnum {
     /// MopCleaningPadMissing = 71.
     MopCleaningPadMissing,
     /// LowBattery = 72.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     LowBattery,
     /// CannotReachTargetArea = 73.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     CannotReachTargetArea,
     /// DirtyWaterTankFull = 74.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     DirtyWaterTankFull,
     /// DirtyWaterTankMissing = 75.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     DirtyWaterTankMissing,
     /// WheelsJammed = 76.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     WheelsJammed,
     /// BrushJammed = 77.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     BrushJammed,
     /// NavigationSensorObscured = 78.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     NavigationSensorObscured,
     /// A value not known to this codegen revision.
     Unknown(u8),
@@ -186,12 +193,16 @@ pub enum OperationalStateEnum {
     /// Docked = 66.
     Docked,
     /// EmptyingDustBin = 67.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     EmptyingDustBin,
     /// CleaningMop = 68.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     CleaningMop,
     /// FillingWaterTank = 69.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     FillingWaterTank,
     /// UpdatingMaps = 70.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     UpdatingMaps,
     /// A value not known to this codegen revision.
     Unknown(u8),

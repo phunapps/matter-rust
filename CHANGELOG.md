@@ -1261,7 +1261,8 @@ The codegen now generates only what a client can use:
   pair without exactly one). `encode_add_scene` is pinned against a
   matter.js byte vector. chip's zap and controller codegen still mark the
   cluster provisional; the Matter 1.4.2 specification does not (revision 1
-  removed the provisional status), so it carries no provisional note.
+  removed the provisional status), so its module docs carry chip's
+  provisional note rather than the specification's.
 
 ### matter-clusters: Changed — rustdoc states provisional clusters and field dependencies
 
@@ -1326,8 +1327,8 @@ The codegen now generates only what a client can use:
 chip's zap and controller codegen mark WaterHeaterManagement and
 DeviceEnergyManagement provisional (at v1.4.2.0 and master), and Messages at
 v1.4.2.0 (master no longer does); the Matter 1.4.2 specification marks none
-of the three provisional, so, as with ScenesManagement, they carry no
-provisional note.
+of the three provisional, so, as with ScenesManagement, their module docs
+carry chip's provisional note.
 
 EnergyPreference runs live against chip's all-clusters, both master (locally)
 and v1.4.2.0 (the nightly). WaterHeaterManagement runs live only against
@@ -1416,20 +1417,22 @@ chip's zap and controller codegen mark UnitLocalization's
 `SupportedTemperatureUnits` provisional (at v1.4.2.0 and master), and so
 does v1.4.2.0's `data_model/1.4.2` XML (`P, TEMP`). Master's
 `data_model/1.4.2`, 1.5 and 1.5.1 XML and the matter.js model have it as
-`TEMP`, so, as with Messages, it carries no provisional note. At v1.4.2.0
-only, chip's zap XML marks the EcosystemInformation cluster and its
-`EcosystemLocationStruct` provisional and its controller codegen declares
-`provisional cluster EcosystemInformation`; master and the 1.4.2 spec XML at
-both refs do not, so it carries no provisional note either (CommissionerControl
-is marked provisional at neither ref).
+`TEMP`, so it carries chip's provisional note. At v1.4.2.0 only, chip's zap
+XML marks the EcosystemInformation cluster and its `EcosystemLocationStruct`
+provisional and its controller codegen declares `provisional cluster
+EcosystemInformation`; master and the 1.4.2 spec XML at both refs do not, so
+it carries chip's provisional note in its module docs (CommissionerControl is
+marked provisional at neither ref).
 
 chip's zap XML marks GeneralCommissioning's TermsAndConditions (TC) feature,
 its five TC attributes and `SetTCAcknowledgements` (with its response)
 provisional at both refs, and its controller codegen marks the TC
 attributes; v1.4.2.0's zap and controller codegen also mark
 NetworkCommissioning's `SupportedWiFiBands`, `SupportedThreadFeatures` and
-`ThreadVersion`. The 1.4.2 XML and the model do not, so none of them carries
-a provisional note.
+`ThreadVersion`. The 1.4.2 XML and the model do not, so the five TC
+attributes and the three NetworkCommissioning attributes carry chip's
+provisional note (from the controller codegen); the TC feature and
+`SetTCAcknowledgements`, marked in zap only, carry none.
 
 How each of these clusters was validated:
 
@@ -1458,7 +1461,7 @@ How each of these clusters was validated:
   (0x0505)**: every attribute, command and response, and TargetNavigator's
   `TargetUpdated` event. chip's zap XML and controller codegen mark
   WakeOnLan's `LinkLocalAddress` provisional (v1.4.2.0 and master); the 1.4.2
-  spec XML and the model do not, so it carries no provisional note.
+  spec XML and the model do not, so it carries chip's provisional note.
 - **ApplicationBasic (0x050D)**, **ApplicationLauncher (0x050C)**,
   **AccountLogin (0x050E)** and **ContentAppObserver (0x0510)**: every
   attribute, command and response, and AccountLogin's `LoggedOut` event.
@@ -1470,7 +1473,7 @@ How each of these clusters was validated:
   specification (`Data` mandatory, `EncodingHint` optional), where chip's
   codegen has the opposite. At v1.4.2.0 only, chip's zap XML and controller
   codegen mark ContentAppObserver provisional; master and the 1.4.2 spec XML
-  at both refs do not, so it carries no provisional note.
+  at both refs do not, so its module docs carry chip's provisional note.
 - **MediaPlayback (0x0506)**: every attribute, command and response, and the
   `StateChanged` event. `TrackStruct.TrackAttributes` is nullable although
   the specification says otherwise: chip declares it nullable and tv-app sends
@@ -1684,6 +1687,26 @@ chip's current copy and matter.js have 6. Read `ClusterRevision` from the
 device before relying on an element a later revision added. The revisions are frozen in the repository
 (`xtask/scripts/dump-model/chip-1.4.2.json`, written by
 `scripts/chip-facts.py`), so generating needs no chip checkout.
+
+### matter-clusters: Changed — rustdoc notes what chip's 1.4.2 data marks provisional
+
+Every generated element that chip's Matter 1.4.2 data marks provisional
+while the codegen model does not now carries one rustdoc line saying so: 36
+elements (EnergyEvse's `SOC`, `PNC` and `V2X` features; GeneralCommissioning's
+five TC attributes; NetworkCommissioning's `SupportedWiFiBands`,
+`SupportedThreadFeatures` and `ThreadVersion`; UnitLocalization's
+`SupportedTemperatureUnits`; WakeOnLan's `LinkLocalAddress`; Descriptor's
+`EndpointUniqueId`; GroupKeyManagement's `GroupKeyMulticastPolicy`;
+OperationalCredentials' VID-verification commands and fields;
+DishwasherAlarm's five alarm bits; RvcOperationalState's eleven newer state
+and error values), and, in their module docs, the seven clusters chip's
+v1.4.2.0 controller codegen marks provisional as a whole (ScenesManagement,
+Messages, DeviceEnergyManagement, DeviceEnergyManagementMode,
+WaterHeaterManagement, EcosystemInformation, ContentAppObserver). The sources
+are chip's 1.4.2 data model (in its current tree and at the v1.4.2.0 release)
+and v1.4.2.0's controller codegen, frozen in
+`xtask/scripts/dump-model/chip-1.4.2.json`. Documentation only: no type,
+value or byte changes.
 
 ## matter-transport 0.7.3 + matter-controller 0.18.1
 

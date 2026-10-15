@@ -115,12 +115,15 @@ bitflags::bitflags! {
         /// ChargingPreferences (PREF).
         const PREF = 1 << 0;
         /// SoCReporting (SOC).
+        /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
         const SOC = 1 << 1;
         /// PlugAndCharge (PNC).
+        /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
         const PNC = 1 << 2;
         /// Rfid (RFID).
         const RFID = 1 << 3;
         /// V2X (V2X).
+        /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
         const V2X = 1 << 4;
     }
 }

@@ -405,8 +405,8 @@ fn level_control_with_on_off_commands_carry_their_base_fields() {
 }
 
 #[test]
-fn dump_script_version_is_12() {
-    assert_eq!(load()["meta"]["dumpScriptVersion"], 12);
+fn dump_script_version_is_13() {
+    assert_eq!(load()["meta"]["dumpScriptVersion"], 13);
 }
 
 /// The clusters whose codegen-model (Matter 1.5.1) revision is above their
@@ -3415,4 +3415,81 @@ fn a_request_reaches_a_secret_struct_only_as_a_direct_argument() {
             }
         }
     }
+}
+
+/// Every `chipProvisional` mark in clusters.json, as its chip-1.4.2.json key
+/// (`<Cluster>` or `<Cluster>.<Kind>.<Name>`), sorted.
+fn chip_provisional_keys(v: &Value) -> Vec<String> {
+    let mut got = Vec::new();
+    let mut mark = |key: String, el: &Value| {
+        // The key is written only when true.
+        assert!(el["chipProvisional"] != false, "{key}");
+        if el["chipProvisional"] == true {
+            assert!(
+                el["provisional"] != true,
+                "{key} is provisional in the model too"
+            );
+            got.push(key);
+        }
+    };
+    for c in clusters(v) {
+        let name = c["name"].as_str().unwrap();
+        mark(name.to_string(), c);
+        for f in c["features"].as_array().unwrap() {
+            mark(format!("{name}.Feature.{}", f["code"].as_str().unwrap()), f);
+        }
+        for (kind, key) in [
+            ("Attribute", "attributes"),
+            ("Command", "commands"),
+            ("Event", "events"),
+        ] {
+            for e in c[key].as_array().unwrap() {
+                mark(format!("{name}.{kind}.{}", e["name"].as_str().unwrap()), e);
+            }
+        }
+        for key in ["commands", "events", "datatypes"] {
+            for owner in c[key].as_array().unwrap() {
+                let owner_name = owner["name"].as_str().unwrap();
+                for f in owner["fields"].as_array().into_iter().flatten() {
+                    mark(
+                        format!("{name}.Field.{owner_name}.{}", f["name"].as_str().unwrap()),
+                        f,
+                    );
+                }
+                for member in ["values", "bits"] {
+                    for m in owner[member].as_array().into_iter().flatten() {
+                        mark(
+                            format!("{name}.Value.{owner_name}.{}", m["name"].as_str().unwrap()),
+                            m,
+                        );
+                    }
+                }
+            }
+        }
+    }
+    got.sort();
+    got
+}
+
+#[test]
+fn chip_provisional_marks_are_the_frozen_ones() {
+    // chip-1.4.2.json `provisional` (scripts/chip-facts.py, from chip's 1.4.2
+    // XML at both refs and its v1.4.2.0 controller codegen) is what the dump
+    // marks `chipProvisional`: exactly those, none the model marks itself.
+    let facts: Value = serde_json::from_str(
+        &fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/dump-model/chip-1.4.2.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let mut want: Vec<String> = facts["provisional"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["element"].as_str().unwrap().to_string())
+        .collect();
+    want.sort();
+    assert_eq!(want.len(), 43);
+    assert_eq!(chip_provisional_keys(&load()), want);
 }

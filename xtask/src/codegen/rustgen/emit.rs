@@ -22,6 +22,21 @@ use std::fmt::Write as _;
 pub const PROVISIONAL_DOC: &str =
     "Provisional in Matter 1.5.1, the codegen model's revision: a later revision may change or remove it.";
 
+/// The rustdoc sentence on a generated item chip marks provisional in its
+/// Matter 1.4.2 data while the codegen model does not (`chip_provisional` on
+/// the model's elements, from `xtask/scripts/dump-model/chip-1.4.2.json`).
+pub const CHIP_PROVISIONAL_DOC: &str =
+    "Provisional in chip's Matter 1.4.2 data, though not in the \
+     codegen model: a later revision may change or remove it.";
+
+/// The module rustdoc paragraph of a cluster chip's Matter 1.4.2 release
+/// marks provisional as a whole while the specification does not
+/// (`Cluster::chip_provisional`).
+pub(crate) const CHIP_PROVISIONAL_CLUSTER_DOC: [&str; 2] = [
+    "Provisional in chip: its v1.4.2.0 controller codegen marks the whole cluster provisional,",
+    "though the Matter 1.4.2 specification does not, so its shape may still change.",
+];
+
 /// The rustdoc paragraph on a struct that has an encoder only because a
 /// writable attribute carries it (in `encoded_struct_names` but not reachable
 /// from a request command). Like every struct with an encoder it is
@@ -60,8 +75,7 @@ pub(crate) fn copied_from_doc(owner: &str, name: &str) -> String {
 /// deprecates it (its own conformance, or its feature's) or marks it
 /// provisional, and which Matter release and cluster revision removed it. That
 /// line replaces [`PROVISIONAL_DOC`], which names the 1.5.1 revision the
-/// element is not in. Any other element gets [`PROVISIONAL_DOC`] when
-/// `provisional`.
+/// element is not in. Any other element gets [`provisional_note`]'s line.
 ///
 /// # Panics
 ///
@@ -70,11 +84,12 @@ pub(crate) fn copied_from_doc(owner: &str, name: &str) -> String {
 pub(crate) fn element_note(
     c: &Cluster,
     provisional: bool,
+    chip_provisional: bool,
     deprecated: bool,
     supplemented: Option<&Supplemented>,
 ) -> Option<String> {
     let Some(s) = supplemented else {
-        return provisional.then(|| PROVISIONAL_DOC.to_string());
+        return provisional_note(provisional, chip_provisional).map(str::to_string);
     };
     let Some(feature) = c.features.iter().find(|f| f.code == s.feature) else {
         panic!(
@@ -105,6 +120,19 @@ pub(crate) fn element_note(
     } else {
         format!("{origin}; {removed}.")
     })
+}
+
+/// The provisional rustdoc line of an element that is not supplemented:
+/// [`PROVISIONAL_DOC`] when the codegen model marks it, else
+/// [`CHIP_PROVISIONAL_DOC`] when chip does, else none.
+pub(crate) fn provisional_note(provisional: bool, chip_provisional: bool) -> Option<&'static str> {
+    if provisional {
+        Some(PROVISIONAL_DOC)
+    } else if chip_provisional {
+        Some(CHIP_PROVISIONAL_DOC)
+    } else {
+        None
+    }
 }
 
 /// The module rustdoc paragraph of a cluster the specification marks
@@ -313,6 +341,12 @@ fn emit_header(s: &mut String, c: &Cluster) {
             line!(s, "//! {doc}");
         }
         line!(s, "//!");
+    } else if c.chip_provisional {
+        line!(s, "//!");
+        for doc in CHIP_PROVISIONAL_CLUSTER_DOC {
+            line!(s, "//! {doc}");
+        }
+        line!(s, "//!");
     }
     line!(
         s,
@@ -412,6 +446,7 @@ fn emit_ids(s: &mut String, c: &Cluster) {
         if let Some(note) = element_note(
             c,
             cmd.provisional,
+            cmd.chip_provisional,
             cmd.deprecated,
             cmd.supplemented.as_ref(),
         ) {
@@ -430,7 +465,13 @@ fn emit_ids(s: &mut String, c: &Cluster) {
     line!(s, "pub mod attribute_id {{");
     for a in &c.attributes {
         line!(s, "    /// `{}`.", a.name);
-        if let Some(note) = element_note(c, a.provisional, a.deprecated, a.supplemented.as_ref()) {
+        if let Some(note) = element_note(
+            c,
+            a.provisional,
+            a.chip_provisional,
+            a.deprecated,
+            a.supplemented.as_ref(),
+        ) {
             line!(s, "    /// {note}");
         }
         line!(
@@ -449,8 +490,8 @@ fn emit_ids(s: &mut String, c: &Cluster) {
         line!(s, "pub mod event_id {{");
         for ev in &c.events {
             line!(s, "    /// `{}` ({} priority).", ev.name, ev.priority);
-            if ev.provisional {
-                line!(s, "    /// {PROVISIONAL_DOC}");
+            if let Some(note) = provisional_note(ev.provisional, ev.chip_provisional) {
+                line!(s, "    /// {note}");
             }
             line!(
                 s,
@@ -473,7 +514,13 @@ fn emit_feature_bitflags(s: &mut String, c: &Cluster) {
     line!(s, "    pub struct Feature: u32 {{");
     for f in &c.features {
         line!(s, "        /// {} ({}).", f.name, f.code);
-        if let Some(note) = element_note(c, f.provisional, f.deprecated, f.supplemented.as_ref()) {
+        if let Some(note) = element_note(
+            c,
+            f.provisional,
+            f.chip_provisional,
+            f.deprecated,
+            f.supplemented.as_ref(),
+        ) {
             line!(s, "        /// {note}");
         }
         line!(s, "        const {} = 1 << {};", screaming(&f.code), f.bit);
@@ -550,6 +597,9 @@ fn emit_enum(s: &mut String, d: &Datatype) {
     line!(s, "pub enum {} {{", d.name);
     for v in &d.values {
         line!(s, "    /// {} = {}.", v.name, v.value);
+        if v.chip_provisional {
+            line!(s, "    /// {CHIP_PROVISIONAL_DOC}");
+        }
         line!(s, "    {},", variant_ident(&d.name, &v.name));
     }
     line!(s, "    /// A value not known to this codegen revision.");
@@ -610,6 +660,9 @@ fn emit_bitmap(s: &mut String, d: &Datatype) {
     for b in &d.bits {
         if let Some(bit) = b.bit {
             line!(s, "        /// {}.", b.name);
+            if b.chip_provisional {
+                line!(s, "        /// {CHIP_PROVISIONAL_DOC}");
+            }
             line!(s, "        const {} = 1 << {};", screaming(&b.name), bit);
         }
     }
@@ -671,8 +724,8 @@ fn emit_struct(
                 line!(s, "{doc}");
             }
         }
-        if f.provisional {
-            line!(s, "    /// {PROVISIONAL_DOC}");
+        if let Some(note) = provisional_note(f.provisional, f.chip_provisional) {
+            line!(s, "    /// {note}");
         }
         if let Some(dep) = &f.required_when {
             line!(s, "    /// {}", required_when_doc(dep));
@@ -731,6 +784,7 @@ mod tests {
                 .map(|(v, n)| EnumValue {
                     value: *v,
                     name: (*n).to_string(),
+                    chip_provisional: false,
                 })
                 .collect(),
             bits: vec![],
@@ -798,6 +852,7 @@ mod tests {
             fabric_sensitive: sensitive,
             mandatory_on_write: relaxed_for_decode,
             provisional: false,
+            chip_provisional: false,
             choice: None,
             required_when: None,
             relaxed_reason: None,
@@ -860,6 +915,7 @@ mod tests {
             fabric_sensitive: false,
             mandatory_on_write: false,
             provisional: false,
+            chip_provisional: false,
             choice: None,
             required_when: None,
             relaxed_reason: reason.map(str::to_string),
@@ -881,6 +937,7 @@ mod tests {
                 priority: "info".to_string(),
                 fields: vec![field(Some("chip's servers do not send it"))],
                 provisional: false,
+                chip_provisional: false,
             }],
             ..cluster_with(vec![], vec![])
         };
@@ -906,6 +963,7 @@ mod tests {
             revision: 1,
             model_revision: None,
             provisional: false,
+            chip_provisional: false,
             features: vec![],
             attributes,
             commands: vec![],
@@ -957,6 +1015,7 @@ mod tests {
             optional: false,
             writable: false,
             provisional: false,
+            chip_provisional: false,
             deprecated: false,
             supplemented: None,
         };
@@ -1087,6 +1146,7 @@ mod tests {
             fabric_sensitive: false,
             mandatory_on_write: false,
             provisional,
+            chip_provisional: false,
             choice: choice.map(|(group, count, or_more, or_less)| Choice {
                 group: group.to_string(),
                 count,
@@ -1113,6 +1173,7 @@ mod tests {
             optional: true,
             writable: false,
             provisional,
+            chip_provisional: false,
             deprecated: false,
             supplemented: None,
         };
@@ -1124,6 +1185,7 @@ mod tests {
             response_id: None,
             fields: vec![],
             provisional: true,
+            chip_provisional: false,
             deprecated: false,
             supplemented: None,
         }];
@@ -1133,6 +1195,7 @@ mod tests {
             priority: "info".to_string(),
             fields: vec![],
             provisional: true,
+            chip_provisional: false,
         }];
         c.features = vec![
             Feature {
@@ -1140,6 +1203,7 @@ mod tests {
                 code: "PL".to_string(),
                 name: "Plain".to_string(),
                 provisional: false,
+                chip_provisional: false,
                 deprecated: false,
                 supplemented: None,
             },
@@ -1148,6 +1212,7 @@ mod tests {
                 code: "DR".to_string(),
                 name: "Draft".to_string(),
                 provisional: true,
+                chip_provisional: false,
                 deprecated: false,
                 supplemented: None,
             },
@@ -1252,6 +1317,7 @@ mod tests {
             code: code.to_string(),
             name: code.to_string(),
             provisional,
+            chip_provisional: false,
             deprecated,
             supplemented: Some(s),
         }
@@ -1264,7 +1330,7 @@ mod tests {
         thermostat.name = "Thermostat".to_string();
         thermostat.features = vec![supplemented_feature("SCH", false, true, sch.clone())];
         assert_eq!(
-            element_note(&thermostat, false, true, Some(&sch)).as_deref(),
+            element_note(&thermostat, false, false, true, Some(&sch)).as_deref(),
             Some(
                 "Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); \
                  deprecated in 1.4 itself (`[Zigbee], D`) and removed in Matter 1.5.1 \
@@ -1274,7 +1340,7 @@ mod tests {
         // An element SCH gates: the deprecation is its feature's.
         let gated = supplemented("SCH", "SCH", "1.5.1", 10);
         assert_eq!(
-            element_note(&thermostat, false, false, Some(&gated)).as_deref(),
+            element_note(&thermostat, false, false, false, Some(&gated)).as_deref(),
             Some(
                 "Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); \
                  deprecated in 1.4 itself (feature `SCH` is `[Zigbee], D`) and removed in \
@@ -1289,16 +1355,16 @@ mod tests {
                         provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering \
                         revision 7).";
         assert_eq!(
-            element_note(&window, true, false, Some(&abs)).as_deref(),
+            element_note(&window, true, false, false, Some(&abs)).as_deref(),
             Some(want_abs)
         );
         // The generic provisional note never lands on a supplemented element,
         // and a plain element gets no note at all.
         assert_eq!(
-            element_note(&window, true, false, None).as_deref(),
+            element_note(&window, true, false, false, None).as_deref(),
             Some(PROVISIONAL_DOC)
         );
-        assert_eq!(element_note(&window, false, false, None), None);
+        assert_eq!(element_note(&window, false, false, false, None), None);
         let mut s = String::new();
         emit_feature_bitflags(&mut s, &window);
         assert!(
@@ -1416,6 +1482,7 @@ mod tests {
             response_id: (direction == "request").then_some(1),
             fields,
             provisional: false,
+            chip_provisional: false,
             deprecated: false,
             supplemented: None,
         };
@@ -1430,6 +1497,7 @@ mod tests {
             priority: "info".to_string(),
             fields: vec![field("NewStatus")],
             provisional: false,
+            chip_provisional: false,
         }];
         let src = generate_cluster(&c);
         for (name, ident) in [("Status", "status"), ("NewStatus", "new_status")] {
@@ -1602,5 +1670,12 @@ mod tests {
         assert!(s.contains("#[derive(Clone, Debug, PartialEq)]\n"), "{s}");
         assert!(!s.contains("impl core::fmt::Debug"), "{s}");
         assert!(!s.contains(SECRET_DOC), "{s}");
+    }
+
+    #[test]
+    fn the_model_note_wins_over_chips() {
+        assert_eq!(provisional_note(true, true), Some(PROVISIONAL_DOC));
+        assert_eq!(provisional_note(false, true), Some(CHIP_PROVISIONAL_DOC));
+        assert_eq!(provisional_note(false, false), None);
     }
 }

@@ -108,6 +108,16 @@
 //!   `AccountLogin` (with its event; the setup PIN is redacted in `Debug`),
 //!   `ContentAppObserver`.
 //!
+//! Elements chip's Matter 1.4.2 data marks provisional (its 1.4.2 data model,
+//! or its v1.4.2.0 controller codegen) carry a rustdoc note even where the
+//! specification model does not: `EnergyEvse`'s `SOC`, `PNC` and `V2X`
+//! features, `GeneralCommissioning`'s terms-and-conditions attributes and
+//! `GroupKeyManagement`'s `GroupKeyMulticastPolicy`, among others. The seven
+//! clusters chip's v1.4.2.0 codegen marks provisional as a whole
+//! (`ScenesManagement`, `Messages`, `DeviceEnergyManagement`,
+//! `DeviceEnergyManagementMode`, `WaterHeaterManagement`,
+//! `EcosystemInformation`, `ContentAppObserver`) say so in their module docs.
+//!
 //! Note that this crate holds **codecs only**. For the administration
 //! clusters in particular, encoding a command is not the same as running the
 //! protocol around it: ACL evaluation, group multicast, commissioning-window

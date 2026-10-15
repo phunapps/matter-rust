@@ -5,8 +5,9 @@
       "id": 64512,
       "name": "GoldenFixture",
       "revision": 1,
+      "chipProvisional": true,
       "features": [
-        { "bit": 0, "code": "FA", "name": "FeatureA" },
+        { "bit": 0, "code": "FA", "name": "FeatureA", "chipProvisional": true },
         { "bit": 1, "code": "FB", "name": "FeatureB", "provisional": true }
       ],
       "attributes": [
@@ -25,7 +26,7 @@
         { "id": 6, "name": "RawMode", "type": "enum8", "metatype": "enum",
           "nullable": false, "optional": false, "writable": true },
         { "id": 7, "name": "Caps", "type": "WideFlags", "metatype": "bitmap",
-          "nullable": false, "optional": false, "writable": false },
+          "nullable": false, "optional": false, "writable": false, "chipProvisional": true },
         { "id": 8, "name": "Point", "type": "PointStruct", "metatype": "object",
           "nullable": false, "optional": false, "writable": false },
         { "id": 9, "name": "Ids", "type": "list", "entryType": "uint32", "metatype": "array",
@@ -38,7 +39,7 @@
           "nullable": false, "optional": true, "writable": true, "provisional": true }
       ],
       "commands": [
-        { "id": 0, "name": "Reset", "direction": "request", "responseId": null, "fields": [] },
+        { "id": 0, "name": "Reset", "direction": "request", "responseId": null, "fields": [], "chipProvisional": true },
         { "id": 1, "name": "SetLevel", "direction": "request", "responseId": 2,
           "fields": [
             { "id": 0, "name": "Target", "type": "uint16", "metatype": "integer",
@@ -81,7 +82,7 @@
           ] }
       ],
       "events": [
-        { "id": 0, "name": "Tripped", "priority": "critical", "fields": [] },
+        { "id": 0, "name": "Tripped", "priority": "critical", "fields": [], "chipProvisional": true },
         { "id": 1, "name": "LevelChanged", "priority": "info",
           "fields": [
             { "id": 0, "name": "Previous", "type": "uint16", "metatype": "integer",
@@ -99,12 +100,12 @@
         { "name": "ModeEnum", "base": "enum8", "kind": "enum", "description": null,
           "values": [
             { "value": 0, "name": "Auto" },
-            { "value": 1, "name": "Manual" }
+            { "value": 1, "name": "Manual", "chipProvisional": true }
           ] },
         { "name": "FlagsBitmap", "base": "map8", "kind": "bitmap", "description": null,
           "bits": [
             { "bit": 0, "name": "Alpha" },
-            { "bit": 1, "name": "Beta" }
+            { "bit": 1, "name": "Beta", "chipProvisional": true }
           ] },
         { "name": "WideFlags", "base": "map16", "kind": "bitmap", "description": null,
           "bits": [
@@ -142,7 +143,7 @@
           ] },
         { "name": "PointStruct", "base": "struct", "kind": "struct", "description": null,
           "fields": [
-            { "id": 0, "name": "X", "type": "uint16", "metatype": "integer", "nullable": false, "optional": false },
+            { "id": 0, "name": "X", "type": "uint16", "metatype": "integer", "nullable": false, "optional": false, "chipProvisional": true },
             { "id": 1, "name": "Y", "type": "uint16", "metatype": "integer", "nullable": false, "optional": false }
           ] },
         { "name": "ScopedEntryStruct", "base": "struct", "kind": "struct", "description": null,

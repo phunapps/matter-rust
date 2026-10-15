@@ -28,6 +28,7 @@ pub mod attribute_id {
     /// `TemperatureUnit`.
     pub const TEMPERATURE_UNIT: u32 = 0x0000;
     /// `SupportedTemperatureUnits`.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     pub const SUPPORTED_TEMPERATURE_UNITS: u32 = 0x0001;
 }
 
@@ -109,6 +110,8 @@ pub fn encode_temperature_unit(value: TempUnitEnum) -> Vec<u8> {
 }
 
 /// Decode the `SupportedTemperatureUnits` attribute value.
+///
+/// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.

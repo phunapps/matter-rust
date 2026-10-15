@@ -28,6 +28,7 @@ pub mod attribute_id {
     /// `MacAddress`.
     pub const MAC_ADDRESS: u32 = 0x0000;
     /// `LinkLocalAddress`.
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     pub const LINK_LOCAL_ADDRESS: u32 = 0x0001;
 }
 
@@ -49,6 +50,8 @@ pub fn decode_mac_address(tlv: &[u8]) -> Result<String, ClusterError> {
 }
 
 /// Decode the `LinkLocalAddress` attribute value.
+///
+/// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.

@@ -175,6 +175,7 @@ pub struct GroupKeySetStruct {
     /// Field EpochStartTime2 (tag 7).
     pub epoch_start_time2: Nullable<u64>,
     /// Field GroupKeyMulticastPolicy (tag 8).
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     pub group_key_multicast_policy: Option<GroupKeyMulticastPolicyEnum>,
     /// Field FabricIndex (tag 254).
     pub fabric_index: Option<u8>,

@@ -34,6 +34,8 @@
 //   globalName? on a datatype inlined from a lowercase model global;
 //   copiedFrom? on a datatype copied from the cluster that owns it (a
 //     qualified reference such as `ContentLauncher.AdditionalInfoStruct`);
+//   chipProvisional? (true only) on clusters, features, attributes, commands,
+//   events, fields, enum values and bits (chip-1.4.2.json `provisional`);
 //   keptFor? on an enum KEEP_DATATYPES keeps (what raw integer it interprets);
 //   requiredWhen? { field, present, exclusive } (see presenceDependency).
 //
@@ -96,7 +98,11 @@ function staleChipFact(msg) {
 //     written by scripts/chip-facts.py from chip's 1.4.2 XML), and
 //     `modelRevision` the model's own; `meta.chipFactsBootstrap` marks a
 //     CHIP_FACTS_BOOTSTRAP=1 dump.
-const DUMP_SCRIPT_VERSION = 12;
+// v13: `chipProvisional` on a cluster, feature, attribute, command, event,
+//     field, enum value or bitmap bit chip marks provisional in its 1.4.2
+//     data while the model does not (chip-1.4.2.json `provisional`), for
+//     generated rustdoc.
+const DUMP_SCRIPT_VERSION = 13;
 // @matter/model 0.17.x tracks Matter spec 1.5.1. Recorded for provenance;
 // the freeze test only asserts it is a non-empty string, so correcting it
 // later does not break the gate.
@@ -727,9 +733,10 @@ function exclusionReason(el, aliroCodes, featureNames, disallowedCodes) {
 // remove it. chip marks the same elements in its 1.5.1 data_model XML
 // (`<provisionalConform/>`; controller-clusters.matter also says `provisional`
 // on the attributes), except GroupKeySetStruct.GroupKeyMulticastPolicy, which
-// chip has as `P, M` and the model as `O`: we follow the model, so it is not
-// marked. A bare-`P` attribute, command or event is excluded
-// (exclusionReason); a bare-`P` feature keeps its bit, so it is marked too.
+// chip has as `P, M` and the model as `O`: the model's conformance is kept,
+// and chip-1.4.2.json gives it the chip-provisional note instead. A bare-`P`
+// attribute, command or event is excluded (exclusionReason); a bare-`P`
+// feature keeps its bit, so it is marked too.
 function isProvisional(el) {
   const ast = el.effectiveConformance && el.effectiveConformance.ast;
   if (!ast) return false;
@@ -2402,14 +2409,43 @@ function responseProblem(model, el) {
 // The facts the dump takes from chip's Matter 1.4.2 data, frozen by
 // scripts/chip-facts.py so the dump needs no chip checkout: each generated
 // cluster's 1.4.2 revision (emitted as CLUSTER_REVISION; a device reports its
-// own in the ClusterRevision attribute).
+// own in the ClusterRevision attribute), and the elements chip marks
+// provisional there that the model does not (stampChipProvisional).
+//
+// A missing, unreadable or malformed file, one without a `revisions` object or
+// a `provisional` list, or one with a key this dump does not read, is stale
+// too: staleChipFact stops the dump with the recovery steps (chip-facts.py
+// writes the file from clusters.json alone), or, in a CHIP_FACTS_BOOTSTRAP=1
+// dump, warns and goes on without what it could not read.
 function loadChipFacts() {
-  const doc = JSON.parse(readFileSync(CHIP_FACTS_PATH, 'utf8'));
+  const none = { revisions: {}, provisional: [] };
+  let doc;
+  try {
+    doc = JSON.parse(readFileSync(CHIP_FACTS_PATH, 'utf8'));
+  } catch (e) {
+    staleChipFact(`cannot read chip-1.4.2.json (${e.message})`);
+    return none;
+  }
+  if (doc === null || typeof doc !== 'object' || Array.isArray(doc)) {
+    staleChipFact('chip-1.4.2.json is not a JSON object');
+    return none;
+  }
   for (const k of Object.keys(doc)) {
-    if (!['comment', 'chip', 'revisions'].includes(k)) fail(`chip-1.4.2.json: unknown top-level key \`${k}\``);
+    if (!['comment', 'chip', 'revisions', 'provisional'].includes(k)) {
+      staleChipFact(`chip-1.4.2.json: unknown top-level key \`${k}\``);
+    }
+  }
+  const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+  if (!isObject(doc.revisions)) {
+    staleChipFact('chip-1.4.2.json has no `revisions` object');
+    doc.revisions = {};
+  }
+  if (!Array.isArray(doc.provisional) || !doc.provisional.every((e) => isObject(e) && typeof e.element === 'string')) {
+    staleChipFact('chip-1.4.2.json has no `provisional` list of `{ element, sources }` entries');
+    doc.provisional = [];
   }
   const names = new Set(ALLOWLIST.map((e) => e.name));
-  for (const name of Object.keys(doc.revisions || {})) {
+  for (const name of Object.keys(doc.revisions)) {
     if (!names.has(name)) staleChipFact(`chip-1.4.2.json revisions: ${name} is not allowlisted`);
   }
   return doc;
@@ -2502,6 +2538,49 @@ function stampSupplemented(clusters) {
   }
 }
 
+// Mark `chipProvisional: true` on each element chip-1.4.2.json lists: chip
+// marks it provisional in its Matter 1.4.2 data (the 1.4.2 XML, or the
+// v1.4.2.0 controller codegen) and the model does not, so the emitter adds a
+// rustdoc note. A key is `<Cluster>` or `<Cluster>.<Kind>.<Name>` (Kind:
+// Feature, Attribute, Command, Event, Field `<Owner>.<Field>`, Value
+// `<Enum or bitmap>.<Member>`), in clusters.json names. The dump fails on a
+// key that matches nothing or an element the model already marks: either
+// means the frozen file is stale (staleChipFact prints the recovery; a
+// CHIP_FACTS_BOOTSTRAP=1 dump skips the entry instead).
+function stampChipProvisional(clusters) {
+  for (const { element } of CHIP_FACTS.provisional || []) {
+    const [clusterName, kind, ...rest] = element.split('.');
+    const c = clusters.find((x) => x.name === clusterName);
+    if (!c) {
+      staleChipFact(`chip-1.4.2.json provisional ${element}: no generated cluster ${clusterName}`);
+      continue;
+    }
+    const named = (list, name) => (list || []).find((e) => e.name === name);
+    let found;
+    if (kind === undefined) found = c;
+    else if (kind === 'Feature') found = c.features.find((f) => f.code === rest[0]);
+    else if (kind === 'Attribute') found = named(c.attributes, rest[0]);
+    else if (kind === 'Command') found = named(c.commands, rest[0]);
+    else if (kind === 'Event') found = named(c.events, rest[0]);
+    else if (kind === 'Field') {
+      const owner = named(c.commands, rest[0]) || named(c.events, rest[0]) || named(c.datatypes, rest[0]);
+      found = owner && named(owner.fields, rest[1]);
+    } else if (kind === 'Value') {
+      const d = named(c.datatypes, rest[0]);
+      found = d && (named(d.values, rest[1]) || named(d.bits, rest[1]));
+    } else fail(`chip-1.4.2.json provisional ${element}: unknown kind \`${kind}\``);
+    if (!found) {
+      staleChipFact(`chip-1.4.2.json provisional ${element} matched no element`);
+      continue;
+    }
+    if (found.provisional) {
+      staleChipFact(`chip-1.4.2.json provisional ${element} is already provisional in the model`);
+      continue;
+    }
+    found.chipProvisional = true;
+  }
+}
+
 // --- main -----------------------------------------------------------------
 
 function modelVersion() {
@@ -2514,6 +2593,7 @@ applySupplement();
 const clusters = ALLOWLIST.map(dumpCluster);
 clusters.sort((x, y) => x.id - y.id);
 stampSupplemented(clusters);
+stampChipProvisional(clusters);
 supplemented.sort((x, y) => x.cluster.localeCompare(y.cluster) || x.element.localeCompare(y.element));
 for (const name of PROVISIONAL_CLUSTERS.keys()) {
   if (!ALLOWLIST.some((e) => e.name === name)) fail(`PROVISIONAL_CLUSTERS ${name} is not allowlisted`);

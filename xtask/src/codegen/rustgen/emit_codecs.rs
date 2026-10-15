@@ -2,7 +2,7 @@
 
 use crate::codegen::model::{Attribute, Cluster, CommandDef, Datatype, EventDef, FieldDef};
 use crate::codegen::rustgen::emit::{
-    choice_docs, element_note, emit_redacting_debug, line, struct_derive, PROVISIONAL_DOC,
+    choice_docs, element_note, emit_redacting_debug, line, provisional_note, struct_derive,
     SECRET_DOC,
 };
 use crate::codegen::rustgen::types::{base_type, ident, rust_type, snake, Position};
@@ -103,7 +103,13 @@ pub fn emit_codecs(s: &mut String, c: &Cluster) {
         }
     }
     for a in &c.attributes {
-        let note = element_note(c, a.provisional, a.deprecated, a.supplemented.as_ref());
+        let note = element_note(
+            c,
+            a.provisional,
+            a.chip_provisional,
+            a.deprecated,
+            a.supplemented.as_ref(),
+        );
         emit_attr_decoder(s, a, &dts, note.as_deref());
         if a.writable {
             emit_attr_encoder(s, a, &dts, note.as_deref());
@@ -113,6 +119,7 @@ pub fn emit_codecs(s: &mut String, c: &Cluster) {
         let note = element_note(
             c,
             cmd.provisional,
+            cmd.chip_provisional,
             cmd.deprecated,
             cmd.supplemented.as_ref(),
         );
@@ -1058,6 +1065,7 @@ fn clone_field(f: &FieldDef) -> FieldDef {
         fabric_sensitive: f.fabric_sensitive,
         mandatory_on_write: f.mandatory_on_write,
         provisional: f.provisional,
+        chip_provisional: f.chip_provisional,
         choice: f.choice.clone(),
         required_when: f.required_when.clone(),
         relaxed_reason: f.relaxed_reason.clone(),
@@ -1220,8 +1228,8 @@ fn emit_struct_decl_and_codec(
                 Position::Field,
             );
             line!(s, "    /// Field {} (tag {}).", f.name, f.id);
-            if f.provisional {
-                line!(s, "    /// {PROVISIONAL_DOC}");
+            if let Some(note) = provisional_note(f.provisional, f.chip_provisional) {
+                line!(s, "    /// {note}");
             }
             if let Some(reason) = &f.relaxed_reason {
                 line!(s, "    /// {}", super::emit::relaxed_reason_doc(reason));
@@ -1779,6 +1787,7 @@ mod tests {
             fabric_sensitive: false,
             mandatory_on_write: false,
             provisional: false,
+            chip_provisional: false,
             choice: None,
             required_when: None,
             relaxed_reason: None,
@@ -2053,6 +2062,7 @@ mod tests {
             response_id: None,
             fields: vec![passphrase],
             provisional: false,
+            chip_provisional: false,
             deprecated: false,
             supplemented: None,
         };
@@ -2251,6 +2261,7 @@ mod tests {
             response_id: None,
             fields,
             provisional: false,
+            chip_provisional: false,
             deprecated: false,
             supplemented: None,
         }
@@ -2268,6 +2279,7 @@ mod tests {
             revision: 1,
             model_revision: None,
             provisional: false,
+            chip_provisional: false,
             features: vec![],
             attributes: vec![],
             commands,
@@ -2287,6 +2299,7 @@ mod tests {
                 field(1, "TotalNumberOfPressesCounted", "uint8", "integer", None),
             ],
             provisional: false,
+            chip_provisional: false,
         };
         let mut s = String::new();
         emit_event_decoder(&mut s, &ev, &DatatypeMap::new());
@@ -2309,6 +2322,7 @@ mod tests {
             priority: "critical".to_string(),
             fields: vec![],
             provisional: false,
+            chip_provisional: false,
         };
         let mut s = String::new();
         emit_event_decoder(&mut s, &ev, &DatatypeMap::new());
@@ -2413,6 +2427,7 @@ mod tests {
             optional: true,
             writable: false,
             provisional: false,
+            chip_provisional: false,
             deprecated: false,
             supplemented: None,
         };
@@ -2455,6 +2470,7 @@ mod tests {
             optional: true,
             writable: false,
             provisional: false,
+            chip_provisional: false,
             deprecated: false,
             supplemented: None,
         };
@@ -2699,6 +2715,7 @@ mod tests {
                 field(254, "FabricIndex", "fabric-idx", "integer", None),
             ],
             provisional: false,
+            chip_provisional: false,
         };
         let mut s = String::new();
         emit_event_decoder(&mut s, &ev, &DatatypeMap::new());
@@ -2759,6 +2776,7 @@ mod tests {
             optional: false,
             writable,
             provisional: false,
+            chip_provisional: false,
             deprecated: false,
             supplemented: None,
         }

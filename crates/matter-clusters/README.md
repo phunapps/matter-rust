@@ -144,6 +144,16 @@ attributes, by area:
   drive it, so it is checked by decode smoke and `chip-xml-conformance.py`
   only.
 
+Elements chip's Matter 1.4.2 data marks provisional (its 1.4.2 data model, or
+its v1.4.2.0 controller codegen) carry a rustdoc note even where the
+specification model does not: EnergyEvse's `SOC`, `PNC` and `V2X` features,
+GeneralCommissioning's terms-and-conditions attributes and
+GroupKeyManagement's `GroupKeyMulticastPolicy`, among others. The seven
+clusters chip's v1.4.2.0 codegen marks provisional as a whole
+(ScenesManagement, Messages, DeviceEnergyManagement,
+DeviceEnergyManagementMode, WaterHeaterManagement, EcosystemInformation,
+ContentAppObserver) say so in their module docs.
+
 Verification varies by cluster, and the level is deliberate rather than
 accidental. Every cluster has decode-smoke coverage. matter.js 0.16.11
 byte-parity vectors (`test-vectors/clusters/`) cover the core, lighting, and

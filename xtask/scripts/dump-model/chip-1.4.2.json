@@ -1,5 +1,5 @@
 {
-  "comment": "Written by scripts/chip-facts.py from chip's Matter 1.4.2 data; do not edit by hand. The dump reads it: `revisions` become CLUSTER_REVISION.",
+  "comment": "Written by scripts/chip-facts.py from chip's Matter 1.4.2 data; do not edit by hand. The dump reads it: `revisions` become CLUSTER_REVISION, and each `provisional` element gets a rustdoc note.",
   "chip": {
     "worktree": "5cd2917a88e88d62b6514c75fb7825d8e2c913af",
     "v1.4.2.0": "06523c22640ceb8b89f9a11ff2325a4481a178a3"
@@ -118,5 +118,275 @@
     "WiFiNetworkDiagnostics": 1,
     "WiFiNetworkManagement": 1,
     "WindowCovering": 6
-  }
+  },
+  "provisional": [
+    {
+      "element": "ContentAppObserver",
+      "sources": [
+        "controller-clusters.matter at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "Descriptor.Attribute.EndpointUniqueId",
+      "sources": [
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "DeviceEnergyManagement",
+      "sources": [
+        "controller-clusters.matter at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "DeviceEnergyManagementMode",
+      "sources": [
+        "controller-clusters.matter at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "DishwasherAlarm.Value.AlarmBitmap.DrainError",
+      "sources": [
+        "data_model/1.4.2/clusters",
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "DishwasherAlarm.Value.AlarmBitmap.InflowError",
+      "sources": [
+        "data_model/1.4.2/clusters",
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "DishwasherAlarm.Value.AlarmBitmap.TempTooHigh",
+      "sources": [
+        "data_model/1.4.2/clusters",
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "DishwasherAlarm.Value.AlarmBitmap.TempTooLow",
+      "sources": [
+        "data_model/1.4.2/clusters",
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "DishwasherAlarm.Value.AlarmBitmap.WaterLevelError",
+      "sources": [
+        "data_model/1.4.2/clusters",
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "EcosystemInformation",
+      "sources": [
+        "controller-clusters.matter at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "EnergyEvse.Feature.PNC",
+      "sources": [
+        "data_model/1.4.2/clusters",
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "EnergyEvse.Feature.SOC",
+      "sources": [
+        "data_model/1.4.2/clusters",
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "EnergyEvse.Feature.V2X",
+      "sources": [
+        "data_model/1.4.2/clusters",
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "GeneralCommissioning.Attribute.TcAcceptedVersion",
+      "sources": [
+        "controller-clusters.matter at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "GeneralCommissioning.Attribute.TcAcknowledgements",
+      "sources": [
+        "controller-clusters.matter at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "GeneralCommissioning.Attribute.TcAcknowledgementsRequired",
+      "sources": [
+        "controller-clusters.matter at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "GeneralCommissioning.Attribute.TcMinRequiredVersion",
+      "sources": [
+        "controller-clusters.matter at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "GeneralCommissioning.Attribute.TcUpdateDeadline",
+      "sources": [
+        "controller-clusters.matter at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "GroupKeyManagement.Field.GroupKeySetStruct.GroupKeyMulticastPolicy",
+      "sources": [
+        "data_model/1.4.2/clusters",
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "Messages",
+      "sources": [
+        "controller-clusters.matter at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "NetworkCommissioning.Attribute.SupportedThreadFeatures",
+      "sources": [
+        "controller-clusters.matter at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "NetworkCommissioning.Attribute.SupportedWiFiBands",
+      "sources": [
+        "controller-clusters.matter at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "NetworkCommissioning.Attribute.ThreadVersion",
+      "sources": [
+        "controller-clusters.matter at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "OperationalCredentials.Command.SetVidVerificationStatement",
+      "sources": [
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "OperationalCredentials.Command.SignVidVerificationRequest",
+      "sources": [
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "OperationalCredentials.Command.SignVidVerificationResponse",
+      "sources": [
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "OperationalCredentials.Field.FabricDescriptorStruct.VidVerificationStatement",
+      "sources": [
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "OperationalCredentials.Field.NOCStruct.Vvsc",
+      "sources": [
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "RvcOperationalState.Value.ErrorStateEnum.BrushJammed",
+      "sources": [
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "RvcOperationalState.Value.ErrorStateEnum.CannotReachTargetArea",
+      "sources": [
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "RvcOperationalState.Value.ErrorStateEnum.DirtyWaterTankFull",
+      "sources": [
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "RvcOperationalState.Value.ErrorStateEnum.DirtyWaterTankMissing",
+      "sources": [
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "RvcOperationalState.Value.ErrorStateEnum.LowBattery",
+      "sources": [
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "RvcOperationalState.Value.ErrorStateEnum.NavigationSensorObscured",
+      "sources": [
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "RvcOperationalState.Value.ErrorStateEnum.WheelsJammed",
+      "sources": [
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "RvcOperationalState.Value.OperationalStateEnum.CleaningMop",
+      "sources": [
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "RvcOperationalState.Value.OperationalStateEnum.EmptyingDustBin",
+      "sources": [
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "RvcOperationalState.Value.OperationalStateEnum.FillingWaterTank",
+      "sources": [
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "RvcOperationalState.Value.OperationalStateEnum.UpdatingMaps",
+      "sources": [
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "ScenesManagement",
+      "sources": [
+        "controller-clusters.matter at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "UnitLocalization.Attribute.SupportedTemperatureUnits",
+      "sources": [
+        "controller-clusters.matter at v1.4.2.0",
+        "data_model/1.4.2/clusters at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "WakeOnLan.Attribute.LinkLocalAddress",
+      "sources": [
+        "controller-clusters.matter at v1.4.2.0"
+      ]
+    },
+    {
+      "element": "WaterHeaterManagement",
+      "sources": [
+        "controller-clusters.matter at v1.4.2.0"
+      ]
+    }
+  ]
 }

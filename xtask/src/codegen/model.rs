@@ -48,6 +48,12 @@ pub struct Cluster {
     /// `false` (M9-A3 B5).
     #[serde(default)]
     pub provisional: bool,
+    /// chip marks it provisional in its Matter 1.4.2 data although the
+    /// codegen model does not (`xtask/scripts/dump-model/chip-1.4.2.json`,
+    /// written by `scripts/chip-facts.py`): drives a rustdoc note. Absent in
+    /// the JSON means `false`.
+    #[serde(default, rename = "chipProvisional")]
+    pub chip_provisional: bool,
     /// Feature bits.
     #[serde(default)]
     pub features: Vec<Feature>,
@@ -75,6 +81,12 @@ pub struct Feature {
     /// Provisional in the specification (see [`FieldDef::provisional`]).
     #[serde(default)]
     pub provisional: bool,
+    /// chip marks it provisional in its Matter 1.4.2 data although the
+    /// codegen model does not (`xtask/scripts/dump-model/chip-1.4.2.json`,
+    /// written by `scripts/chip-facts.py`): drives a rustdoc note. Absent in
+    /// the JSON means `false`.
+    #[serde(default, rename = "chipProvisional")]
+    pub chip_provisional: bool,
     /// Deprecated in its 1.4.2 conformance (see [`Supplemented`]).
     #[serde(default)]
     pub deprecated: bool,
@@ -134,6 +146,12 @@ pub struct Attribute {
     /// Provisional in the specification (see [`FieldDef::provisional`]).
     #[serde(default)]
     pub provisional: bool,
+    /// chip marks it provisional in its Matter 1.4.2 data although the
+    /// codegen model does not (`xtask/scripts/dump-model/chip-1.4.2.json`,
+    /// written by `scripts/chip-facts.py`): drives a rustdoc note. Absent in
+    /// the JSON means `false`.
+    #[serde(default, rename = "chipProvisional")]
+    pub chip_provisional: bool,
     /// Deprecated in its 1.4.2 conformance (see [`Supplemented`]).
     #[serde(default)]
     pub deprecated: bool,
@@ -160,6 +178,12 @@ pub struct CommandDef {
     /// Provisional in the specification (see [`FieldDef::provisional`]).
     #[serde(default)]
     pub provisional: bool,
+    /// chip marks it provisional in its Matter 1.4.2 data although the
+    /// codegen model does not (`xtask/scripts/dump-model/chip-1.4.2.json`,
+    /// written by `scripts/chip-facts.py`): drives a rustdoc note. Absent in
+    /// the JSON means `false`.
+    #[serde(default, rename = "chipProvisional")]
+    pub chip_provisional: bool,
     /// Deprecated in its 1.4.2 conformance (see [`Supplemented`]).
     #[serde(default)]
     pub deprecated: bool,
@@ -183,6 +207,12 @@ pub struct EventDef {
     /// Provisional in the specification (see [`FieldDef::provisional`]).
     #[serde(default)]
     pub provisional: bool,
+    /// chip marks it provisional in its Matter 1.4.2 data although the
+    /// codegen model does not (`xtask/scripts/dump-model/chip-1.4.2.json`,
+    /// written by `scripts/chip-facts.py`): drives a rustdoc note. Absent in
+    /// the JSON means `false`.
+    #[serde(default, rename = "chipProvisional")]
+    pub chip_provisional: bool,
 }
 
 /// A struct or command field.
@@ -229,6 +259,12 @@ pub struct FieldDef {
     /// Absent in the JSON means `false`.
     #[serde(default)]
     pub provisional: bool,
+    /// chip marks it provisional in its Matter 1.4.2 data although the
+    /// codegen model does not (`xtask/scripts/dump-model/chip-1.4.2.json`,
+    /// written by `scripts/chip-facts.py`): drives a rustdoc note. Absent in
+    /// the JSON means `false`.
+    #[serde(default, rename = "chipProvisional")]
+    pub chip_provisional: bool,
     /// The field's choice group (conformance `O.a`, `O.a+`, `[F].b+`): how
     /// many fields of the group a sender includes. The generated encoders do
     /// not enforce it, so it drives a generated rustdoc line.
@@ -338,6 +374,12 @@ pub struct EnumValue {
     pub value: u32,
     /// `PascalCase` member name.
     pub name: String,
+    /// chip marks it provisional in its Matter 1.4.2 data although the
+    /// codegen model does not (`xtask/scripts/dump-model/chip-1.4.2.json`,
+    /// written by `scripts/chip-facts.py`): drives a rustdoc note. Absent in
+    /// the JSON means `false`.
+    #[serde(default, rename = "chipProvisional")]
+    pub chip_provisional: bool,
 }
 
 /// A bitmap bit.
@@ -347,6 +389,12 @@ pub struct BitDef {
     pub bit: Option<u8>,
     /// `PascalCase` bit name.
     pub name: String,
+    /// chip marks it provisional in its Matter 1.4.2 data although the
+    /// codegen model does not (`xtask/scripts/dump-model/chip-1.4.2.json`,
+    /// written by `scripts/chip-facts.py`): drives a rustdoc note. Absent in
+    /// the JSON means `false`.
+    #[serde(default, rename = "chipProvisional")]
+    pub chip_provisional: bool,
 }
 
 /// One `meta.relaxed` entry: a field the dump made optional although the model

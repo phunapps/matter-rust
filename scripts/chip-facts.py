@@ -13,6 +13,21 @@ Facts:
                Emitted as CLUSTER_REVISION. A generated cluster that is not
                in that XML stops the script unless REVISIONS_BY_HAND below
                names its revision: no silent fallback to the model's.
+  provisional  generated elements chip marks provisional that the codegen
+               model does not (clusters.json `provisional`), each with where
+               chip marks it. Sources, all of chip's 1.4.2:
+                 data_model/1.4.2 XML at the working tree, and at the tag
+                 v1.4.2.0 (`git show`): <provisionalConform/> on a feature,
+                 attribute, command, event, field, enum item or bitfield,
+                 directly or as the first branch of <otherwiseConform>;
+                 controller-clusters.matter at v1.4.2.0: `provisional` on a
+                 cluster, attribute or event.
+               An element of a cluster that is provisional as a whole (in the
+               model or in chip) is not listed on its own.
+
+Element keys use clusters.json names: `<Cluster>` for a whole cluster, else
+`<Cluster>.<Kind>.<Name>` with Kind one of Feature, Attribute, Command,
+Event, Field (`<Owner>.<Field>`) or Value (`<Enum or bitmap>.<Member>`).
 
 Recovering from a stale file (a cluster added to or removed from the dump's
 ALLOWLIST, or a model upgrade that renames, drops or newly marks an element):
@@ -44,11 +59,12 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL = os.path.join(REPO_ROOT, "xtask", "model", "clusters.json")
 OUT = os.path.join(REPO_ROOT, "xtask", "scripts", "dump-model", "chip-1.4.2.json")
 XML_DIR = "data_model/1.4.2/clusters"
+CODEGEN = "src/controller/data_model/controller-clusters.matter"
 RELEASE = "v1.4.2.0"
 # Revisions decided by hand for a generated cluster chip's 1.4.2 XML does not
 # have (a Matter 1.5-only cluster): name -> (revision, why). Empty today.
 REVISIONS_BY_HAND = {}
-FACTS = ("revisions",)
+FACTS = ("revisions", "provisional")
 
 
 def die(msg):
@@ -63,6 +79,10 @@ def git(chip, *args):
     return r.stdout
 
 
+def norm(name):
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
+
 def num(text, where):
     try:
         return int(text, 0)
@@ -70,50 +90,233 @@ def num(text, where):
         die(f"{where}: not an integer: {text!r}")
 
 
-def worktree_roots(chip):
-    """cluster id -> (file name, <cluster> root) for chip's 1.4.2 XML."""
-    d = os.path.join(chip, XML_DIR)
-    if not os.path.isdir(d):
-        die(f"no {XML_DIR} under {chip} (is it a connectedhomeip checkout?)")
-    out = {}
-    for fname in sorted(os.listdir(d)):
-        if not fname.endswith(".xml"):
-            continue
+def provisional(el):
+    """True when el's conformance is <provisionalConform/>, directly or as the
+    first branch of <otherwiseConform> (the rule chip-xml-conformance.py uses)."""
+    for child in el:
+        if child.tag == "provisionalConform":
+            return True
+        if child.tag == "otherwiseConform":
+            branches = list(child)
+            return bool(branches) and branches[0].tag == "provisionalConform"
+    return False
+
+
+def xml_roots(read_files):
+    """[(file name, <cluster> root)] for every cluster file of one ref."""
+    roots = []
+    for name, text in read_files():
         try:
-            root = ET.parse(os.path.join(d, fname)).getroot()
+            root = ET.fromstring(text)
         except ET.ParseError as e:
-            die(f"cannot parse {fname}: {e}")
-        ids = root.find("clusterIds") if root.tag == "cluster" else None
-        for cid in ids.findall("clusterId") if ids is not None else []:
-            # One file can carry several ids (ConcentrationMeasurement.xml):
-            # map by clusterId, never by file name.
+            die(f"cannot parse {name}: {e}")
+        if root.tag == "cluster":
+            roots.append((name, root))
+    if not roots:
+        die("no cluster XML found")
+    return roots
+
+
+def by_cluster_id(roots):
+    """cluster id -> (file name, root, [base roots, nearest first])."""
+    by_name = {re.sub(r" Cluster$", "", r.get("name") or ""): r for _, r in roots}
+    out = {}
+    for fname, root in roots:
+        ids = root.find("clusterIds")
+        if ids is None:
+            continue
+        chain, cur = [], root
+        while True:
+            cls = cur.find("classification")
+            base = cls.get("baseCluster") if cls is not None else None
+            if not base:
+                break
+            if base not in by_name or len(chain) > 4:
+                die(f"{fname}: baseCluster {base!r} not found")
+            cur = by_name[base]
+            chain.append(cur)
+        for cid in ids.findall("clusterId"):
             if cid.get("id") is not None:
-                out[num(cid.get("id"), f"{fname} clusterId")] = (fname, root)
-    if not out:
-        die(f"no <clusterId> under {d}")
+                out[num(cid.get("id"), f"{fname} clusterId")] = (fname, root, chain)
     return out
+
+
+def xml_marks(root, chain):
+    """Provisional marks of one XML cluster and its bases, as a set of
+    (kind, key): ("Feature", code), ("Attribute", id), ("Command", norm name),
+    ("Event", id), ("Field", (norm owner, id)), ("Value", (norm owner, value)).
+    A derived cluster's element overrides its base's (the nearest wins)."""
+    marks = {}
+
+    def put(key, el):
+        # An override without a conformance of its own keeps the base's.
+        if key not in marks or any(ch.tag.endswith("Conform") for ch in el):
+            marks[key] = provisional(el)
+
+    for r in [*reversed(chain), root]:
+        feats = r.find("features")
+        for f in feats.findall("feature") if feats is not None else []:
+            if f.get("code"):
+                put(("Feature", f.get("code")), f)
+        attrs = r.find("attributes")
+        for a in attrs.findall("attribute") if attrs is not None else []:
+            if a.get("id") is not None:
+                put(("Attribute", num(a.get("id"), "attribute id")), a)
+        for kind, tag in (("Command", "command"), ("Event", "event")):
+            group = r.find(f"{tag}s")
+            for e in group.findall(tag) if group is not None else []:
+                key = (kind, norm(e.get("name")) if kind == "Command"
+                       else num(e.get("id"), "event id") if e.get("id") is not None else None)
+                if key[1] is None:
+                    continue
+                put(key, e)
+                for fl in e.findall("field"):
+                    if fl.get("id") is not None:
+                        put(("Field", (norm(e.get("name")), num(fl.get("id"), "field id"))), fl)
+        dts = r.find("dataTypes")
+        for d in list(dts) if dts is not None else []:
+            owner = norm(d.get("name"))
+            for fl in d.findall("field"):
+                if fl.get("id") is not None:
+                    put(("Field", (owner, num(fl.get("id"), "field id"))), fl)
+            for it in d.findall("item"):
+                if it.get("value") is not None:
+                    put(("Value", (owner, num(it.get("value"), "item value"))), it)
+            for b in d.findall("bitfield"):
+                if b.get("bit") is not None:
+                    put(("Value", (owner, num(b.get("bit"), "bitfield bit"))), b)
+    return {k for k, v in marks.items() if v}
+
+
+def codegen_marks(text):
+    """controller-clusters.matter: cluster id -> set of (kind, key) for
+    `provisional` clusters ("Cluster", None), attributes and events (by id)."""
+    out, cur = {}, None
+    for line in text.splitlines():
+        m = re.match(r"^(provisional )?(?:client |server )?cluster \w+ = (\d+) \{", line)
+        if m:
+            cur = int(m.group(2))
+            out.setdefault(cur, set())
+            if m.group(1):
+                out[cur].add(("Cluster", None))
+            continue
+        if cur is None or not re.match(r"^\s+provisional ", line):
+            continue
+        m = re.match(r"^\s+provisional .*\battribute\b.*= (\d+);", line)
+        if m:
+            out[cur].add(("Attribute", int(m.group(1))))
+            continue
+        m = re.match(r"^\s+provisional .*\bevent\b.*= (\d+) \{", line)
+        if m:
+            out[cur].add(("Event", int(m.group(1))))
+            continue
+        die(f"{CODEGEN}: a provisional line this script does not read: {line.strip()}")
+    return out
+
+
+def model_element(c, kind, key):
+    """(clusters.json element key, model-provisional) for a chip mark, or None
+    when the model has no such element."""
+    name = c["name"]
+    if kind == "Cluster":
+        return name, bool(c.get("provisional"))
+    if kind == "Feature":
+        for f in c.get("features", []):
+            if f["code"] == key:
+                return f"{name}.Feature.{f['code']}", bool(f.get("provisional"))
+    if kind == "Attribute":
+        for a in c["attributes"]:
+            if a["id"] == key:
+                return f"{name}.Attribute.{a['name']}", bool(a.get("provisional"))
+    if kind == "Command":
+        for cmd in c["commands"]:
+            if norm(cmd["name"]) == key:
+                return f"{name}.Command.{cmd['name']}", bool(cmd.get("provisional"))
+    if kind == "Event":
+        for e in c.get("events", []):
+            if e["id"] == key:
+                return f"{name}.Event.{e['name']}", bool(e.get("provisional"))
+    if kind == "Field":
+        owner, fid = key
+        owners = [*c["commands"], *c.get("events", []), *c["datatypes"]]
+        for o in owners:
+            if norm(o["name"]) == owner:
+                for f in o.get("fields") or []:
+                    if f["id"] == fid:
+                        return f"{name}.Field.{o['name']}.{f['name']}", bool(f.get("provisional"))
+    if kind == "Value":
+        owner, value = key
+        for d in c["datatypes"]:
+            if norm(d["name"]) != owner:
+                continue
+            for v in d.get("values") or []:
+                if v["value"] == value:
+                    return f"{name}.Value.{d['name']}.{v['name']}", False
+            for b in d.get("bits") or []:
+                if b.get("bit") == value:
+                    return f"{name}.Value.{d['name']}.{b['name']}", False
+    return None
 
 
 def compute(chip, model):
     head = git(chip, "rev-parse", "HEAD").strip()
     release = git(chip, "rev-parse", f"{RELEASE}^{{commit}}").strip()
-    worktree = worktree_roots(chip)
-    revisions = {}
+
+    def worktree_files():
+        d = os.path.join(chip, XML_DIR)
+        if not os.path.isdir(d):
+            die(f"no {XML_DIR} under {chip} (is it a connectedhomeip checkout?)")
+        for f in sorted(os.listdir(d)):
+            if f.endswith(".xml"):
+                with open(os.path.join(d, f), encoding="utf-8") as fh:
+                    yield f, fh.read()
+
+    def release_files():
+        for path in git(chip, "ls-tree", "--name-only", f"{RELEASE}:{XML_DIR}").split():
+            if path.endswith(".xml"):
+                yield path, git(chip, "show", f"{RELEASE}:{XML_DIR}/{path}")
+
+    worktree = by_cluster_id(xml_roots(worktree_files))
+    tagged = by_cluster_id(xml_roots(release_files))
+    codegen = codegen_marks(git(chip, "show", f"{RELEASE}:{CODEGEN}"))
+
+    revisions, marks = {}, {}
     for c in model["clusters"]:
         hit = worktree.get(c["id"])
         if hit is not None:
-            fname, root = hit
+            fname, root, _ = hit
             revisions[c["name"]] = num(root.get("revision"), f"{fname} revision")
         elif c["name"] in REVISIONS_BY_HAND:
             revisions[c["name"]] = REVISIONS_BY_HAND[c["name"]][0]
         else:
             die(f"{c['name']} (cluster id {c['id']:#06x}) is not in chip's {XML_DIR}: "
                 "add its revision, and why, to REVISIONS_BY_HAND in this script")
+
+        sources = {}
+        for label, table in ((XML_DIR, worktree), (f"{XML_DIR} at {RELEASE}", tagged)):
+            if c["id"] in table:
+                _, r, chain = table[c["id"]]
+                for m in xml_marks(r, chain):
+                    sources.setdefault(m, []).append(label)
+        for m in codegen.get(c["id"], set()):
+            sources.setdefault(m, []).append(f"controller-clusters.matter at {RELEASE}")
+        whole = ("Cluster", None) in sources or c.get("provisional")
+        for (kind, key), where in sources.items():
+            if whole and kind != "Cluster":
+                continue
+            found = model_element(c, kind, key)
+            if found is None:
+                continue  # not generated (a 1.4 element the model dropped, or excluded)
+            element, model_provisional = found
+            if not model_provisional:
+                marks[element] = sorted(set(where))
     return {
         "comment": "Written by scripts/chip-facts.py from chip's Matter 1.4.2 data; do not edit "
-                   "by hand. The dump reads it: `revisions` become CLUSTER_REVISION.",
+                   "by hand. The dump reads it: `revisions` become CLUSTER_REVISION, and each "
+                   "`provisional` element gets a rustdoc note.",
         "chip": {"worktree": head, RELEASE: release},
         "revisions": dict(sorted(revisions.items())),
+        "provisional": [{"element": k, "sources": v} for k, v in sorted(marks.items())],
     }
 
 
@@ -132,7 +335,8 @@ def main():
     if args.write:
         with open(OUT, "w", encoding="utf-8") as fh:
             fh.write(json.dumps(facts, indent=2) + "\n")
-        print(f"chip-facts: wrote {len(facts['revisions'])} revisions")
+        print(f"chip-facts: wrote {len(facts['revisions'])} revisions, "
+              f"{len(facts['provisional'])} provisional elements")
         return 0
     try:
         with open(OUT, encoding="utf-8") as fh:
@@ -143,7 +347,8 @@ def main():
     if drift:
         print(f"chip-facts: {', '.join(drift)} differ from chip; review, then run with --write")
         return 1
-    print(f"chip-facts: {len(facts['revisions'])} revisions match chip")
+    print(f"chip-facts: {len(facts['revisions'])} revisions, "
+          f"{len(facts['provisional'])} provisional elements, match chip")
     return 0
 
 
