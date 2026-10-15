@@ -412,7 +412,7 @@ proptest! {
                 .iter()
                 .map(|&(time, soc, energy)| ChargingTargetStruct {
                     target_time_minutes_past_midnight: time,
-                    target_so_c: soc,
+                    target_soc: soc,
                     added_energy: energy,
                 })
                 .collect(),

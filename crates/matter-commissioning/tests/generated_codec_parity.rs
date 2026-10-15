@@ -76,7 +76,7 @@ fn ids_agree() {
             hand_nc::attribute_id::CONNECT_MAX_TIME_SECONDS
         ],
         [
-            gen_nc::command_id::ADD_OR_UPDATE_WI_FI_NETWORK,
+            gen_nc::command_id::ADD_OR_UPDATE_WIFI_NETWORK,
             gen_nc::command_id::ADD_OR_UPDATE_THREAD_NETWORK,
             gen_nc::command_id::CONNECT_NETWORK,
             gen_nc::command_id::NETWORK_CONFIG_RESPONSE,
@@ -130,7 +130,7 @@ fn network_commissioning_requests_encode_identically() {
     let credentials = b"correct horse".to_vec();
     assert_eq!(
         hand_nc::encode_add_or_update_wifi_network(&ssid, &credentials, 3),
-        gen_nc::encode_add_or_update_wi_fi_network(&ssid, &credentials, Some(3))
+        gen_nc::encode_add_or_update_wifi_network(&ssid, &credentials, Some(3))
     );
     let dataset = vec![0x0e, 0x08, 0, 0, 0, 0, 0, 1, 0, 0];
     assert_eq!(
@@ -157,7 +157,7 @@ fn network_commissioning_requests_encode_identically_across_the_flows_inputs() {
         for credentials in [Vec::new(), b"correct horse".to_vec()] {
             assert!(
                 hand_nc::encode_add_or_update_wifi_network(&ssid, &credentials, breadcrumb)
-                    == gen_nc::encode_add_or_update_wi_fi_network(
+                    == gen_nc::encode_add_or_update_wifi_network(
                         &ssid,
                         &credentials,
                         Some(breadcrumb)

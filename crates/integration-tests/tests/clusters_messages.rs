@@ -131,9 +131,9 @@ async fn messages(node: &Node) -> (Vec<msg::MessageStruct>, Vec<Vec<u8>>) {
         .unwrap();
     (
         msg::decode_messages(attribute_tlv(&attrs, msg::attribute_id::MESSAGES)).unwrap(),
-        msg::decode_active_message_i_ds(attribute_tlv(
+        msg::decode_active_message_ids(attribute_tlv(
             &attrs,
-            msg::attribute_id::ACTIVE_MESSAGE_I_DS,
+            msg::attribute_id::ACTIVE_MESSAGE_IDS,
         ))
         .unwrap(),
     )
@@ -191,7 +191,7 @@ async fn messages_present_and_cancel_round_trip() {
     // decoded by `messages()` below.
     let attrs = decode_every_attribute(&node, EP, msg::CLUSTER_ID, |id, t| match id {
         msg::attribute_id::MESSAGES => ok(msg::decode_messages(t)),
-        msg::attribute_id::ACTIVE_MESSAGE_I_DS => ok(msg::decode_active_message_i_ds(t)),
+        msg::attribute_id::ACTIVE_MESSAGE_IDS => ok(msg::decode_active_message_ids(t)),
         other => newer_than_codegen("Messages", other),
     })
     .await;

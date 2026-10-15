@@ -4122,7 +4122,7 @@ fn energy_evse_commands_encode_and_targets_decode() {
                 | TargetDayOfWeekBitmap::FRIDAY,
             charging_targets: vec![ChargingTargetStruct {
                 target_time_minutes_past_midnight: 450,
-                target_so_c: Some(80),
+                target_soc: Some(80),
                 added_energy: None,
             }],
         },
@@ -4130,7 +4130,7 @@ fn energy_evse_commands_encode_and_targets_decode() {
             day_of_week_for_sequence: TargetDayOfWeekBitmap::SATURDAY,
             charging_targets: vec![ChargingTargetStruct {
                 target_time_minutes_past_midnight: 600,
-                target_so_c: None,
+                target_soc: None,
                 added_energy: Some(25_000_000),
             }],
         },
@@ -4344,7 +4344,7 @@ fn messages_list_decodes_chip_and_spec_shapes() {
 #[test]
 fn messages_ids_and_events_decode() {
     use clusters::messages::{
-        decode_active_message_i_ds, event_id, FutureMessagePreferenceEnum, MessageCompleteEvent,
+        decode_active_message_ids, event_id, FutureMessagePreferenceEnum, MessageCompleteEvent,
         MessagePresentedEvent, MessageQueuedEvent,
     };
     let ids = {
@@ -4357,7 +4357,7 @@ fn messages_ids_and_events_decode() {
         buf
     };
     assert_eq!(
-        decode_active_message_i_ds(&ids).unwrap(),
+        decode_active_message_ids(&ids).unwrap(),
         [vec![0x11; 16], vec![0x22; 16]]
     );
     // With FabricIndex (the spec) and without it (chip's generated events).
@@ -4648,8 +4648,8 @@ fn software_diagnostics_attributes_and_fault_event_decode() {
 
 #[test]
 fn wifi_network_diagnostics_attributes_and_events_decode() {
-    use clusters::wi_fi_network_diagnostics::{
-        decode_bssid, decode_rssi, decode_security_type, decode_wi_fi_version, event_id,
+    use clusters::wifi_network_diagnostics::{
+        decode_bssid, decode_rssi, decode_security_type, decode_wifi_version, event_id,
         AssociationFailureCauseEnum, AssociationFailureEvent, ConnectionStatusEnum,
         ConnectionStatusEvent, DisconnectionEvent, Feature, SecurityTypeEnum, WiFiVersionEnum,
     };
@@ -4666,7 +4666,7 @@ fn wifi_network_diagnostics_attributes_and_events_decode() {
         Nullable::Value(SecurityTypeEnum::None)
     );
     assert_eq!(
-        decode_wi_fi_version(&uint_attr(5)).unwrap(),
+        decode_wifi_version(&uint_attr(5)).unwrap(),
         Nullable::Value(WiFiVersionEnum::Ax)
     );
     assert_eq!(decode_rssi(&int_attr(-61)).unwrap(), Nullable::Value(-61));
@@ -5047,7 +5047,7 @@ fn general_commissioning_attributes_and_responses_decode() {
 fn network_commissioning_attributes_requests_and_responses_decode() {
     use clusters::network_commissioning::{
         decode_last_connect_error_value, decode_last_network_id, decode_last_networking_status,
-        decode_networks, decode_supported_thread_features, decode_supported_wi_fi_bands,
+        decode_networks, decode_supported_thread_features, decode_supported_wifi_bands,
         encode_scan_networks, ConnectNetworkResponse, Feature, NetworkCommissioningStatusEnum,
         ScanNetworksResponse, ThreadCapabilitiesBitmap, WiFiBandEnum, WiFiSecurityBitmap,
     };
@@ -5082,7 +5082,7 @@ fn network_commissioning_attributes_requests_and_responses_decode() {
         Nullable::Value(-2)
     );
     assert_eq!(
-        decode_supported_wi_fi_bands(&uint_array_attr(&[0, 2])).unwrap(),
+        decode_supported_wifi_bands(&uint_array_attr(&[0, 2])).unwrap(),
         [WiFiBandEnum::_2G4, WiFiBandEnum::_5G]
     );
     assert_eq!(
@@ -5118,9 +5118,9 @@ fn network_commissioning_attributes_requests_and_responses_decode() {
         w.end_container().unwrap();
     }))
     .unwrap();
-    let wifi = &scan.wi_fi_scan_results.as_ref().unwrap()[0];
+    let wifi = &scan.wifi_scan_results.as_ref().unwrap()[0];
     assert_eq!(
-        (wifi.security, wifi.channel, wifi.wi_fi_band, wifi.rssi),
+        (wifi.security, wifi.channel, wifi.wifi_band, wifi.rssi),
         (
             Some(WiFiSecurityBitmap::WPA2_PERSONAL),
             Some(36),
@@ -5325,11 +5325,11 @@ fn ecosystem_device_directory_decodes_own_and_other_fabric_entries() {
     let types = own.device_types.as_ref().unwrap();
     assert_eq!((types[0].device_type, types[0].revision), (0x0100, 3));
     assert_eq!(
-        own.unique_location_i_ds.as_deref(),
+        own.unique_location_ids.as_deref(),
         Some(&["kitchen".to_string()][..])
     );
     assert_eq!(
-        own.unique_location_i_ds_last_edit,
+        own.unique_location_ids_last_edit,
         Some(1_700_000_000_000_001)
     );
     assert_eq!(own.fabric_index, 1);
@@ -5348,8 +5348,8 @@ fn ecosystem_device_directory_decodes_own_and_other_fabric_entries() {
     assert_eq!(
         (
             &other.device_types,
-            &other.unique_location_i_ds,
-            other.unique_location_i_ds_last_edit
+            &other.unique_location_ids,
+            other.unique_location_ids_last_edit
         ),
         (&None, &None, None)
     );
@@ -5488,7 +5488,7 @@ fn commissioner_control_requests_response_and_event_decode() {
 #[test]
 #[allow(clippy::manual_assert_eq)] // assert_eq! would print secret bytes on failure.
 fn wifi_network_management_attributes_and_passphrase_response_decode() {
-    use clusters::wi_fi_network_management::{
+    use clusters::wifi_network_management::{
         command_id, decode_passphrase_surrogate, decode_ssid, encode_network_passphrase_request,
         NetworkPassphraseResponse,
     };
@@ -5665,7 +5665,7 @@ fn secret_fields_are_redacted_in_debug_output() {
     use clusters::group_key_management::{GroupKeySecurityPolicyEnum, GroupKeySetStruct};
     use clusters::thread_border_router_management::DatasetResponse;
     use clusters::thread_network_directory::OperationalDatasetResponse;
-    use clusters::wi_fi_network_management::NetworkPassphraseResponse;
+    use clusters::wifi_network_management::NetworkPassphraseResponse;
 
     // WiFiNetworkManagement: the passphrase. The whole rendering is pinned:
     // a one-field struct prints nothing else.

@@ -113,6 +113,6 @@ pub mod wake_on_lan;
 pub mod water_heater_management;
 pub mod water_heater_mode;
 pub mod water_tank_level_monitoring;
-pub mod wi_fi_network_diagnostics;
-pub mod wi_fi_network_management;
+pub mod wifi_network_diagnostics;
+pub mod wifi_network_management;
 pub mod window_covering;

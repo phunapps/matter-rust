@@ -32,7 +32,7 @@ pub mod attribute_id {
     /// `Messages`.
     pub const MESSAGES: u32 = 0x0000;
     /// `ActiveMessageIDs`.
-    pub const ACTIVE_MESSAGE_I_DS: u32 = 0x0001;
+    pub const ACTIVE_MESSAGE_IDS: u32 = 0x0001;
 }
 
 /// Event IDs.
@@ -461,7 +461,7 @@ pub fn decode_messages(tlv: &[u8]) -> Result<Vec<MessageStruct>, ClusterError> {
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
-pub fn decode_active_message_i_ds(tlv: &[u8]) -> Result<Vec<Vec<u8>>, ClusterError> {
+pub fn decode_active_message_ids(tlv: &[u8]) -> Result<Vec<Vec<u8>>, ClusterError> {
     let mut r = TlvReader::new(tlv);
     match r.next()? {
         Some(Element::ContainerStart {
@@ -547,14 +547,14 @@ pub fn encode_present_messages_request(
 /// Encode the `CancelMessagesRequest` command request payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
-pub fn encode_cancel_messages_request(message_i_ds: &Vec<Vec<u8>>) -> Vec<u8> {
+pub fn encode_cancel_messages_request(message_ids: &Vec<Vec<u8>>) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");
     w.start_array(Tag::Context(0))
         .expect("infallible: vec writer");
-    for el in message_i_ds.iter() {
+    for el in message_ids.iter() {
         w.put_bytes(Tag::Anonymous, el)
             .expect("infallible: vec writer");
     }

@@ -215,7 +215,7 @@ async fn energy_evse_decodes_every_attribute_and_writes_its_settings() {
         a::NEXT_CHARGE_START_TIME => ok(evse::decode_next_charge_start_time(t)),
         a::NEXT_CHARGE_TARGET_TIME => ok(evse::decode_next_charge_target_time(t)),
         a::NEXT_CHARGE_REQUIRED_ENERGY => ok(evse::decode_next_charge_required_energy(t)),
-        a::NEXT_CHARGE_TARGET_SO_C => ok(evse::decode_next_charge_target_so_c(t)),
+        a::NEXT_CHARGE_TARGET_SOC => ok(evse::decode_next_charge_target_soc(t)),
         a::APPROXIMATE_EV_EFFICIENCY => ok(evse::decode_approximate_ev_efficiency(t)),
         a::STATE_OF_CHARGE => ok(evse::decode_state_of_charge(t)),
         a::BATTERY_CAPACITY => ok(evse::decode_battery_capacity(t)),
@@ -519,12 +519,12 @@ async fn energy_evse_targets_round_trip_and_clear() {
         charging_targets: vec![
             ChargingTargetStruct {
                 target_time_minutes_past_midnight: 450,
-                target_so_c: Some(80),
+                target_soc: Some(80),
                 added_energy: None,
             },
             ChargingTargetStruct {
                 target_time_minutes_past_midnight: 1200,
-                target_so_c: Some(100),
+                target_soc: Some(100),
                 added_energy: Some(25_000_000),
             },
         ],
@@ -545,7 +545,7 @@ async fn energy_evse_targets_round_trip_and_clear() {
         day_of_week_for_sequence: D::SATURDAY,
         charging_targets: vec![ChargingTargetStruct {
             target_time_minutes_past_midnight: 600,
-            target_so_c: None,
+            target_soc: None,
             added_energy: Some(10_000_000),
         }],
     }];

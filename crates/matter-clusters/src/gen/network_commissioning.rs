@@ -26,7 +26,7 @@ pub mod command_id {
     /// `ScanNetworksResponse` (response).
     pub const SCAN_NETWORKS_RESPONSE: u32 = 0x01;
     /// `AddOrUpdateWiFiNetwork` (request).
-    pub const ADD_OR_UPDATE_WI_FI_NETWORK: u32 = 0x02;
+    pub const ADD_OR_UPDATE_WIFI_NETWORK: u32 = 0x02;
     /// `AddOrUpdateThreadNetwork` (request).
     pub const ADD_OR_UPDATE_THREAD_NETWORK: u32 = 0x03;
     /// `RemoveNetwork` (request).
@@ -60,7 +60,7 @@ pub mod attribute_id {
     /// `LastConnectErrorValue`.
     pub const LAST_CONNECT_ERROR_VALUE: u32 = 0x0007;
     /// `SupportedWiFiBands`.
-    pub const SUPPORTED_WI_FI_BANDS: u32 = 0x0008;
+    pub const SUPPORTED_WIFI_BANDS: u32 = 0x0008;
     /// `SupportedThreadFeatures`.
     pub const SUPPORTED_THREAD_FEATURES: u32 = 0x0009;
     /// `ThreadVersion`.
@@ -267,7 +267,7 @@ pub struct WiFiInterfaceScanResultStruct {
     /// Field Channel (tag 3).
     pub channel: Option<u16>,
     /// Field WiFiBand (tag 4).
-    pub wi_fi_band: Option<WiFiBandEnum>,
+    pub wifi_band: Option<WiFiBandEnum>,
     /// Field Rssi (tag 5).
     pub rssi: Option<i8>,
 }
@@ -456,7 +456,7 @@ impl WiFiInterfaceScanResultStruct {
         let mut f_ssid: Option<Vec<u8>> = None;
         let mut f_bssid: Option<Vec<u8>> = None;
         let mut f_channel: Option<u16> = None;
-        let mut f_wi_fi_band: Option<WiFiBandEnum> = None;
+        let mut f_wifi_band: Option<WiFiBandEnum> = None;
         let mut f_rssi: Option<i8> = None;
         loop {
             match r.next()? {
@@ -488,7 +488,7 @@ impl WiFiInterfaceScanResultStruct {
                     tag: Tag::Context(4),
                     value: Value::Uint(v),
                 }) => {
-                    f_wi_fi_band = Some(WiFiBandEnum::from_raw(
+                    f_wifi_band = Some(WiFiBandEnum::from_raw(
                         u8::try_from(v).map_err(|_| ClusterError::InvalidLength("WiFiBand"))?,
                     ))
                 }
@@ -508,7 +508,7 @@ impl WiFiInterfaceScanResultStruct {
             ssid: f_ssid,
             bssid: f_bssid,
             channel: f_channel,
-            wi_fi_band: f_wi_fi_band,
+            wifi_band: f_wifi_band,
             rssi: f_rssi,
         })
     }
@@ -718,7 +718,7 @@ pub fn decode_last_connect_error_value(tlv: &[u8]) -> Result<Nullable<i32>, Clus
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
-pub fn decode_supported_wi_fi_bands(tlv: &[u8]) -> Result<Vec<WiFiBandEnum>, ClusterError> {
+pub fn decode_supported_wifi_bands(tlv: &[u8]) -> Result<Vec<WiFiBandEnum>, ClusterError> {
     let mut r = TlvReader::new(tlv);
     match r.next()? {
         Some(Element::ContainerStart {
@@ -824,7 +824,7 @@ pub struct ScanNetworksResponse {
     /// Field DebugText (tag 1).
     pub debug_text: Option<String>,
     /// Field WiFiScanResults (tag 2).
-    pub wi_fi_scan_results: Option<Vec<WiFiInterfaceScanResultStruct>>,
+    pub wifi_scan_results: Option<Vec<WiFiInterfaceScanResultStruct>>,
     /// Field ThreadScanResults (tag 3).
     pub thread_scan_results: Option<Vec<ThreadInterfaceScanResultStruct>>,
 }
@@ -838,7 +838,7 @@ impl ScanNetworksResponse {
     pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
         let mut f_networking_status: Option<NetworkCommissioningStatusEnum> = None;
         let mut f_debug_text: Option<String> = None;
-        let mut f_wi_fi_scan_results: Option<Vec<WiFiInterfaceScanResultStruct>> = None;
+        let mut f_wifi_scan_results: Option<Vec<WiFiInterfaceScanResultStruct>> = None;
         let mut f_thread_scan_results: Option<Vec<ThreadInterfaceScanResultStruct>> = None;
         loop {
             match r.next()? {
@@ -879,7 +879,7 @@ impl ScanNetworksResponse {
                             Some(_) => {} // skip unknown scalar
                         }
                     }
-                    f_wi_fi_scan_results = Some(out);
+                    f_wifi_scan_results = Some(out);
                 }
                 Some(Element::ContainerStart {
                     tag: Tag::Context(3),
@@ -915,7 +915,7 @@ impl ScanNetworksResponse {
             networking_status: f_networking_status
                 .ok_or(ClusterError::MissingField("NetworkingStatus"))?,
             debug_text: f_debug_text,
-            wi_fi_scan_results: f_wi_fi_scan_results,
+            wifi_scan_results: f_wifi_scan_results,
             thread_scan_results: f_thread_scan_results,
         })
     }
@@ -943,7 +943,7 @@ impl ScanNetworksResponse {
 /// Encode the `AddOrUpdateWiFiNetwork` command request payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
-pub fn encode_add_or_update_wi_fi_network(
+pub fn encode_add_or_update_wifi_network(
     ssid: &Vec<u8>,
     credentials: &Vec<u8>,
     breadcrumb: Option<u64>,

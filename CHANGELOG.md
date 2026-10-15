@@ -1310,10 +1310,10 @@ The codegen now generates only what a client can use:
   `ApproximateEvEfficiency`, encoders for all seven requests, and
   `GetTargetsResponse`. Every request is a timed command; `Node::invoke`
   retries it as a timed interaction when the device asks. Each
-  `ChargingTargetStruct` should carry at least one of `target_so_c` and
+  `ChargingTargetStruct` should carry at least one of `target_soc` and
   `added_energy` (its rustdoc says so; the encoder does not check it).
-  chip's server also checks `target_so_c` against the SOC feature: with
-  SOC, `target_so_c` is required; without it, it may only be absent or 100.
+  chip's server also checks `target_soc` against the SOC feature: with
+  SOC, `target_soc` is required; without it, it may only be absent or 100.
 - **Messages (0x0097)**, with its three events: `Messages`,
   `ActiveMessageIDs`, `encode_present_messages_request` and
   `encode_cancel_messages_request`, both pinned against matter.js byte
@@ -1576,6 +1576,27 @@ matter-controller 0.18.2).
   ContentControl `ResetPinResponse` (the new content-control PIN).
   Each secret field's rustdoc says so. Values are untouched; only the `{:?}`
   rendering differs (it was never a stable format).
+
+### matter-clusters: Changed (breaking) — generated names keep acronyms whole
+
+The codegen no longer splits `IDs`, `IPv`, `SoC`, `WiFi` and `V2X` in the
+middle when it turns a model name into a Rust name. Names that 0.5.0 had:
+
+| 0.5.0 | 0.6.0 |
+|---|---|
+| `general_diagnostics::NetworkInterface::off_premise_services_reachable_i_pv4` | `off_premise_services_reachable_ipv4` |
+| `general_diagnostics::NetworkInterface::off_premise_services_reachable_i_pv6` | `off_premise_services_reachable_ipv6` |
+| `general_diagnostics::NetworkInterface::i_pv4_addresses` | `ipv4_addresses` |
+| `general_diagnostics::NetworkInterface::i_pv6_addresses` | `ipv6_addresses` |
+| `group_key_management::KeySetReadAllIndicesResponse::group_key_set_i_ds` | `group_key_set_ids` |
+
+The clusters first released in 0.6.0 follow the same rule from the start:
+for example `wifi_network_diagnostics` and `wifi_network_management` (the
+modules), `network_commissioning::encode_add_or_update_wifi_network`,
+`messages::decode_active_message_ids`,
+`energy_evse::ChargingTargetStruct::target_soc` and
+`energy_evse::Feature::V2X`. Type names are the model's own and do not
+change.
 
 ## matter-transport 0.7.3 + matter-controller 0.18.1
 

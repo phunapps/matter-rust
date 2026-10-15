@@ -32,7 +32,7 @@ pub mod attribute_id {
     /// `SecurityType`.
     pub const SECURITY_TYPE: u32 = 0x0001;
     /// `WiFiVersion`.
-    pub const WI_FI_VERSION: u32 = 0x0002;
+    pub const WIFI_VERSION: u32 = 0x0002;
     /// `ChannelNumber`.
     pub const CHANNEL_NUMBER: u32 = 0x0003;
     /// `Rssi`.
@@ -292,7 +292,7 @@ pub fn decode_security_type(tlv: &[u8]) -> Result<Nullable<SecurityTypeEnum>, Cl
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
-pub fn decode_wi_fi_version(tlv: &[u8]) -> Result<Nullable<WiFiVersionEnum>, ClusterError> {
+pub fn decode_wifi_version(tlv: &[u8]) -> Result<Nullable<WiFiVersionEnum>, ClusterError> {
     let mut r = TlvReader::new(tlv);
     match r.next()? {
         Some(Element::Scalar {

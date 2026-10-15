@@ -322,9 +322,9 @@ fn network_interface_struct_decodes() {
         ni.hardware_address,
         vec![0xde, 0xad, 0xbe, 0xef, 0x00, 0x01]
     );
-    assert_eq!(ni.i_pv4_addresses, vec![vec![192, 168, 1, 5]]);
-    assert_eq!(ni.i_pv6_addresses.len(), 1);
-    assert_eq!(ni.i_pv6_addresses[0].len(), 16);
+    assert_eq!(ni.ipv4_addresses, vec![vec![192, 168, 1, 5]]);
+    assert_eq!(ni.ipv6_addresses.len(), 1);
+    assert_eq!(ni.ipv6_addresses[0].len(), 16);
     assert_eq!(ni.r#type.to_raw(), 1); // Wi-Fi
 }
 

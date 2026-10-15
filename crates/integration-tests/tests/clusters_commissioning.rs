@@ -278,7 +278,7 @@ async fn network_commissioning_decodes_the_ethernet_interface() {
         a::LAST_NETWORKING_STATUS => ok(nc::decode_last_networking_status(t)),
         a::LAST_NETWORK_ID => ok(nc::decode_last_network_id(t)),
         a::LAST_CONNECT_ERROR_VALUE => ok(nc::decode_last_connect_error_value(t)),
-        a::SUPPORTED_WI_FI_BANDS => ok(nc::decode_supported_wi_fi_bands(t)),
+        a::SUPPORTED_WIFI_BANDS => ok(nc::decode_supported_wifi_bands(t)),
         a::SUPPORTED_THREAD_FEATURES => ok(nc::decode_supported_thread_features(t)),
         a::THREAD_VERSION => ok(nc::decode_thread_version(t)),
         other => newer_than_codegen("NetworkCommissioning", other),

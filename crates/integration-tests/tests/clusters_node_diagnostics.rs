@@ -38,7 +38,7 @@ use integration_tests::sweep::{
 };
 use matter_clusters::clusters::{
     diagnostic_logs as logs, ethernet_network_diagnostics as eth, software_diagnostics as sw,
-    thread_network_diagnostics as thread, wi_fi_network_diagnostics as wifi,
+    thread_network_diagnostics as thread, wifi_network_diagnostics as wifi,
 };
 use matter_controller::{CommandPath, ImStatus, MatterController, Node, ReadPath};
 
@@ -154,7 +154,7 @@ async fn wifi_diagnostics_decode_reset_and_report_their_events() {
     let attrs = decode_every_attribute(&node, 0, wifi::CLUSTER_ID, |id, t| match id {
         a::BSSID => ok(wifi::decode_bssid(t)),
         a::SECURITY_TYPE => ok(wifi::decode_security_type(t)),
-        a::WI_FI_VERSION => ok(wifi::decode_wi_fi_version(t)),
+        a::WIFI_VERSION => ok(wifi::decode_wifi_version(t)),
         a::CHANNEL_NUMBER => ok(wifi::decode_channel_number(t)),
         a::RSSI => ok(wifi::decode_rssi(t)),
         a::BEACON_LOST_COUNT => ok(wifi::decode_beacon_lost_count(t)),

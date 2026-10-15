@@ -131,9 +131,42 @@ pub fn base_type(ty: &str, entry_type: Option<&str>) -> String {
     ty.to_string() // a cluster-local datatype name, used verbatim (PascalCase)
 }
 
+/// Words [`snake`] keeps whole: each is rewritten to its one-word form
+/// before splitting, so its inner capitals and digits start no new word.
+///
+/// Without this table the case-boundary rule splits them mid-word
+/// (`MessageIDs` → `message_i_ds`, `TargetSoC` → `target_so_c`, `IPv4` →
+/// `i_pv4`, `WiFi` → `wi_fi`, `V2X` → `v2_x`). Order matters only where one
+/// entry contains another (none do).
+pub const WHOLE_WORDS: [(&str, &str); 5] = [
+    ("WiFi", "Wifi"),
+    ("IPv", "Ipv"),
+    ("SoC", "Soc"),
+    ("IDs", "Ids"),
+    ("V2X", "V2x"),
+];
+
 /// Convert a `PascalCase`/`camelCase` name to `snake_case` (module/fn names).
+///
+/// A word boundary falls before an uppercase letter that follows a lowercase
+/// letter or a digit, or that starts a capitalised word (`ACLEntry` →
+/// `acl_entry`). The [`WHOLE_WORDS`] acronyms are one word each
+/// (`SupportedWiFiBands` → `supported_wifi_bands`, `MessageIDs` →
+/// `message_ids`).
 #[must_use]
 pub fn snake(name: &str) -> String {
+    let mut name = name.to_string();
+    for (word, one_word) in WHOLE_WORDS {
+        name = name.replace(word, one_word);
+    }
+    split_words(&name)
+}
+
+/// The case-boundary split [`snake`] applies after its [`WHOLE_WORDS`]
+/// rewrite, on its own: public so a test can list exactly the model names
+/// the word list changes.
+#[must_use]
+pub fn split_words(name: &str) -> String {
     let mut out = String::new();
     let chars: Vec<char> = name.chars().collect();
     for (i, &ch) in chars.iter().enumerate() {
@@ -277,6 +310,48 @@ mod tests {
         assert_eq!(snake("ColorControl"), "color_control");
         assert_eq!(snake("ACL"), "acl");
         assert_eq!(snake("OnWithTimedOff"), "on_with_timed_off");
+    }
+
+    #[test]
+    fn snake_keeps_whole_words_whole() {
+        // WiFi
+        assert_eq!(snake("WiFiNetworkDiagnostics"), "wifi_network_diagnostics");
+        assert_eq!(snake("SupportedWiFiBands"), "supported_wifi_bands");
+        assert_eq!(
+            snake("AddOrUpdateWiFiNetwork"),
+            "add_or_update_wifi_network"
+        );
+        // IPv
+        assert_eq!(snake("IPv4Addresses"), "ipv4_addresses");
+        assert_eq!(
+            snake("OffPremiseServicesReachableIPv6"),
+            "off_premise_services_reachable_ipv6"
+        );
+        // SoC
+        assert_eq!(snake("TargetSoC"), "target_soc");
+        assert_eq!(snake("NextChargeTargetSoC"), "next_charge_target_soc");
+        // IDs
+        assert_eq!(snake("ActiveMessageIDs"), "active_message_ids");
+        assert_eq!(
+            snake("UniqueLocationIDsLastEdit"),
+            "unique_location_ids_last_edit"
+        );
+        assert_eq!(snake("GroupKeySetIDs"), "group_key_set_ids");
+        // V2X
+        assert_eq!(snake("V2X"), "v2x");
+        assert_eq!(screaming("V2X"), "V2X");
+        // Without the word list, the case-boundary split alone.
+        assert_eq!(split_words("ActiveMessageIDs"), "active_message_i_ds");
+    }
+
+    #[test]
+    fn snake_leaves_the_kept_names_alone() {
+        // Acronyms the model already spells in PascalCase (`Pin`, `Url`,
+        // `Dvbi`) are one word, and a singular `ID` is unchanged.
+        assert_eq!(snake("GetSetupPinResponse"), "get_setup_pin_response");
+        assert_eq!(snake("LaunchUrl"), "launch_url");
+        assert_eq!(snake("DvbiUrl"), "dvbi_url");
+        assert_eq!(snake("GroupKeySetID"), "group_key_set_id");
     }
 
     #[test]

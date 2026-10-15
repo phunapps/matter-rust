@@ -779,9 +779,8 @@ fn workspace_root() -> Result<PathBuf, String> {
 ///
 /// With `check`, regenerates and compares against the committed files,
 /// returning an error on drift (no writes). Otherwise writes the modules to
-/// `crates/matter-clusters/src/gen/`. The real generated output is committed
-/// in M7.4 (gated by byte-parity); in M7.3 this command is functional but its
-/// output is not committed.
+/// `crates/matter-clusters/src/gen/`. It also removes (`check`: reports) a
+/// `.rs` file in that directory that it no longer generates.
 fn run_codegen(check: bool) -> Result<(), String> {
     let root = workspace_root()?;
     let model_path = root.join("xtask/model/clusters.json");
@@ -821,6 +820,23 @@ fn run_codegen(check: bool) -> Result<(), String> {
     // --check` matches a `cargo fmt`-normalized tree.
     let index = codegen::rustfmt_source(&index)?;
     write_or_check(&out_dir.join("mod.rs"), &index, check)?;
+
+    // A module written under a name codegen no longer produces (a cluster
+    // whose snake_case name changed) is never compiled: `--check` fails on
+    // it, and a write removes it.
+    let mut expected: std::collections::BTreeSet<String> =
+        names.iter().map(|n| format!("{n}.rs")).collect();
+    expected.extend(["globals.rs".to_string(), "mod.rs".to_string()]);
+    for stale in codegen::stale_modules(&out_dir, &expected)? {
+        if check {
+            return Err(format!(
+                "codegen drift: {} is not a generated module (remove it)",
+                stale.display()
+            ));
+        }
+        std::fs::remove_file(&stale).map_err(|e| format!("remove {}: {e}", stale.display()))?;
+        println!("codegen: removed stale {}", stale.display());
+    }
 
     if !check {
         println!(

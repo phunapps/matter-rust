@@ -68,11 +68,11 @@ pub struct EcosystemDeviceStruct {
     /// Field UniqueLocationIDs (tag 5).
     /// Fabric-sensitive: `None` when the device withheld it because the entry
     /// belongs to another fabric (unfiltered read).
-    pub unique_location_i_ds: Option<Vec<String>>,
+    pub unique_location_ids: Option<Vec<String>>,
     /// Field UniqueLocationIDsLastEdit (tag 6).
     /// Fabric-sensitive: `None` when the device withheld it because the entry
     /// belongs to another fabric (unfiltered read).
-    pub unique_location_i_ds_last_edit: Option<u64>,
+    pub unique_location_ids_last_edit: Option<u64>,
     /// Field FabricIndex (tag 254).
     pub fabric_index: u8,
 }
@@ -182,8 +182,8 @@ impl EcosystemDeviceStruct {
         let mut f_bridged_endpoint: Option<u16> = None;
         let mut f_original_endpoint: Option<u16> = None;
         let mut f_device_types: Option<Vec<DeviceTypeStruct>> = None;
-        let mut f_unique_location_i_ds: Option<Vec<String>> = None;
-        let mut f_unique_location_i_ds_last_edit: Option<u64> = None;
+        let mut f_unique_location_ids: Option<Vec<String>> = None;
+        let mut f_unique_location_ids_last_edit: Option<u64> = None;
         let mut f_fabric_index: Option<u8> = None;
         loop {
             match r.next()? {
@@ -265,13 +265,13 @@ impl EcosystemDeviceStruct {
                             Some(_) => {} // skip unknown scalar
                         }
                     }
-                    f_unique_location_i_ds = Some(out);
+                    f_unique_location_ids = Some(out);
                 }
                 Some(Element::Scalar {
                     tag: Tag::Context(6),
                     value: Value::Uint(v),
                 }) => {
-                    f_unique_location_i_ds_last_edit =
+                    f_unique_location_ids_last_edit =
                         Some(u64::try_from(v).map_err(|_| {
                             ClusterError::InvalidLength("UniqueLocationIDsLastEdit")
                         })?)
@@ -295,8 +295,8 @@ impl EcosystemDeviceStruct {
             bridged_endpoint: f_bridged_endpoint,
             original_endpoint: f_original_endpoint,
             device_types: f_device_types,
-            unique_location_i_ds: f_unique_location_i_ds,
-            unique_location_i_ds_last_edit: f_unique_location_i_ds_last_edit,
+            unique_location_ids: f_unique_location_ids,
+            unique_location_ids_last_edit: f_unique_location_ids_last_edit,
             fabric_index: f_fabric_index.ok_or(ClusterError::MissingField("FabricIndex"))?,
         })
     }

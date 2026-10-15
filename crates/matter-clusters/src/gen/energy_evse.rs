@@ -70,7 +70,7 @@ pub mod attribute_id {
     /// `NextChargeRequiredEnergy`.
     pub const NEXT_CHARGE_REQUIRED_ENERGY: u32 = 0x0025;
     /// `NextChargeTargetSoC`.
-    pub const NEXT_CHARGE_TARGET_SO_C: u32 = 0x0026;
+    pub const NEXT_CHARGE_TARGET_SOC: u32 = 0x0026;
     /// `ApproximateEvEfficiency`.
     pub const APPROXIMATE_EV_EFFICIENCY: u32 = 0x0027;
     /// `StateOfCharge`.
@@ -118,7 +118,7 @@ bitflags::bitflags! {
         /// Rfid (RFID).
         const RFID = 1 << 3;
         /// V2X (V2X).
-        const V2_X = 1 << 4;
+        const V2X = 1 << 4;
     }
 }
 
@@ -133,13 +133,13 @@ pub struct ChargingTargetScheduleStruct {
 
 /// `ChargingTargetStruct` struct.
 ///
-/// Choice group `a`: a sender includes at least one of `target_so_c`, `added_energy`. Neither encoding nor decoding checks it.
+/// Choice group `a`: a sender includes at least one of `target_soc`, `added_energy`. Neither encoding nor decoding checks it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChargingTargetStruct {
     /// Field TargetTimeMinutesPastMidnight (tag 0).
     pub target_time_minutes_past_midnight: u16,
     /// Field TargetSoC (tag 1).
-    pub target_so_c: Option<u8>,
+    pub target_soc: Option<u8>,
     /// Field AddedEnergy (tag 2).
     pub added_energy: Option<i64>,
 }
@@ -510,7 +510,7 @@ impl ChargingTargetStruct {
     /// Returns [`ClusterError`] on a malformed structure or missing required field.
     pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
         let mut f_target_time_minutes_past_midnight: Option<u16> = None;
-        let mut f_target_so_c: Option<u8> = None;
+        let mut f_target_soc: Option<u8> = None;
         let mut f_added_energy: Option<i64> = None;
         loop {
             match r.next()? {
@@ -527,7 +527,7 @@ impl ChargingTargetStruct {
                     tag: Tag::Context(1),
                     value: Value::Uint(v),
                 }) => {
-                    f_target_so_c = Some(
+                    f_target_soc = Some(
                         u8::try_from(v).map_err(|_| ClusterError::InvalidLength("TargetSoC"))?,
                     )
                 }
@@ -547,7 +547,7 @@ impl ChargingTargetStruct {
         Ok(Self {
             target_time_minutes_past_midnight: f_target_time_minutes_past_midnight
                 .ok_or(ClusterError::MissingField("TargetTimeMinutesPastMidnight"))?,
-            target_so_c: f_target_so_c,
+            target_soc: f_target_soc,
             added_energy: f_added_energy,
         })
     }
@@ -578,8 +578,8 @@ impl ChargingTargetStruct {
             u64::from(self.target_time_minutes_past_midnight),
         )
         .expect("infallible: vec writer");
-        if let Some(target_so_c) = &self.target_so_c {
-            w.put_uint(Tag::Context(1), u64::from(*target_so_c))
+        if let Some(target_soc) = &self.target_soc {
+            w.put_uint(Tag::Context(1), u64::from(*target_soc))
                 .expect("infallible: vec writer");
         }
         if let Some(added_energy) = &self.added_energy {
@@ -902,7 +902,7 @@ pub fn decode_next_charge_required_energy(tlv: &[u8]) -> Result<Nullable<i64>, C
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
-pub fn decode_next_charge_target_so_c(tlv: &[u8]) -> Result<Nullable<u8>, ClusterError> {
+pub fn decode_next_charge_target_soc(tlv: &[u8]) -> Result<Nullable<u8>, ClusterError> {
     let mut r = TlvReader::new(tlv);
     match r.next()? {
         Some(Element::Scalar {

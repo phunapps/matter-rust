@@ -842,7 +842,7 @@ pub fn encode_key_set_read_all_indices() -> Vec<u8> {
 #[non_exhaustive]
 pub struct KeySetReadAllIndicesResponse {
     /// Field GroupKeySetIDs (tag 0).
-    pub group_key_set_i_ds: Vec<u16>,
+    pub group_key_set_ids: Vec<u16>,
 }
 
 impl KeySetReadAllIndicesResponse {
@@ -852,7 +852,7 @@ impl KeySetReadAllIndicesResponse {
     /// # Errors
     /// Returns [`ClusterError`] on a malformed structure or missing required field.
     pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
-        let mut f_group_key_set_i_ds: Option<Vec<u16>> = None;
+        let mut f_group_key_set_ids: Option<Vec<u16>> = None;
         loop {
             match r.next()? {
                 Some(Element::ContainerEnd) => break,
@@ -880,7 +880,7 @@ impl KeySetReadAllIndicesResponse {
                             Some(_) => {} // skip unknown scalar
                         }
                     }
-                    f_group_key_set_i_ds = Some(out);
+                    f_group_key_set_ids = Some(out);
                 }
                 None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
                 Some(Element::ContainerStart { .. }) => r.skip_container()?,
@@ -888,7 +888,7 @@ impl KeySetReadAllIndicesResponse {
             }
         }
         Ok(Self {
-            group_key_set_i_ds: f_group_key_set_i_ds
+            group_key_set_ids: f_group_key_set_ids
                 .ok_or(ClusterError::MissingField("GroupKeySetIDs"))?,
         })
     }

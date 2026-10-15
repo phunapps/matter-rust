@@ -289,15 +289,15 @@ pub struct NetworkInterface {
     /// Field IsOperational (tag 1).
     pub is_operational: bool,
     /// Field OffPremiseServicesReachableIPv4 (tag 2).
-    pub off_premise_services_reachable_i_pv4: Nullable<bool>,
+    pub off_premise_services_reachable_ipv4: Nullable<bool>,
     /// Field OffPremiseServicesReachableIPv6 (tag 3).
-    pub off_premise_services_reachable_i_pv6: Nullable<bool>,
+    pub off_premise_services_reachable_ipv6: Nullable<bool>,
     /// Field HardwareAddress (tag 4).
     pub hardware_address: Vec<u8>,
     /// Field IPv4Addresses (tag 5).
-    pub i_pv4_addresses: Vec<Vec<u8>>,
+    pub ipv4_addresses: Vec<Vec<u8>>,
     /// Field IPv6Addresses (tag 6).
-    pub i_pv6_addresses: Vec<Vec<u8>>,
+    pub ipv6_addresses: Vec<Vec<u8>>,
     /// Field Type (tag 7).
     pub r#type: InterfaceTypeEnum,
 }
@@ -363,11 +363,11 @@ impl NetworkInterface {
     pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
         let mut f_name: Option<String> = None;
         let mut f_is_operational: Option<bool> = None;
-        let mut f_off_premise_services_reachable_i_pv4: Option<Nullable<bool>> = None;
-        let mut f_off_premise_services_reachable_i_pv6: Option<Nullable<bool>> = None;
+        let mut f_off_premise_services_reachable_ipv4: Option<Nullable<bool>> = None;
+        let mut f_off_premise_services_reachable_ipv6: Option<Nullable<bool>> = None;
         let mut f_hardware_address: Option<Vec<u8>> = None;
-        let mut f_i_pv4_addresses: Option<Vec<Vec<u8>>> = None;
-        let mut f_i_pv6_addresses: Option<Vec<Vec<u8>>> = None;
+        let mut f_ipv4_addresses: Option<Vec<Vec<u8>>> = None;
+        let mut f_ipv6_addresses: Option<Vec<Vec<u8>>> = None;
         let mut f_type: Option<InterfaceTypeEnum> = None;
         loop {
             match r.next()? {
@@ -383,19 +383,19 @@ impl NetworkInterface {
                 Some(Element::Scalar {
                     tag: Tag::Context(2),
                     value: Value::Null,
-                }) => f_off_premise_services_reachable_i_pv4 = Some(Nullable::Null),
+                }) => f_off_premise_services_reachable_ipv4 = Some(Nullable::Null),
                 Some(Element::Scalar {
                     tag: Tag::Context(2),
                     value: Value::Bool(v),
-                }) => f_off_premise_services_reachable_i_pv4 = Some(Nullable::Value(v)),
+                }) => f_off_premise_services_reachable_ipv4 = Some(Nullable::Value(v)),
                 Some(Element::Scalar {
                     tag: Tag::Context(3),
                     value: Value::Null,
-                }) => f_off_premise_services_reachable_i_pv6 = Some(Nullable::Null),
+                }) => f_off_premise_services_reachable_ipv6 = Some(Nullable::Null),
                 Some(Element::Scalar {
                     tag: Tag::Context(3),
                     value: Value::Bool(v),
-                }) => f_off_premise_services_reachable_i_pv6 = Some(Nullable::Value(v)),
+                }) => f_off_premise_services_reachable_ipv6 = Some(Nullable::Value(v)),
                 Some(Element::Scalar {
                     tag: Tag::Context(4),
                     value: Value::Bytes(v),
@@ -421,7 +421,7 @@ impl NetworkInterface {
                             Some(_) => {} // skip unknown scalar
                         }
                     }
-                    f_i_pv4_addresses = Some(out);
+                    f_ipv4_addresses = Some(out);
                 }
                 Some(Element::ContainerStart {
                     tag: Tag::Context(6),
@@ -444,7 +444,7 @@ impl NetworkInterface {
                             Some(_) => {} // skip unknown scalar
                         }
                     }
-                    f_i_pv6_addresses = Some(out);
+                    f_ipv6_addresses = Some(out);
                 }
                 Some(Element::Scalar {
                     tag: Tag::Context(7),
@@ -462,18 +462,16 @@ impl NetworkInterface {
         Ok(Self {
             name: f_name.ok_or(ClusterError::MissingField("Name"))?,
             is_operational: f_is_operational.ok_or(ClusterError::MissingField("IsOperational"))?,
-            off_premise_services_reachable_i_pv4: f_off_premise_services_reachable_i_pv4.ok_or(
+            off_premise_services_reachable_ipv4: f_off_premise_services_reachable_ipv4.ok_or(
                 ClusterError::MissingField("OffPremiseServicesReachableIPv4"),
             )?,
-            off_premise_services_reachable_i_pv6: f_off_premise_services_reachable_i_pv6.ok_or(
+            off_premise_services_reachable_ipv6: f_off_premise_services_reachable_ipv6.ok_or(
                 ClusterError::MissingField("OffPremiseServicesReachableIPv6"),
             )?,
             hardware_address: f_hardware_address
                 .ok_or(ClusterError::MissingField("HardwareAddress"))?,
-            i_pv4_addresses: f_i_pv4_addresses
-                .ok_or(ClusterError::MissingField("IPv4Addresses"))?,
-            i_pv6_addresses: f_i_pv6_addresses
-                .ok_or(ClusterError::MissingField("IPv6Addresses"))?,
+            ipv4_addresses: f_ipv4_addresses.ok_or(ClusterError::MissingField("IPv4Addresses"))?,
+            ipv6_addresses: f_ipv6_addresses.ok_or(ClusterError::MissingField("IPv6Addresses"))?,
             r#type: f_type.ok_or(ClusterError::MissingField("Type"))?,
         })
     }

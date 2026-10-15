@@ -456,7 +456,7 @@ async fn decode_energy_evse(node: &Node) {
         a::NEXT_CHARGE_START_TIME => ok(evse::decode_next_charge_start_time(t)),
         a::NEXT_CHARGE_TARGET_TIME => ok(evse::decode_next_charge_target_time(t)),
         a::NEXT_CHARGE_REQUIRED_ENERGY => ok(evse::decode_next_charge_required_energy(t)),
-        a::NEXT_CHARGE_TARGET_SO_C => ok(evse::decode_next_charge_target_so_c(t)),
+        a::NEXT_CHARGE_TARGET_SOC => ok(evse::decode_next_charge_target_soc(t)),
         a::APPROXIMATE_EV_EFFICIENCY => ok(evse::decode_approximate_ev_efficiency(t)),
         a::SESSION_ID => ok(evse::decode_session_id(t)),
         a::SESSION_DURATION => ok(evse::decode_session_duration(t)),

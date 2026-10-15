@@ -210,3 +210,64 @@ fn fields_chip_omits_say_why_they_are_optional() {
         .collect();
     assert_eq!(got, want);
 }
+
+/// The model names whose `snake_case` form the `WHOLE_WORDS` acronym list
+/// changes (`snake` vs the bare case-boundary split): every cluster,
+/// attribute, command, event, field, feature code and bitmap bit name. A new
+/// one (a widening, a model upgrade) is a review item: is it really the
+/// acronym?
+const WHOLE_WORD_NAMES: [&str; 19] = [
+    "ActiveMessageIDs",
+    "AddOrUpdateWiFiNetwork",
+    "GroupKeySetIDs",
+    "IPv4Addresses",
+    "IPv6Addresses",
+    "MessageIDs",
+    "NextChargeTargetSoC",
+    "OffPremiseServicesReachableIPv4",
+    "OffPremiseServicesReachableIPv6",
+    "SupportedWiFiBands",
+    "TargetSoC",
+    "UniqueLocationIDs",
+    "UniqueLocationIDsLastEdit",
+    "V2X",
+    "WiFiBand",
+    "WiFiNetworkDiagnostics",
+    "WiFiNetworkManagement",
+    "WiFiScanResults",
+    "WiFiVersion",
+];
+
+#[test]
+fn the_whole_word_list_changes_exactly_these_names() {
+    use xtask::codegen::rustgen::types::{snake, split_words};
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let model = xtask::codegen::model::load(&root.join("xtask/model/clusters.json"))
+        .expect("real model loads + validates");
+    let mut names = std::collections::BTreeSet::new();
+    for c in &model.clusters {
+        names.insert(c.name.as_str());
+        names.extend(c.attributes.iter().map(|a| a.name.as_str()));
+        names.extend(c.features.iter().map(|f| f.code.as_str()));
+        for cmd in &c.commands {
+            names.insert(cmd.name.as_str());
+            names.extend(cmd.fields.iter().map(|f| f.name.as_str()));
+        }
+        for ev in &c.events {
+            names.insert(ev.name.as_str());
+            names.extend(ev.fields.iter().map(|f| f.name.as_str()));
+        }
+        for d in &c.datatypes {
+            names.extend(d.fields.iter().map(|f| f.name.as_str()));
+            names.extend(d.bits.iter().map(|b| b.name.as_str()));
+        }
+    }
+    let changed: Vec<&str> = names
+        .into_iter()
+        .filter(|n| snake(n) != split_words(n))
+        .collect();
+    assert_eq!(changed, WHOLE_WORD_NAMES);
+}
