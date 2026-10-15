@@ -1,6 +1,6 @@
 [package]
 name = "matter-commissioning"
-version = "0.10.1"
+version = "0.10.2"
 description = "Matter commissioning state machine: setup payload, attestation, NOC issuance, network commissioning."
 edition.workspace = true
 rust-version.workspace = true
@@ -74,10 +74,13 @@ tracing-subscriber = { workspace = true, optional = true, features = ["registry"
 serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
-# Example-only: the `control_onoff` example exercises the generated cluster
-# codecs over an operational session. Kept out of the main dependency graph so
+# Dev-only: the `control_onoff` example and the generated-codec parity test
+# (`tests/generated_codec_parity.rs`, which checks this crate's hand-written
+# GeneralCommissioning and NetworkCommissioning encoders against the
+# generated ones; those clusters exist from matter-clusters 0.6.0) use the
+# generated cluster codecs. Kept out of the main dependency graph so
 # matter-clusters' own crate independence is preserved.
-matter-clusters = { path = "../matter-clusters", version = "0.5.0" }
+matter-clusters = { path = "../matter-clusters", version = "0.6.0" }
 # Test-only: the `pase_over_btp` floor test drives PASE through two real
 # `BtpSession`s to prove reassembly + MRP-off end to end. Dev-dep ONLY —
 # matter-ble must never enter the runtime graph (and a dep on matter-controller

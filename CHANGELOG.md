@@ -22,6 +22,816 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## Unreleased — matter-clusters 0.6.0, matter-ota 0.6.0, matter-commissioning 0.10.2, matter-controller 0.18.3
+
+**Not released yet.** Prepared on `main`; publishing is a separate step.
+
+`matter-clusters` 0.6.0 completes the Matter 1.4 cluster library: 113
+clusters, every Matter 1.4 cluster except the two provisional JointFabric
+clusters (0x0752, 0x0753), up from 48 in 0.5.0, with the events of every
+generated cluster that has them. It is a breaking release; the breaking
+changes are:
+
+- fabric-sensitive fields of fabric-scoped structs are `Option`, and encoders
+  refuse a withheld one;
+- LevelControl's `*WithOnOff` encoders take their fields;
+- unused types, and encoders nothing sends, are removed;
+- five generated names keep their acronyms whole (table below);
+- secret request arguments are `Secret<T>`;
+- `CLUSTER_REVISION` is the Matter 1.4.2 revision.
+
+Fixed on the wire, for writes only: Binding, GroupKeyMap, DefaultOTAProviders
+and ACL Extension entries are encoded without `FabricIndex`, as chip writes
+them.
+
+Additive: the new clusters and events, `Secret<T>` itself, constructible
+structs for the writable list attributes, the module path
+`matter_clusters::clusters` (`gen` stays as a hidden alias), and rustdoc for
+provisional elements, choice groups and field dependencies.
+
+| Crate | Current | Release | Why |
+|---|---|---|---|
+| `matter-clusters` | 0.5.0 | **0.6.0** | breaking, above |
+| `matter-ota` | 0.5.2 | **0.6.0** | its `OtaError::Cluster` carries `matter_clusters::error::ClusterError`, so the clusters bump is breaking for it |
+| `matter-commissioning` | 0.10.1 | **0.10.2** | dev-dependency only: it moves to `matter-clusters` 0.6.0; the library is unchanged |
+| `matter-controller` | 0.18.2 | **0.18.3** | its private dependencies move to `matter-clusters` 0.6 and `matter-ota` 0.6; no public API change |
+
+Publish in this order; each needs the one before it on crates.io:
+
+1. `matter-clusters` 0.6.0.
+2. `matter-ota` 0.6.0.
+3. `matter-commissioning` 0.10.2.
+4. `matter-controller` 0.18.3.
+
+### matter-clusters: Fixed (breaking) — fabric-sensitive fields of fabric-scoped structs are `Option`
+
+Our reads are unfiltered, so a fabric-scoped list such as AccessControl `Acl`
+returns every fabric's entries, and the device leaves the fabric-sensitive
+fields out of the entries that belong to another fabric. These fields were
+mandatory in the generated structs, so one such entry failed the decode of the
+whole list. They are now `Option`, where `None` means "withheld: another
+fabric's entry":
+
+- `AccessControlEntryStruct`: `privilege`, `auth_mode`, `subjects`, `targets`
+- `AccessControlExtensionStruct`: `data`
+- `AccessRestrictionEntryStruct`: `endpoint`, `cluster`, `restrictions`
+- `MonitoringRegistrationStruct` (IcdManagement): `check_in_node_id`,
+  `monitored_subject`, `client_type`
+- `SceneInfoStruct` (ScenesManagement, new in 0.6.0): `current_scene`,
+  `current_group`, `scene_valid`
+
+For `subjects` and `targets` the two layers are distinct: `None` is withheld,
+`Some(Nullable::Null)` is the wildcard.
+
+### matter-clusters: Changed (breaking) — encoders refuse a withheld field
+
+`AccessControlExtensionStruct` `encode`/`write_fields` now return `Result`
+and fail with
+`ClusterError::MissingField` when a fabric-sensitive field is `None`, so a
+withheld entry is never written back as if it were complete (chip reads a
+missing ACL `Subjects` as "every CASE node on the fabric"). A complete entry
+encodes byte-identically to before. `AccessControlEntryStruct`,
+`AccessRestrictionEntryStruct` and (see "Removed (breaking) — encoders
+nothing sends" below) `MonitoringRegistrationStruct` are decode-only.
+
+### matter-clusters: Fixed (breaking) — LevelControl's `*WithOnOff` commands sent no fields
+
+`encode_move_to_level_with_on_off`, `encode_move_with_on_off`,
+`encode_step_with_on_off` and `encode_stop_with_on_off` took no arguments and
+encoded an empty structure. A server that validates mandatory fields
+(matter.js) rejects it with `INVALID_ACTION`. A chip-based device does not: it
+decodes each missing field as zero or null and acts on that. An empty
+`MoveToLevelWithOnOff` is level 0, so the light dims to its minimum level and
+switches off, and the command still returns success. An empty `MoveWithOnOff`
+moves up at the default rate and switches on. An empty `StepWithOnOff` is a
+step up by 0, which chip rejects with `INVALID_COMMAND` and nothing changes.
+An empty `StopWithOnOff` decodes as two zero option masks, so chip treats it
+like a `StopWithOnOff` with both masks zero: it stops any transition in
+progress and returns success. (chip's level-control server, `stepHandler` and
+`stopHandler`, is the same at v1.4.2.0 and master.) These commands declare no
+fields of their own and inherit MoveToLevel's, Move's, Step's and Stop's, and
+the codegen read only a command's own fields. They now take the same
+arguments as their base command. `MoveToLevelWithOnOff` is pinned against a
+matter.js byte vector; the other three use the same generated field encoding
+as their base command (`MoveWithOnOff` as `Move`, `StepWithOnOff` as `Step`,
+`StopWithOnOff` as `Stop`).
+
+### matter-clusters: Added — events for 13 more clusters
+
+54 new events, each with an `event_id` const and a decode-only `<Name>Event`
+payload struct (Switch already had its seven):
+
+- BasicInformation (4): StartUp, ShutDown, Leave, ReachableChanged
+- BridgedDeviceBasicInformation (5): StartUp, ShutDown, Leave,
+  ReachableChanged, ActiveChanged
+- BooleanState (1): StateChange
+- OccupancySensing (1): OccupancyChanged
+- PumpConfigurationAndControl (17): the alarm and fault events, SupplyVoltageLow
+  through TurbineOperation
+- TimeSynchronization (5): DSTTableEmpty, DSTStatus, TimeZoneStatus,
+  TimeFailure, MissingTrustedTimeSource
+- OtaSoftwareUpdateRequestor (3): StateTransition, VersionApplied, DownloadError
+- GeneralDiagnostics (4): HardwareFaultChange, RadioFaultChange,
+  NetworkFaultChange, BootReason
+- PowerSource (3): WiredFaultChange, BatFaultChange, BatChargeFaultChange
+- AccessControl (3): AccessControlEntryChanged, AccessControlExtensionChanged,
+  FabricRestrictionReviewUpdate
+- ElectricalEnergyMeasurement (2): CumulativeEnergyMeasured,
+  PeriodicEnergyMeasured
+- ElectricalPowerMeasurement (1): MeasurementPeriodRanges
+- DoorLock (5): DoorLockAlarm, DoorStateChange, LockOperation,
+  LockOperationError, LockUserChange
+
+### matter-clusters: Added — mode, alarm and resource-monitoring clusters
+
+- **ModeBase-derived mode clusters:** OvenMode (0x0049), LaundryWasherMode
+  (0x0051), RefrigeratorAndTemperatureControlledCabinetMode (0x0052),
+  RvcRunMode (0x0054), RvcCleanMode (0x0055) and DishwasherMode (0x0059):
+  SupportedModes / CurrentMode decoders, `encode_change_to_mode` and
+  `ChangeToModeResponse`. `ChangeToModeResponse::status_text` is
+  `Option<String>`: its 1.4 conformance is conditional, chip's ModeBase
+  server leaves it out of the replies it builds itself (`UnsupportedMode`,
+  and `Success` for `ChangeToMode(CurrentMode)`), and the codegen now treats
+  only an unconditional `M` field as mandatory. An application delegate may
+  still include it (chip's rvc-app does, on the changes it refuses). A feature the cluster disallows (ModeBase's OnOff dependency,
+  DEPONOFF) gets no `Feature` flag.
+- MicrowaveOvenMode (0x005E; attributes only: ChangeToMode is disallowed
+  there), EnergyEvseMode (0x009D), WaterHeaterMode (0x009E) and
+  DeviceEnergyManagementMode (0x009F), with the same ModeBase surface.
+  DEPONOFF has no `Feature` flag in these either: the 1.4.2 cluster XML
+  disallows it in all four. chip's controller codegen still declares a
+  `kOnOff` bit for EnergyEvseMode, WaterHeaterMode and
+  DeviceEnergyManagementMode; a device that sets it loses nothing, since
+  FeatureMap reads as a raw `u32` (`gen::globals::decode_u32`).
+- **ModeSelect (0x0050)**, with its own `SemanticTagStruct` (MfgCode,
+  Value), distinct from the global `datatypes::SemanticTagStruct`.
+  `StandardNamespace` decodes as `Nullable<u16>`: Matter 1.4 declares it
+  enum16, wider than the enum8 namespace type in the codegen's model.
+- **DishwasherAlarm (0x005D) and RefrigeratorAlarm (0x0057)**, with their
+  `Notify` events (`event_id::NOTIFY`, decode-only `NotifyEvent`).
+  RefrigeratorAlarm has no `Latch`, `Reset` or `Feature::RESET`: it disallows
+  the RESET feature they depend on.
+- **HepaFilterMonitoring (0x0071), ActivatedCarbonFilterMonitoring (0x0072)
+  and WaterTankLevelMonitoring (0x0079)**: Condition, DegradationDirection,
+  ChangeIndication, InPlaceIndicator, LastChangedTime (writable),
+  ReplacementProductList and `encode_reset_condition`. No connectedhomeip
+  example app serves WaterTankLevelMonitoring; it is validated by decode
+  tests and the chip 1.4.2 XML check only.
+
+### matter-clusters: Added — appliance operational-state, appliance-control and service-area clusters
+
+- **OperationalState (0x0060), OvenCavityOperationalState (0x0048) and
+  RvcOperationalState (0x0061)**, with their `OperationalError` and
+  `OperationCompletion` events: the six attributes, the commands each
+  cluster allows (OvenCavityOperationalState has no Pause/Resume and
+  RvcOperationalState no Start/Stop: they are disallowed there; RVC adds
+  `GoHome`), and `OperationalCommandResponse`, whose `CommandResponseState`
+  the derived clusters inherit. `ErrorStateStruct::error_state_label` and
+  `OperationalStateStruct::operational_state_label` are `Option`: 1.4 asks
+  for a label only on manufacturer-specific ids, and the errors chip's
+  server builds itself carry none.
+- **TemperatureControl (0x0056), LaundryWasherControls (0x0053),
+  LaundryDryerControls (0x004A) and MicrowaveOvenControl (0x005F)**:
+  attribute decoders, writers for the writable laundry attributes, and
+  `encode_set_temperature`, `encode_set_cooking_parameters` and
+  `encode_add_more_time`, whose feature-gated or optional fields are each an
+  `Option` (left out of the command when `None`). `encode_set_temperature`
+  is pinned against a matter.js byte vector. MicrowaveOvenControl keeps the
+  WATTS (PowerInWatts) feature, its `SupportedWatts` / `SelectedWattIndex`
+  attributes and the `WattSettingIndex` field it gates, as chip's controller
+  codegen does. Matter 1.4 marks the feature and both attributes
+  provisional.
+- **ServiceArea (0x0150)**: SupportedAreas, SupportedMaps, SelectedAreas,
+  CurrentArea, EstimatedEndTime, Progress, `encode_select_areas`,
+  `encode_skip_area` and their responses. The Matter-global location
+  descriptor (`locationdesc` in the specification) is generated as
+  `service_area::LocationDescriptorStruct`, chip's name for it; the
+  landmark, relative-position and area-type tags are raw `u8`s whose values
+  come from the Common Landmark, Relative Position and Area namespaces.
+
+ServiceArea, MicrowaveOvenControl and the rvc-app paths (RvcOperationalState's
+GoHome and its events; RvcRunMode / RvcCleanMode's refused changes, while
+all-clusters covers their attributes and ChangeToMode live) run live against
+chip master 5cd2917a's rvc-app (8 of 8 tests) and microwave-oven-app (3 of
+3), built for Linux arm64 and run on a Raspberry Pi. They are not in the
+nightly, and they do not run on the Mac: rvc-app and microwave-oven-app need
+Rosetta 2 to build on Apple silicon.
+
+### matter-clusters: Changed — rustdoc states provisional elements and choice groups
+
+- A feature, attribute, command, event or field that Matter marks
+  provisional (conformance `P`, or `P, …`) carries "Provisional in Matter
+  1.5.1, the codegen model's revision: a later revision may change or remove
+  it." The note names 1.5.1 because that is where the mark comes from: an
+  element provisional there may be plain in 1.4.2 (DoorLock's RID is plain
+  `O` in 1.4.2). Today: DoorLock's
+  RID, FGP and FACE features, ElectricalEnergyMeasurement's APPE and REAE
+  features and fields, LevelControl FQ, GroupKeyManagement CS,
+  MicrowaveOvenControl WATTS with `SupportedWatts` / `SelectedWattIndex`, and
+  BasicInformation / BridgedDeviceBasicInformation `ConfigurationVersion`.
+- Fields in a choice group (`O.a+` and the like) are each an `Option`, and
+  neither the encoders nor the decoders check the group; the struct or
+  encoder rustdoc now states it ("a sender includes at least one of ….
+  Neither encoding nor decoding checks it."): MicrowaveOvenControl
+  `encode_set_cooking_parameters`, OperationalCredentials
+  `encode_set_vid_verification_statement`, both
+  `MeasurementAccuracyRangeStruct`s.
+- `service_area::LocationDescriptorStruct` says it is generated from the
+  Matter global type `locationdesc`.
+
+### matter-clusters: Changed — the generated modules are `matter_clusters::clusters`
+
+The cluster modules moved from `matter_clusters::gen` to
+`matter_clusters::clusters` (`matter_clusters::clusters::on_off`, ...).
+`gen` is a reserved keyword from Rust edition 2024, so an edition-2024 crate
+could not write `use matter_clusters::gen::on_off;` (only `r#gen::on_off`).
+`matter_clusters::gen` remains as a hidden alias of `clusters`, so existing
+edition 2015–2021 code keeps compiling unchanged; new code should use
+`clusters`. The generated files did not move.
+
+### matter-clusters: Added — Matter 1.4 elements the 1.5.1 model removed
+
+The cluster model the codegen reads follows Matter 1.5.1, which removed a
+few elements a Matter 1.4 device may still implement. chip's controller
+generates them, and so do we now, transcribed from chip's 1.4.2 data model
+and checked against it:
+
+- **Thermostat weekly schedule (feature `SCH`, bit 3):** `StartOfWeek`,
+  `NumberOfWeeklyTransitions`, `NumberOfDailyTransitions`,
+  `encode_set_weekly_schedule`, `encode_get_weekly_schedule`,
+  `encode_clear_weekly_schedule` and `GetWeeklyScheduleResponse`, using the
+  existing `ScheduleDayOfWeekBitmap`, `ScheduleModeBitmap`, `StartOfWeekEnum`
+  and `WeeklyScheduleTransitionStruct`. `WeeklyScheduleTransitionStruct` is
+  no longer `#[non_exhaustive]`, so a schedule can be built to send.
+  `encode_set_weekly_schedule` is pinned against a matter.js byte vector.
+  Matter 1.4 itself deprecates SCH (conformance `[Zigbee], D`: optional only
+  for a Zigbee device, deprecated otherwise), and Matter 1.5.1 removed it
+  (Thermostat revision 10); each item's rustdoc says both. No chip example
+  app the harness drives serves SCH (at v1.4.2.0 or master), so it is
+  validated by decode tests, the matter.js vector and the chip 1.4.2 XML
+  check only.
+- **WindowCovering absolute position (feature `ABS`, bit 3):**
+  `PhysicalClosedLimitLift` / `Tilt`, `CurrentPositionLift` / `Tilt`
+  (nullable), `InstalledOpenLimitLift` / `Tilt`, `InstalledClosedLimitLift`
+  / `Tilt`, `encode_go_to_lift_value` and `encode_go_to_tilt_value`. Matter
+  1.4 marks all of them provisional, and Matter 1.5 removed them
+  (WindowCovering revision 7); each item's rustdoc says both. Live: the
+  attributes decode against all-clusters, which does not set ABS and
+  refuses GoToLiftValue/GoToTiltValue; no successful absolute move has been
+  observed.
+- Each of these items carries one rustdoc line in place of the provisional
+  note ("Matter 1.4 element (from chip's 1.4.2 data model via the 1.4
+  supplement); …"), so it cannot be mistaken for a 1.5.1 element.
+
+### matter-clusters: Removed (breaking) — unused types, and encoders nothing sends
+
+The codegen now generates only what a client can use:
+
+- **A datatype is generated only when a generated attribute, command or
+  event uses it**, or it is a cluster's `StatusCodeEnum`, or it gives
+  meaning to a raw integer (OnOff's `DelayedAllOffEffectVariantEnum` and
+  `DyingLightEffectVariantEnum` for `OffWithEffect.EffectVariant`,
+  IlluminanceMeasurement's `LightSensorTypeEnum`, WindowCovering's
+  `MovementStatus` for each field of `OperationalStatusBitmap`). Removed:
+  `bridged_device_basic_information::CapabilityMinimaStruct`,
+  `door_lock::AlarmMaskBitmap`, `door_lock::EventTypeEnum`,
+  `microwave_oven_mode::ModeChangeStatus`. Scalar typedefs (Thermostat's
+  `SignedTemperature`, `UnsignedTemperature`, `TemperatureDifference`) are
+  exempt: they never become a Rust item (every use is generated as its base
+  integer), so there is nothing to prune.
+- **`write_fields` / `encode` exist only on structs a command request
+  carries, or all-scalar structs a writable attribute carries.** Eight of
+  the latter keep an encoder because a writable list attribute carries them
+  (`binding::TargetStruct`, `user_label::LabelStruct`,
+  `group_key_management::GroupKeyMapStruct`,
+  `ota_software_update_requestor::ProviderLocation`,
+  `thermostat::{PresetStruct, ScheduleTransitionStruct}`,
+  `access_control::{AccessControlExtensionStruct,
+  AccessControlTargetStruct}`), and they are constructible (see "structs a
+  writable attribute carries are constructible" below). Every decoder
+  stays. Removed from:
+  `basic_information::{CapabilityMinimaStruct, ProductAppearanceStruct}`,
+  `bridged_device_basic_information::ProductAppearanceStruct`,
+  `descriptor::DeviceTypeStruct`, `fixed_label::LabelStruct`,
+  `occupancy_sensing::HoldTimeLimitsStruct`,
+  `operational_credentials::{FabricDescriptorStruct, NOCStruct}`,
+  `time_synchronization::TrustedTimeSourceStruct`,
+  `icd_management::MonitoringRegistrationStruct` (`RegisteredClients` is
+  read-only; registering goes through `encode_register_client`),
+  `thermostat::{PresetTypeStruct, ScheduleTypeStruct,
+  ThermostatAttributeStatusEntryStruct}`,
+  `electrical_power_measurement::{HarmonicMeasurementStruct,
+  MeasurementAccuracyRangeStruct, MeasurementRangeStruct}`,
+  `electrical_energy_measurement::{CumulativeEnergyResetStruct,
+  EnergyMeasurementStruct, MeasurementAccuracyRangeStruct}`, `ModeTagStruct`
+  in the ten ModeBase-derived clusters, `mode_select::SemanticTagStruct`,
+  `ErrorStateStruct` and `OperationalStateStruct` in the three
+  OperationalState clusters, `ReplacementProductStruct` in the three
+  resource-monitoring clusters, and
+  `service_area::{LandmarkInfoStruct, LocationDescriptorStruct, MapStruct,
+  ProgressStruct}`.
+
+### matter-clusters: Added — safety, valve and scenes clusters
+
+- **SmokeCoAlarm (0x005C)**, with its eleven events: every attribute,
+  `encode_smoke_sensitivity_level`, `encode_self_test_request`, and
+  payload decoders for the five events that carry an `AlarmSeverityLevel`
+  (SmokeAlarm, CoAlarm, LowBattery, InterconnectSmokeAlarm,
+  InterconnectCoAlarm); the other six carry no fields and have an
+  `event_id` constant only.
+- **BooleanStateConfiguration (0x0080)**, with its `AlarmsStateChanged` and
+  `SensorFault` events: every attribute,
+  `encode_current_sensitivity_level`, `encode_suppress_alarm` and
+  `encode_enable_disable_alarm`. `AlarmsStateChanged.alarms_suppressed` is
+  an `Option`: chip's server sends it only with the alarm-suppress feature.
+- **ValveConfigurationAndControl (0x0081)**, with its `ValveStateChanged`
+  and `ValveFault` events: every attribute, the writers for
+  `DefaultOpenDuration` and `DefaultOpenLevel`, `encode_open` and
+  `encode_close`. `encode_open`'s `open_duration` is an
+  `Option<Nullable<u32>>`: `None` uses the valve's DefaultOpenDuration,
+  `Some(Nullable::Null)` opens it until it is closed. Pinned against a
+  matter.js byte vector.
+- **ScenesManagement (0x0062)**: `SceneTableSize`, `FabricSceneInfo`, and
+  the eight scene commands with their responses (`RecallScene` answers with
+  a status). `FabricSceneInfo` is fabric-scoped: on our unfiltered reads,
+  another fabric's entry arrives without `CurrentScene`, `CurrentGroup` and
+  `SceneValid`, so those are `Option` (`None` = withheld).
+  `AttributeValuePairStruct`'s eight value fields are each an `Option`;
+  exactly one should be set (its rustdoc says so; chip's server refuses a
+  pair without exactly one). `encode_add_scene` is pinned against a
+  matter.js byte vector. chip's zap and controller codegen still mark the
+  cluster provisional; the Matter 1.4.2 specification does not (revision 1
+  removed the provisional status), so its module docs carry chip's
+  provisional note rather than the specification's.
+
+### matter-clusters: Changed — rustdoc states provisional clusters and field dependencies
+
+- A cluster the Matter specification marks provisional as a whole carries a
+  module paragraph: its shape may change between specification revisions,
+  and a change is still a breaking release. EnergyPreference, added below,
+  is the first.
+- A struct field whose presence depends on another field of the struct
+  says so: "Required when `endpoint` is present" (or "absent"). When the
+  specification also disallows it in the opposite case (a bare conformance
+  such as `Endpoint` or `!Group`), the note adds "and must be omitted when
+  it is absent" (or "present"): chip's Binding server refuses a target
+  that carries `group` with `endpoint` or `node`. Nothing checks it on our
+  side. Today: Binding `TargetStruct` (`node`, `group`, `endpoint`) and
+  ElectricalPowerMeasurement `MeasurementRangeStruct` (the start, min and
+  max timestamps and systimes), both with the omitted half, and, below,
+  WaterHeaterManagement `WaterHeaterBoostInfoStruct.target_percentage`.
+
+### matter-clusters: Added — energy-management and messaging clusters
+
+- **EnergyPreference (0x009B)**, provisional: the specification marks the
+  whole cluster provisional (Matter 1.4.2, and still 1.5.1), and its module
+  rustdoc says so, so its shape may change in a later revision. Every
+  attribute, and the writers for `CurrentEnergyBalance` and
+  `CurrentLowPowerModeSensitivity`.
+- **PowerTopology (0x009C)**: `AvailableEndpoints` and `ActiveEndpoints`.
+  The model's `CircuitNodeStruct` is not generated: no attribute uses it,
+  and chip's 1.4.2 data model has no such struct.
+- **WaterHeaterManagement (0x0094)**, with its `BoostStarted` and
+  `BoostEnded` events: every attribute, `encode_boost` and
+  `encode_cancel_boost`. `WaterHeaterBoostInfoStruct`'s rustdoc states its
+  two rules, which the encoder does not check: at most one of `one_shot`
+  and `target_reheat`, and `target_percentage` whenever `target_reheat` is
+  set. chip's server with the TankPercent (TP) feature refuses a Boost
+  that breaks either with `InvalidCommand`; without TP it refuses any
+  Boost that carries `target_percentage` or `target_reheat`.
+- **DeviceEnergyManagement (0x0098)**, with its four events (`PowerAdjustEnd`
+  and `Resumed` carry a cause; `PowerAdjustStart` and `Paused` are ids
+  only): every attribute, including the nested `Forecast` (slots, each with
+  optional costs) and `PowerAdjustmentCapability`, and encoders for all
+  eight requests.
+- **EnergyEvse (0x0099)**, with its six events: every attribute, the
+  writers for `UserMaximumChargeCurrent`, `RandomizationDelayWindow` and
+  `ApproximateEvEfficiency`, encoders for all seven requests, and
+  `GetTargetsResponse`. Every request is a timed command; `Node::invoke`
+  retries it as a timed interaction when the device asks. Each
+  `ChargingTargetStruct` should carry at least one of `target_soc` and
+  `added_energy` (its rustdoc says so; the encoder does not check it).
+  chip's server also checks `target_soc` against the SOC feature: with
+  SOC, `target_soc` is required; without it, it may only be absent or 100.
+- **Messages (0x0097)**, with its three events: `Messages`,
+  `ActiveMessageIDs`, `encode_present_messages_request` and
+  `encode_cancel_messages_request`, both pinned against matter.js byte
+  vectors. `Messages` is fabric-scoped: another fabric's entry arrives
+  without its fabric-sensitive fields, so `MessageStruct`'s fields are
+  `Option` (`None` = withheld). Its `fabric_index`, and the events'
+  `fabric_index`, are `Option` too: chip does not fabric-scope them. chip's
+  SDK servers and tv-app's delegate do not filter entries by fabric, and no
+  chip-SDK server can send FabricIndex (the generated types have no field
+  254).
+
+chip's zap and controller codegen mark WaterHeaterManagement and
+DeviceEnergyManagement provisional (at v1.4.2.0 and master), and Messages at
+v1.4.2.0 (master no longer does); the Matter 1.4.2 specification marks none
+of the three provisional, so, as with ScenesManagement, their module docs
+carry chip's provisional note.
+
+EnergyPreference runs live against chip's all-clusters, both master (locally)
+and v1.4.2.0 (the nightly). WaterHeaterManagement runs live only against
+v1.4.2.0's all-clusters, in the nightly: master's all-clusters no longer
+serves it, and master's server is unexercised (water-heater-app, its master
+host, is not built). DeviceEnergyManagement, EnergyEvse and PowerTopology
+commands and events run live only against chip master's evse-app, locally
+(evse-app does not exist at v1.4.2.0 and is not in the nightly); the nightly
+decodes their attributes, and invokes GetTargets once, on v1.4.2.0's
+all-clusters. Messages runs live against chip's tv-app (its only chip host),
+built at master 5cd2917a and at v1.4.2.0 for Linux arm64 and run on a
+Raspberry Pi: both tests, `messages_present_and_cancel_round_trip` and
+`messages_refuse_malformed_requests`, pass at both refs with no pacing
+between exchanges. Until the controller ACKed each response as its exchange
+closed (matter-transport 0.7.4, matter-controller 0.18.2), master's tv-app
+ACKed a request in `messages_refuse_malformed_requests` and never answered it
+unless every exchange was paced: it gets a 15-buffer PacketBuffer pool (its
+`CHIPProjectAppConfig.h` sets 500 inside `#ifndef
+CHIP_DEVICE_LAYER_TARGET_DARWIN`, which is always defined), and responses the
+previous test's controller left unACKed when it was dropped exhausted it. At
+v1.4.2.0 both tests passed unpaced throughout. Since the media clusters were
+added, the nightly runs them at v1.4.2.0 (linux-x64), and both passed in
+nightly 38175373715 on 2245a81; they do not run on the Mac (tv-app needs
+Rosetta 2 to build on Apple silicon). Beyond those runs, Messages is validated by decode tests, two
+matter.js vectors and the chip 1.4.2 XML check. chip's servers send every
+`MessageStruct` field to every fabric and no FabricIndex, so on a chip device
+every entry decodes in full with `fabric_index` `None`.
+
+### matter-clusters: Added — diagnostics and infrastructure clusters
+
+- **LocalizationConfiguration (0x002B)**, **TimeFormatLocalization
+  (0x002C)**, **UnitLocalization (0x002D)** and **PowerSourceConfiguration
+  (0x002E)**: every attribute, and the writers for `ActiveLocale`,
+  `HourFormat`, `ActiveCalendarType` and `TemperatureUnit`. Attributes only.
+- **SoftwareDiagnostics (0x0034)**, **WiFiNetworkDiagnostics (0x0036)** and
+  **EthernetNetworkDiagnostics (0x0037)**: every attribute, the reset
+  commands, and the `SoftwareFault`, `Disconnection`, `AssociationFailure`
+  and `ConnectionStatus` events.
+- **DiagnosticLogs (0x0032)**: `RetrieveLogsRequest` and its response. Codecs
+  only: a BDX log transfer is not implemented.
+- **ThreadNetworkDiagnostics (0x0035)**: all 65 attributes (the neighbor and
+  route tables, `SecurityPolicy`, `OperationalDatasetComponents`, and
+  `MeshLocalPrefix`, an IPv6 prefix carried as its raw bytes: chip's
+  OpenThread provider sends nine, the prefix length in bits and then the
+  eight prefix bytes), `ResetCounts`, and the `ConnectionStatus` and
+  `NetworkFaultChange` events. `ExtAddress` and `Rloc16` are provisional.
+- **GeneralCommissioning (0x0030)** and **NetworkCommissioning (0x0031)**:
+  every attribute, command and response. Codecs only, for use outside
+  commissioning: `matter-commissioning` keeps driving commissioning with its
+  hand-written subset, and a new test there pins that the two encode every
+  command it sends identically. The generated response decoders follow the
+  specification, so `DebugText` (the ArmFailSafe, SetRegulatoryConfig and
+  CommissioningComplete responses), `ErrorValue` (`ConnectNetworkResponse`)
+  and `BasicCommissioningInfo`'s `MaxCumulativeFailsafeSeconds` are
+  mandatory; `matter-commissioning`'s response decoders, which the
+  commissioning flow uses, accept them missing. GeneralCommissioning's
+  NetworkRecovery (NR) feature and its three attributes
+  (`RecoveryIdentifier`, `NetworkRecoveryReason` and
+  `IsCommissioningWithoutPower`) come from the model only, where they are
+  provisional; the 1.4.2 XML does not have them. chip's Per-Device
+  Credentials elements of NetworkCommissioning (the PDC feature,
+  `QueryIdentity` and its response, and the `NetworkIdentity`,
+  `ClientIdentifier` and `PossessionNonce` fields), which chip's zap and
+  controller codegen carry at both refs, are not generated: the 1.4.2, 1.5
+  and 1.5.1 specification XML and the model do not have them.
+- **Actions (0x0025)**: `ActionList`, `EndpointLists`, `SetupURL`, the twelve
+  action commands, and the `StateChanged` and `ActionFailed` events.
+- **EcosystemInformation (0x0750)**: `DeviceDirectory` and
+  `LocationDirectory`. Both are fabric-scoped lists, so other fabrics'
+  entries decode with their fabric-sensitive fields `None`. The
+  global location struct is generated as
+  `ecosystem_information::LocationDescriptorStruct`. No chip example app
+  fills its directories (fabric-bridge-app and fabric-sync add the cluster,
+  empty, to their bridged-device endpoints), so it is checked by decode
+  smoke and `chip-xml-conformance.py` only.
+- **CommissionerControl (0x0751)**: `SupportedDeviceCategories`,
+  `RequestCommissioningApproval`, `CommissionNode` and its
+  `ReverseOpenCommissioningWindow` response, and the
+  `CommissioningRequestResult` event. Codecs only: the approval flow is not
+  implemented.
+- **WiFiNetworkManagement (0x0451)**, **ThreadBorderRouterManagement
+  (0x0452)** and **ThreadNetworkDirectory (0x0453)**: every attribute,
+  command and response. Codecs only.
+
+chip's zap and controller codegen mark UnitLocalization's
+`SupportedTemperatureUnits` provisional (at v1.4.2.0 and master), and so
+does v1.4.2.0's `data_model/1.4.2` XML (`P, TEMP`). Master's
+`data_model/1.4.2`, 1.5 and 1.5.1 XML and the matter.js model have it as
+`TEMP`, so it carries chip's provisional note. At v1.4.2.0 only, chip's zap
+XML marks the EcosystemInformation cluster and its `EcosystemLocationStruct`
+provisional and its controller codegen declares `provisional cluster
+EcosystemInformation`; master and the 1.4.2 spec XML at both refs do not, so
+it carries chip's provisional note in its module docs (CommissionerControl is
+marked provisional at neither ref).
+
+chip's zap XML marks GeneralCommissioning's TermsAndConditions (TC) feature,
+its five TC attributes and `SetTCAcknowledgements` (with its response)
+provisional at both refs, and its controller codegen marks the TC
+attributes; v1.4.2.0's zap and controller codegen also mark
+NetworkCommissioning's `SupportedWiFiBands`, `SupportedThreadFeatures` and
+`ThreadVersion`. The 1.4.2 XML and the model do not, so the five TC
+attributes and the three NetworkCommissioning attributes carry chip's
+provisional note (from the controller codegen); the TC feature and
+`SetTCAcknowledgements`, marked in zap only, carry none.
+
+How each of these clusters was validated:
+
+- **Live against chip's all-clusters**, at local master 5cd2917a and at
+  v1.4.2.0 in the nightly (run 38120287902 on 9fe51d8, linux-x64):
+  LocalizationConfiguration, TimeFormatLocalization, UnitLocalization,
+  PowerSourceConfiguration, Actions (refusals only: all-clusters' stub has
+  no real actions and emits no events), GeneralCommissioning,
+  NetworkCommissioning (Ethernet, reads only), DiagnosticLogs, and the
+  Software, Wi-Fi, Thread and Ethernet diagnostics clusters. The four tests
+  of the diagnostics clusters and DiagnosticLogs also passed against
+  v1.4.2.0's all-clusters built for Linux arm64 and run on a Raspberry Pi.
+- **Not run live; decode smoke and `chip-xml-conformance.py` only:**
+  EcosystemInformation (fabric-bridge-app and fabric-sync serve it with
+  empty directories), CommissionerControl (hosted by fabric-bridge-app and
+  fabric-sync; fabric-bridge-app builds on a Linux arm64 Pi at chip master
+  5cd2917a, but no test has run against it), and ThreadBorderRouterManagement,
+  ThreadNetworkDirectory and WiFiNetworkManagement (hosted by
+  network-manager-app; ThreadBorderRouterManagement also by thread-br-app and
+  others).
+
+### matter-clusters: Added — media and TV-platform clusters
+
+- **WakeOnLan (0x0503)**, **LowPower (0x0508)**, **KeypadInput (0x0509)**,
+  **MediaInput (0x0507)**, **AudioOutput (0x050B)** and **TargetNavigator
+  (0x0505)**: every attribute, command and response, and TargetNavigator's
+  `TargetUpdated` event. chip's zap XML and controller codegen mark
+  WakeOnLan's `LinkLocalAddress` provisional (v1.4.2.0 and master); the 1.4.2
+  spec XML and the model do not, so it carries chip's provisional note.
+- **ApplicationBasic (0x050D)**, **ApplicationLauncher (0x050C)**,
+  **AccountLogin (0x050E)** and **ContentAppObserver (0x0510)**: every
+  attribute, command and response, and AccountLogin's `LoggedOut` event.
+  `GetSetupPinResponse`'s setup PIN is a secret: its `Debug` output shows
+  `<redacted>`, like the secrets in the `Debug` fix below, and a raw
+  `InvokeResult` hides it from `matter-controller` 0.18.2. The model leaves
+  out `LoggedOut`'s implicit FabricIndex (so does matter.js); the decoder
+  skips it. ContentAppObserver's `ContentAppMessage` follows the
+  specification (`Data` mandatory, `EncodingHint` optional), where chip's
+  codegen has the opposite. At v1.4.2.0 only, chip's zap XML and controller
+  codegen mark ContentAppObserver provisional; master and the 1.4.2 spec XML
+  at both refs do not, so its module docs carry chip's provisional note.
+- **MediaPlayback (0x0506)**: every attribute, command and response, and the
+  `StateChanged` event. `TrackStruct.TrackAttributes` is nullable although
+  the specification says otherwise: chip declares it nullable and tv-app sends
+  it null for an inactive text track (a chip-wire relaxation, recorded in
+  `clusters.json` `meta.relaxed` as class N). chip numbers
+  `TrackAttributesStruct.DisplayName` at tag 1, where the specification has
+  `Characteristics`, so a display-name string a chip device sends there is
+  skipped (`DisplayName` reads as `None`), and a null one reads as a null
+  `Characteristics`; tv-app always sends a string. `ActivateAudioTrack`'s
+  `AudioOutputIndex` is nullable in the specification, and optional here as
+  in matter.js (its conformance is the AudioTracks feature); chip's codegen
+  makes it a plain `uint8`, so chip's server refuses a null one with
+  InvalidCommand.
+- **ContentLauncher (0x050A)**: every attribute, command and response. Its
+  requests are the first whose structs nest structs (three deep in
+  `LaunchURL`'s `BrandingInformation`), carry optional and nullable lists,
+  and a `double` (`DimensionStruct`); its two requests, `LaunchURL` and
+  `LaunchContent`, are pinned byte for byte against matter.js (four
+  vectors). `TrackPreferenceStruct.Characteristics` lists MediaPlayback's
+  `CharacteristicEnum`, which the module carries as its own copy. chip's
+  codegen makes `PlaybackPosition`, `TextTrack` and `AudioOutputIndex`
+  mandatory and none of the preferences nullable, so chip's server refuses a
+  null in them in `LaunchContent` (InvalidCommand). chip's `LaunchURL` has no
+  `PlaybackPreferences` field, so its server skips one sent there.
+- **Channel (0x0504)**: every attribute, command and response.
+  `ExternalIdList` entries are ContentLauncher's `AdditionalInfoStruct`,
+  which the module carries as its own copy. `GetProgramGuide` follows the
+  specification and matter.js, where `RecordingFlag`, `ExternalIDList` and
+  `Data` are fields 5, 6 and 7; chip's codegen numbers them 4, 5 and 6 (both
+  refs). chip's server therefore reads a `RecordingFlag` at tag 5 as
+  `ExternalIDList` and an `ExternalIDList` at tag 6 as `Data`, and refuses
+  either with InvalidCommand; it skips a `Data` at tag 7. Requests without
+  the three work with both. chip's codegen also makes `PageToken`
+  non-nullable, so chip's server refuses a null one (InvalidCommand). chip's
+  zap XML marks `ProgramGuideResponse` provisional (both refs); the 1.4.2
+  spec XML and the model do not, so it carries no provisional note.
+- **ContentControl (0x050F)**, **provisional**: the specification marks the
+  whole cluster provisional (Matter 1.4.2, and still 1.5.1), so its shape may
+  change between specification revisions; such a change is still a breaking
+  `matter-clusters` release. Every attribute, command and response, and both
+  events. `ResetPinResponse`'s PIN is redacted in its `Debug`, and in a raw
+  `InvokeResult` from `matter-controller` 0.18.2. chip's zap XML and
+  controller codegen mark the cluster provisional too (both refs). chip
+  v1.4.2.0's codegen has an older shape of the cluster (five features,
+  attributes 0 to 7, no block lists or block-list commands, one event (no
+  `EnteringBlockContentTimeWindow`), no `StatusCodeEnum`, and
+  `UpdatePIN.OldPIN` and `AddBonusTime.BonusTime` optional); master's
+  matches the specification. The generated encoders always send `OldPIN`
+  and `BonusTime`, which either decoder accepts.
+
+How each of these clusters was validated:
+
+- **Live against chip's tv-app**, built at master 5cd2917a and at v1.4.2.0
+  for Linux arm64 and run on a Raspberry Pi (`just integration-tv`; tv-app
+  does not build on Apple silicon without Rosetta 2; the nightly runs these
+  tests at v1.4.2.0 (linux-x64), green in nightly 38175373715 on 2245a81):
+  WakeOnLan, LowPower, KeypadInput, MediaInput, AudioOutput,
+  TargetNavigator, MediaPlayback, ContentLauncher, Channel,
+  ApplicationLauncher and ContentControl on its endpoint 1 (tv-app's
+  ContentControl delegate is a stub: the two rating lists fail to read and
+  the block-list commands are unsupported, so the live test covers
+  attributes 0, 2 and 4–7 and the status answers only), ApplicationBasic on
+  its five Content App endpoints, and AccountLogin on its Vendor3 Content
+  App. Every test passed at both refs, as did the Messages tests in the
+  same suite.
+- **Live against chip's all-clusters** as well: WakeOnLan and LowPower,
+  locally at master 5cd2917a on macOS and at v1.4.2.0 on the Pi, and in the
+  nightly at v1.4.2.0 (linux-x64), green in nightly 38175373715 on 2245a81.
+- **Not run live; decode smoke and `chip-xml-conformance.py` only:**
+  ContentAppObserver. Of chip's example apps only tv-casting-app serves it,
+  and the harness does not drive tv-casting-app.
+- **Events:** none has a stimulus that reaches tv-app's event log.
+  TargetUpdated and StateChanged are logged on endpoint 0 only, and only
+  when an ember attribute changes; chip's server never logs LoggedOut (it
+  leaves out the FabricIndex, so `LogEvent` refuses it) or any ContentControl
+  event. They are covered by decode smoke only.
+
+The live tests run without pacing. chip master's tv-app has only 15 packet
+buffers, each held by a response until its ACK arrives; the controller ACKs
+every response as its exchange closes (matter-transport 0.7.4,
+matter-controller 0.18.2).
+
+### matter-clusters: Fixed (security) — `Debug` output leaves secrets out
+
+- GroupKeyManagement `GroupKeySetStruct`'s derived `Debug` printed its three
+  epoch keys (`EpochKey0`/`1`/`2`) in full, in every release since the
+  cluster was generated (M9-A2.5; 0.5.0 included), so a `{:?}` log of a key
+  set leaked the group keys. It now prints `<redacted>` for each key. Not a
+  breaking change: the struct still implements `Clone`, `Debug` and
+  `PartialEq` (`Debug` is now written by hand instead of derived), and its
+  fields, types and wire bytes are unchanged. `KeySetReadResponse`'s `{:?}`
+  output changes too: it holds a `GroupKeySetStruct`, and its derived
+  `Debug` prints it through the redacting one.
+- The same applies to the structs this release adds that carry a secret:
+  ThreadBorderRouterManagement `DatasetResponse` and ThreadNetworkDirectory
+  `OperationalDatasetResponse` (Thread datasets, network key included),
+  WiFiNetworkManagement `NetworkPassphraseResponse` (the Wi-Fi passphrase),
+  CommissionerControl `ReverseOpenCommissioningWindow`'s PAKE verifier,
+  AccountLogin `GetSetupPinResponse` (a setup PIN for PASE with the
+  Commissionee) and
+  ContentControl `ResetPinResponse` (the new content-control PIN).
+  Each secret field's rustdoc says so. Values are untouched; only the `{:?}`
+  rendering differs (it was never a stable format).
+
+### matter-clusters: Changed (breaking) — generated names keep acronyms whole
+
+The codegen no longer splits `IDs`, `IPv`, `SoC`, `WiFi` and `V2X` in the
+middle when it turns a model name into a Rust name. Names that 0.5.0 had:
+
+| 0.5.0 | 0.6.0 |
+|---|---|
+| `general_diagnostics::NetworkInterface::off_premise_services_reachable_i_pv4` | `off_premise_services_reachable_ipv4` |
+| `general_diagnostics::NetworkInterface::off_premise_services_reachable_i_pv6` | `off_premise_services_reachable_ipv6` |
+| `general_diagnostics::NetworkInterface::i_pv4_addresses` | `ipv4_addresses` |
+| `general_diagnostics::NetworkInterface::i_pv6_addresses` | `ipv6_addresses` |
+| `group_key_management::KeySetReadAllIndicesResponse::group_key_set_i_ds` | `group_key_set_ids` |
+
+The clusters first released in 0.6.0 follow the same rule from the start:
+for example `wifi_network_diagnostics` and `wifi_network_management` (the
+modules), `network_commissioning::encode_add_or_update_wifi_network`,
+`messages::decode_active_message_ids`,
+`energy_evse::ChargingTargetStruct::target_soc` and
+`energy_evse::Feature::V2X`. Type names are the model's own and do not
+change.
+
+Enum members whose model name starts with a digit get a name, not a `_`
+prefix: `time_format_localization::HourFormatEnum::{Hr12, Hr24}` and
+`network_commissioning::WiFiBandEnum::{Band2G4, Band3G65, Band5G, Band6G,
+Band60G, Band1G}` (both new in 0.6.0). PowerSource's battery designations
+keep their `_` prefix (`BatCommonDesignationEnum::_4V5`, `_18650`): they are
+catalogue codes that mix sizes and voltages, so no one word fits them all.
+
+### matter-clusters: Changed (breaking) — secret request arguments are `Secret<T>`
+
+New `matter_clusters::types::Secret<T>`: a wrapper whose `Debug` prints the
+quoted placeholder `"<redacted>"` and that has no `Display`; `new`, `expose`,
+`into_inner` and `From<T>`. It guards logs only: the value is not zeroed, and
+the payload an encoder returns carries it in clear.
+
+Every request argument that carries a secret now takes it as `&Secret<T>`
+(required) or `Option<Secret<T>>` (optional), and the encoder's rustdoc warns
+about the payload. Wrap the value you passed before with `Secret::new(..)`;
+the encoded bytes are unchanged. Of these, 0.5.0 already had
+`administrator_commissioning::encode_open_commissioning_window`
+(`pake_passcode_verifier`), `door_lock::{encode_set_credential,
+encode_lock_door, encode_unlock_door, encode_unlock_with_timeout,
+encode_unbolt_door}`, `general_diagnostics::{encode_test_event_trigger,
+encode_payload_test_request}` (`enable_key`),
+`icd_management::{encode_register_client, encode_unregister_client}` (`key`,
+`verification_key`) and `operational_credentials::encode_add_noc`
+(`ipk_value`). The others are new in this release: AccountLogin `Login`,
+ContentControl `UpdatePin` and `AddBonusTime`, NetworkCommissioning
+`AddOrUpdateWiFiNetwork` and `AddOrUpdateThreadNetwork`,
+ThreadBorderRouterManagement `SetActiveDatasetRequest` and
+`SetPendingDatasetRequest`, and ThreadNetworkDirectory `AddNetwork`.
+GroupKeyManagement `encode_key_set_write` keeps its `GroupKeySetStruct`
+argument (that struct's `Debug` already redacts its epoch keys) and gains the
+same warning.
+
+### matter-clusters: Changed — structs a writable attribute carries are constructible
+
+A struct that has an encoder is no longer `#[non_exhaustive]`, so a caller
+can build a new entry with a struct literal, not only re-encode a decoded
+one. This affects the eight structs that have an encoder only because a
+writable list attribute carries them: `binding::TargetStruct`,
+`user_label::LabelStruct`, `group_key_management::GroupKeyMapStruct`,
+`ota_software_update_requestor::ProviderLocation`,
+`thermostat::{PresetStruct, ScheduleTransitionStruct}` and
+`access_control::{AccessControlExtensionStruct, AccessControlTargetStruct}`.
+Additive. `AccessControlExtensionStruct`'s encoder still refuses a `None`
+`data` (`ClusterError::MissingField`), so a withheld entry is never written
+back. Structs without a generated encoder stay `#[non_exhaustive]`.
+
+### matter-clusters: Fixed — fabric-scoped list entries are encoded for a write without `FabricIndex`
+
+`binding::TargetStruct`, `group_key_management::GroupKeyMapStruct`,
+`ota_software_update_requestor::ProviderLocation` and
+`access_control::AccessControlExtensionStruct` have an encoder only so their
+writable list attributes (Binding, GroupKeyMap, DefaultOTAProviders, the ACL
+Extension) can be written. Their `encode`/`write_fields` now leave
+`FabricIndex` (tag 254) out, as chip's `EncodeForWrite` does: a server sets
+it to the fabric of the session that writes the list, whatever the client
+sends. Before, the encoder wrote the struct's `fabric_index`. This is a wire
+change for these writes only; the bytes match matter.js 0.16.11's write
+encoding (four new vectors). Decoding is unchanged: a read still carries
+`FabricIndex`, and the field stays in the struct (any value works in an entry
+built to write). No request command carries these structs.
+
+Migration: decoding an entry's own `encode()` output now fails with
+`ClusterError::MissingField("FabricIndex")`, because the index is the
+server's to add (a read returns it). Code that re-encoded a decoded entry to
+compare or store it, rather than to write it, must keep the decoded value
+instead.
+
+### matter-clusters: Changed (breaking) — `CLUSTER_REVISION` is the Matter 1.4.2 revision
+
+Each module's `CLUSTER_REVISION` is now the cluster's revision in Matter
+1.4.2 (from chip's 1.4.2 data model; matter.js 0.16.11 has the same value for
+all 113 clusters), not the codegen model's (Matter 1.5.1). The value drops
+for 28 clusters, for example LevelControl 7 → 6, ColorControl 9 → 7,
+WindowCovering 8 → 6, Thermostat 10 → 9, DoorLock 10 → 9 and the ten
+concentration-measurement clusters 4 → 3. A device reports its own revision
+in the global `ClusterRevision` attribute; where the model's revision is
+higher, the constant's rustdoc says the module follows the model for what
+changed after 1.4.2. The constant is the specification's revision, not what
+a given device reports: chip's v1.4.2.0 SDK builds 20 of these clusters at a
+different revision (most lower, such as DoorLock 7 and OperationalState 1;
+ValveConfigurationAndControl and ElectricalEnergyMeasurement at 2, one
+higher), and that tag's copy of the 1.4.2 data model has Identify at 5, where
+chip's current copy and matter.js have 6. Read `ClusterRevision` from the
+device before relying on an element a later revision added. The revisions are frozen in the repository
+(`xtask/scripts/dump-model/chip-1.4.2.json`, written by
+`scripts/chip-facts.py`), so generating needs no chip checkout.
+
+### matter-clusters: Changed — rustdoc notes what chip's 1.4.2 data marks provisional
+
+Every generated element that chip's Matter 1.4.2 data marks provisional
+while the codegen model does not now carries one rustdoc line saying so: 36
+elements (EnergyEvse's `SOC`, `PNC` and `V2X` features; GeneralCommissioning's
+five TC attributes; NetworkCommissioning's `SupportedWiFiBands`,
+`SupportedThreadFeatures` and `ThreadVersion`; UnitLocalization's
+`SupportedTemperatureUnits`; WakeOnLan's `LinkLocalAddress`; Descriptor's
+`EndpointUniqueId`; GroupKeyManagement's `GroupKeyMulticastPolicy`;
+OperationalCredentials' VID-verification commands and fields;
+DishwasherAlarm's five alarm bits; RvcOperationalState's eleven newer state
+and error values), and, in their module docs, the seven clusters chip's
+v1.4.2.0 controller codegen marks provisional as a whole (ScenesManagement,
+Messages, DeviceEnergyManagement, DeviceEnergyManagementMode,
+WaterHeaterManagement, EcosystemInformation, ContentAppObserver). The sources
+are chip's 1.4.2 data model (in its current tree and at the v1.4.2.0 release)
+and v1.4.2.0's controller codegen, frozen in
+`xtask/scripts/dump-model/chip-1.4.2.json`. Documentation only: no type,
+value or byte changes.
+
+### matter-ota: Changed (breaking) — built on `matter-clusters` 0.6
+
+`OtaError::Cluster` wraps `matter_clusters::error::ClusterError`, so moving
+to `matter-clusters` 0.6.0 changes a public type. Nothing else changes; the
+OtaSoftwareUpdateProvider codecs it uses encode and decode the same bytes.
+
+### matter-commissioning: Changed — tests build against `matter-clusters` 0.6
+
+The dev-dependency on `matter-clusters` (the `control_onoff` example and
+`tests/generated_codec_parity.rs`) moves to 0.6.0: the parity test compares
+this crate's hand-written GeneralCommissioning and NetworkCommissioning
+encoders with the generated ones, which exist only from 0.6.0, so the
+packaged 0.10.1 cannot build its own tests. The library and its API are
+unchanged (rustdoc and comment edits only), so this is a patch release.
+
+### matter-controller: Changed — requires `matter-clusters` 0.6 and `matter-ota` 0.6
+
+Both are private dependencies: the controller's public API names no
+`matter-clusters` or `matter-ota` type and re-exports none, so this is a
+patch release. It still requires `matter-commissioning` 0.10.1 and accepts
+0.10.2. The one exception sits behind the `unstable-provider` feature, which
+semver does not cover: `ProviderServer::serve_ota_once` takes a
+`matter_ota::ImageOffer`, now `matter-ota` 0.6's.
+
 ## Security and MRP patches — 2026-10-15 (matter-codec 0.3.2, matter-crypto 0.5.1, matter-interaction 0.4.3, matter-transport 0.7.4, matter-ota 0.5.2, matter-commissioning 0.10.1, matter-controller 0.18.2)
 
 These fixes stop secrets reaching logs through `{:?}` and
@@ -953,760 +1763,6 @@ published release, `0.1.0` through `0.18.1`.
   has no depth bound, so a message nested more than 32 levels deep in a part
   we ignore is rejected here and accepted by chip. No Interaction Model
   message comes near that depth.
-
-## Unreleased — matter-clusters 0.6.0 (in progress)
-
-**Not released.** This section collects changes on `main` that will ship
-when the cluster-library completion work finishes. Nothing below is on
-crates.io yet, and more will be added before the release.
-
-`matter-clusters` 0.6.0 is a breaking release. `matter-ota` must move to 0.6.0
-with it, because `OtaError::Cluster` exposes `matter_clusters::error::ClusterError`.
-
-### matter-clusters: Fixed (breaking) — fabric-sensitive fields of fabric-scoped structs are `Option`
-
-Our reads are unfiltered, so a fabric-scoped list such as AccessControl `Acl`
-returns every fabric's entries, and the device leaves the fabric-sensitive
-fields out of the entries that belong to another fabric. These fields were
-mandatory in the generated structs, so one such entry failed the decode of the
-whole list. They are now `Option`, where `None` means "withheld: another
-fabric's entry":
-
-- `AccessControlEntryStruct`: `privilege`, `auth_mode`, `subjects`, `targets`
-- `AccessControlExtensionStruct`: `data`
-- `AccessRestrictionEntryStruct`: `endpoint`, `cluster`, `restrictions`
-- `MonitoringRegistrationStruct` (IcdManagement): `check_in_node_id`,
-  `monitored_subject`, `client_type`
-- `SceneInfoStruct` (ScenesManagement, new in 0.6.0): `current_scene`,
-  `current_group`, `scene_valid`
-
-For `subjects` and `targets` the two layers are distinct: `None` is withheld,
-`Some(Nullable::Null)` is the wildcard.
-
-### matter-clusters: Changed (breaking) — encoders refuse a withheld field
-
-`AccessControlExtensionStruct` `encode`/`write_fields` now return `Result`
-and fail with
-`ClusterError::MissingField` when a fabric-sensitive field is `None`, so a
-withheld entry is never written back as if it were complete (chip reads a
-missing ACL `Subjects` as "every CASE node on the fabric"). A complete entry
-encodes byte-identically to before. `AccessControlEntryStruct`,
-`AccessRestrictionEntryStruct` and (see "Removed (breaking) — encoders
-nothing sends" below) `MonitoringRegistrationStruct` are decode-only.
-
-### matter-clusters: Fixed (breaking) — LevelControl's `*WithOnOff` commands sent no fields
-
-`encode_move_to_level_with_on_off`, `encode_move_with_on_off`,
-`encode_step_with_on_off` and `encode_stop_with_on_off` took no arguments and
-encoded an empty structure. A server that validates mandatory fields
-(matter.js) rejects it with `INVALID_ACTION`. A chip-based device does not: it
-decodes each missing field as zero or null and acts on that. An empty
-`MoveToLevelWithOnOff` is level 0, so the light dims to its minimum level and
-switches off, and the command still returns success. An empty `MoveWithOnOff`
-moves up at the default rate and switches on. An empty `StepWithOnOff` is a
-step up by 0, which chip rejects with `INVALID_COMMAND` and nothing changes.
-An empty `StopWithOnOff` decodes as two zero option masks, so chip treats it
-like a `StopWithOnOff` with both masks zero: it stops any transition in
-progress and returns success. (chip's level-control server, `stepHandler` and
-`stopHandler`, is the same at v1.4.2.0 and master.) These commands declare no
-fields of their own and inherit MoveToLevel's, Move's, Step's and Stop's, and
-the codegen read only a command's own fields. They now take the same
-arguments as their base command. `MoveToLevelWithOnOff` is pinned against a
-matter.js byte vector; the other three use the same generated field encoding
-as their base command (`MoveWithOnOff` as `Move`, `StepWithOnOff` as `Step`,
-`StopWithOnOff` as `Stop`).
-
-### matter-clusters: Added — events for 13 more clusters
-
-54 new events, each with an `event_id` const and a decode-only `<Name>Event`
-payload struct (Switch already had its seven):
-
-- BasicInformation (4): StartUp, ShutDown, Leave, ReachableChanged
-- BridgedDeviceBasicInformation (5): StartUp, ShutDown, Leave,
-  ReachableChanged, ActiveChanged
-- BooleanState (1): StateChange
-- OccupancySensing (1): OccupancyChanged
-- PumpConfigurationAndControl (17): the alarm and fault events, SupplyVoltageLow
-  through TurbineOperation
-- TimeSynchronization (5): DSTTableEmpty, DSTStatus, TimeZoneStatus,
-  TimeFailure, MissingTrustedTimeSource
-- OtaSoftwareUpdateRequestor (3): StateTransition, VersionApplied, DownloadError
-- GeneralDiagnostics (4): HardwareFaultChange, RadioFaultChange,
-  NetworkFaultChange, BootReason
-- PowerSource (3): WiredFaultChange, BatFaultChange, BatChargeFaultChange
-- AccessControl (3): AccessControlEntryChanged, AccessControlExtensionChanged,
-  FabricRestrictionReviewUpdate
-- ElectricalEnergyMeasurement (2): CumulativeEnergyMeasured,
-  PeriodicEnergyMeasured
-- ElectricalPowerMeasurement (1): MeasurementPeriodRanges
-- DoorLock (5): DoorLockAlarm, DoorStateChange, LockOperation,
-  LockOperationError, LockUserChange
-
-### matter-clusters: Added — mode, alarm and resource-monitoring clusters
-
-- **ModeBase-derived mode clusters:** OvenMode (0x0049), LaundryWasherMode
-  (0x0051), RefrigeratorAndTemperatureControlledCabinetMode (0x0052),
-  RvcRunMode (0x0054), RvcCleanMode (0x0055) and DishwasherMode (0x0059):
-  SupportedModes / CurrentMode decoders, `encode_change_to_mode` and
-  `ChangeToModeResponse`. `ChangeToModeResponse::status_text` is
-  `Option<String>`: its 1.4 conformance is conditional, chip's ModeBase
-  server leaves it out of the replies it builds itself (`UnsupportedMode`,
-  and `Success` for `ChangeToMode(CurrentMode)`), and the codegen now treats
-  only an unconditional `M` field as mandatory. An application delegate may
-  still include it (chip's rvc-app does, on the changes it refuses). A feature the cluster disallows (ModeBase's OnOff dependency,
-  DEPONOFF) gets no `Feature` flag.
-- MicrowaveOvenMode (0x005E; attributes only: ChangeToMode is disallowed
-  there), EnergyEvseMode (0x009D), WaterHeaterMode (0x009E) and
-  DeviceEnergyManagementMode (0x009F), with the same ModeBase surface.
-  DEPONOFF has no `Feature` flag in these either: the 1.4.2 cluster XML
-  disallows it in all four. chip's controller codegen still declares a
-  `kOnOff` bit for EnergyEvseMode, WaterHeaterMode and
-  DeviceEnergyManagementMode; a device that sets it loses nothing, since
-  FeatureMap reads as a raw `u32` (`gen::globals::decode_u32`).
-- **ModeSelect (0x0050)**, with its own `SemanticTagStruct` (MfgCode,
-  Value), distinct from the global `datatypes::SemanticTagStruct`.
-  `StandardNamespace` decodes as `Nullable<u16>`: Matter 1.4 declares it
-  enum16, wider than the enum8 namespace type in the codegen's model.
-- **DishwasherAlarm (0x005D) and RefrigeratorAlarm (0x0057)**, with their
-  `Notify` events (`event_id::NOTIFY`, decode-only `NotifyEvent`).
-  RefrigeratorAlarm has no `Latch`, `Reset` or `Feature::RESET`: it disallows
-  the RESET feature they depend on.
-- **HepaFilterMonitoring (0x0071), ActivatedCarbonFilterMonitoring (0x0072)
-  and WaterTankLevelMonitoring (0x0079)**: Condition, DegradationDirection,
-  ChangeIndication, InPlaceIndicator, LastChangedTime (writable),
-  ReplacementProductList and `encode_reset_condition`. No connectedhomeip
-  example app serves WaterTankLevelMonitoring; it is validated by decode
-  tests and the chip 1.4.2 XML check only.
-
-### matter-clusters: Added — appliance operational-state, appliance-control and service-area clusters
-
-- **OperationalState (0x0060), OvenCavityOperationalState (0x0048) and
-  RvcOperationalState (0x0061)**, with their `OperationalError` and
-  `OperationCompletion` events: the six attributes, the commands each
-  cluster allows (OvenCavityOperationalState has no Pause/Resume and
-  RvcOperationalState no Start/Stop: they are disallowed there; RVC adds
-  `GoHome`), and `OperationalCommandResponse`, whose `CommandResponseState`
-  the derived clusters inherit. `ErrorStateStruct::error_state_label` and
-  `OperationalStateStruct::operational_state_label` are `Option`: 1.4 asks
-  for a label only on manufacturer-specific ids, and the errors chip's
-  server builds itself carry none.
-- **TemperatureControl (0x0056), LaundryWasherControls (0x0053),
-  LaundryDryerControls (0x004A) and MicrowaveOvenControl (0x005F)**:
-  attribute decoders, writers for the writable laundry attributes, and
-  `encode_set_temperature`, `encode_set_cooking_parameters` and
-  `encode_add_more_time`, whose feature-gated or optional fields are each an
-  `Option` (left out of the command when `None`). `encode_set_temperature`
-  is pinned against a matter.js byte vector. MicrowaveOvenControl keeps the
-  WATTS (PowerInWatts) feature, its `SupportedWatts` / `SelectedWattIndex`
-  attributes and the `WattSettingIndex` field it gates, as chip's controller
-  codegen does. Matter 1.4 marks the feature and both attributes
-  provisional.
-- **ServiceArea (0x0150)**: SupportedAreas, SupportedMaps, SelectedAreas,
-  CurrentArea, EstimatedEndTime, Progress, `encode_select_areas`,
-  `encode_skip_area` and their responses. The Matter-global location
-  descriptor (`locationdesc` in the specification) is generated as
-  `service_area::LocationDescriptorStruct`, chip's name for it; the
-  landmark, relative-position and area-type tags are raw `u8`s whose values
-  come from the Common Landmark, Relative Position and Area namespaces.
-
-ServiceArea, MicrowaveOvenControl and the rvc-app paths (RvcOperationalState's
-GoHome and its events; RvcRunMode / RvcCleanMode's refused changes, while
-all-clusters covers their attributes and ChangeToMode live) run live against
-chip master 5cd2917a's rvc-app (8 of 8 tests) and microwave-oven-app (3 of
-3), built for Linux arm64 and run on a Raspberry Pi. They are not in the
-nightly, and they do not run on the Mac: rvc-app and microwave-oven-app need
-Rosetta 2 to build on Apple silicon.
-
-### matter-clusters: Changed — rustdoc states provisional elements and choice groups
-
-- A feature, attribute, command, event or field that Matter marks
-  provisional (conformance `P`, or `P, …`) carries "Provisional in Matter
-  1.5.1, the codegen model's revision: a later revision may change or remove
-  it." The note names 1.5.1 because that is where the mark comes from: an
-  element provisional there may be plain in 1.4.2 (DoorLock's RID is plain
-  `O` in 1.4.2). Today: DoorLock's
-  RID, FGP and FACE features, ElectricalEnergyMeasurement's APPE and REAE
-  features and fields, LevelControl FQ, GroupKeyManagement CS,
-  MicrowaveOvenControl WATTS with `SupportedWatts` / `SelectedWattIndex`, and
-  BasicInformation / BridgedDeviceBasicInformation `ConfigurationVersion`.
-- Fields in a choice group (`O.a+` and the like) are each an `Option`, and
-  neither the encoders nor the decoders check the group; the struct or
-  encoder rustdoc now states it ("a sender includes at least one of ….
-  Neither encoding nor decoding checks it."): MicrowaveOvenControl
-  `encode_set_cooking_parameters`, OperationalCredentials
-  `encode_set_vid_verification_statement`, both
-  `MeasurementAccuracyRangeStruct`s.
-- `service_area::LocationDescriptorStruct` says it is generated from the
-  Matter global type `locationdesc`.
-
-### matter-clusters: Changed — the generated modules are `matter_clusters::clusters`
-
-The cluster modules moved from `matter_clusters::gen` to
-`matter_clusters::clusters` (`matter_clusters::clusters::on_off`, ...).
-`gen` is a reserved keyword from Rust edition 2024, so an edition-2024 crate
-could not write `use matter_clusters::gen::on_off;` (only `r#gen::on_off`).
-`matter_clusters::gen` remains as a hidden alias of `clusters`, so existing
-edition 2015–2021 code keeps compiling unchanged; new code should use
-`clusters`. The generated files did not move.
-
-### matter-clusters: Added — Matter 1.4 elements the 1.5.1 model removed
-
-The cluster model the codegen reads follows Matter 1.5.1, which removed a
-few elements a Matter 1.4 device may still implement. chip's controller
-generates them, and so do we now, transcribed from chip's 1.4.2 data model
-and checked against it:
-
-- **Thermostat weekly schedule (feature `SCH`, bit 3):** `StartOfWeek`,
-  `NumberOfWeeklyTransitions`, `NumberOfDailyTransitions`,
-  `encode_set_weekly_schedule`, `encode_get_weekly_schedule`,
-  `encode_clear_weekly_schedule` and `GetWeeklyScheduleResponse`, using the
-  existing `ScheduleDayOfWeekBitmap`, `ScheduleModeBitmap`, `StartOfWeekEnum`
-  and `WeeklyScheduleTransitionStruct`. `WeeklyScheduleTransitionStruct` is
-  no longer `#[non_exhaustive]`, so a schedule can be built to send.
-  `encode_set_weekly_schedule` is pinned against a matter.js byte vector.
-  Matter 1.4 itself deprecates SCH (conformance `[Zigbee], D`: optional only
-  for a Zigbee device, deprecated otherwise), and Matter 1.5.1 removed it
-  (Thermostat revision 10); each item's rustdoc says both. No chip example
-  app the harness drives serves SCH (at v1.4.2.0 or master), so it is
-  validated by decode tests, the matter.js vector and the chip 1.4.2 XML
-  check only.
-- **WindowCovering absolute position (feature `ABS`, bit 3):**
-  `PhysicalClosedLimitLift` / `Tilt`, `CurrentPositionLift` / `Tilt`
-  (nullable), `InstalledOpenLimitLift` / `Tilt`, `InstalledClosedLimitLift`
-  / `Tilt`, `encode_go_to_lift_value` and `encode_go_to_tilt_value`. Matter
-  1.4 marks all of them provisional, and Matter 1.5 removed them
-  (WindowCovering revision 7); each item's rustdoc says both. Live: the
-  attributes decode against all-clusters, which does not set ABS and
-  refuses GoToLiftValue/GoToTiltValue; no successful absolute move has been
-  observed.
-- Each of these items carries one rustdoc line in place of the provisional
-  note ("Matter 1.4 element (from chip's 1.4.2 data model via the 1.4
-  supplement); …"), so it cannot be mistaken for a 1.5.1 element.
-
-### matter-clusters: Removed (breaking) — unused types, and encoders nothing sends
-
-The codegen now generates only what a client can use:
-
-- **A datatype is generated only when a generated attribute, command or
-  event uses it**, or it is a cluster's `StatusCodeEnum`, or it gives
-  meaning to a raw integer (OnOff's `DelayedAllOffEffectVariantEnum` and
-  `DyingLightEffectVariantEnum` for `OffWithEffect.EffectVariant`,
-  IlluminanceMeasurement's `LightSensorTypeEnum`, WindowCovering's
-  `MovementStatus` for each field of `OperationalStatusBitmap`). Removed:
-  `bridged_device_basic_information::CapabilityMinimaStruct`,
-  `door_lock::AlarmMaskBitmap`, `door_lock::EventTypeEnum`,
-  `microwave_oven_mode::ModeChangeStatus`. Scalar typedefs (Thermostat's
-  `SignedTemperature`, `UnsignedTemperature`, `TemperatureDifference`) are
-  exempt: they never become a Rust item (every use is generated as its base
-  integer), so there is nothing to prune.
-- **`write_fields` / `encode` exist only on structs a command request
-  carries, or all-scalar structs a writable attribute carries.** Eight of
-  the latter keep an encoder because a writable list attribute carries them
-  (`binding::TargetStruct`, `user_label::LabelStruct`,
-  `group_key_management::GroupKeyMapStruct`,
-  `ota_software_update_requestor::ProviderLocation`,
-  `thermostat::{PresetStruct, ScheduleTransitionStruct}`,
-  `access_control::{AccessControlExtensionStruct,
-  AccessControlTargetStruct}`), and they are constructible (see "structs a
-  writable attribute carries are constructible" below). Every decoder
-  stays. Removed from:
-  `basic_information::{CapabilityMinimaStruct, ProductAppearanceStruct}`,
-  `bridged_device_basic_information::ProductAppearanceStruct`,
-  `descriptor::DeviceTypeStruct`, `fixed_label::LabelStruct`,
-  `occupancy_sensing::HoldTimeLimitsStruct`,
-  `operational_credentials::{FabricDescriptorStruct, NOCStruct}`,
-  `time_synchronization::TrustedTimeSourceStruct`,
-  `icd_management::MonitoringRegistrationStruct` (`RegisteredClients` is
-  read-only; registering goes through `encode_register_client`),
-  `thermostat::{PresetTypeStruct, ScheduleTypeStruct,
-  ThermostatAttributeStatusEntryStruct}`,
-  `electrical_power_measurement::{HarmonicMeasurementStruct,
-  MeasurementAccuracyRangeStruct, MeasurementRangeStruct}`,
-  `electrical_energy_measurement::{CumulativeEnergyResetStruct,
-  EnergyMeasurementStruct, MeasurementAccuracyRangeStruct}`, `ModeTagStruct`
-  in the ten ModeBase-derived clusters, `mode_select::SemanticTagStruct`,
-  `ErrorStateStruct` and `OperationalStateStruct` in the three
-  OperationalState clusters, `ReplacementProductStruct` in the three
-  resource-monitoring clusters, and
-  `service_area::{LandmarkInfoStruct, LocationDescriptorStruct, MapStruct,
-  ProgressStruct}`.
-
-### matter-clusters: Added — safety, valve and scenes clusters
-
-- **SmokeCoAlarm (0x005C)**, with its eleven events: every attribute,
-  `encode_smoke_sensitivity_level`, `encode_self_test_request`, and
-  payload decoders for the five events that carry an `AlarmSeverityLevel`
-  (SmokeAlarm, CoAlarm, LowBattery, InterconnectSmokeAlarm,
-  InterconnectCoAlarm); the other six carry no fields and have an
-  `event_id` constant only.
-- **BooleanStateConfiguration (0x0080)**, with its `AlarmsStateChanged` and
-  `SensorFault` events: every attribute,
-  `encode_current_sensitivity_level`, `encode_suppress_alarm` and
-  `encode_enable_disable_alarm`. `AlarmsStateChanged.alarms_suppressed` is
-  an `Option`: chip's server sends it only with the alarm-suppress feature.
-- **ValveConfigurationAndControl (0x0081)**, with its `ValveStateChanged`
-  and `ValveFault` events: every attribute, the writers for
-  `DefaultOpenDuration` and `DefaultOpenLevel`, `encode_open` and
-  `encode_close`. `encode_open`'s `open_duration` is an
-  `Option<Nullable<u32>>`: `None` uses the valve's DefaultOpenDuration,
-  `Some(Nullable::Null)` opens it until it is closed. Pinned against a
-  matter.js byte vector.
-- **ScenesManagement (0x0062)**: `SceneTableSize`, `FabricSceneInfo`, and
-  the eight scene commands with their responses (`RecallScene` answers with
-  a status). `FabricSceneInfo` is fabric-scoped: on our unfiltered reads,
-  another fabric's entry arrives without `CurrentScene`, `CurrentGroup` and
-  `SceneValid`, so those are `Option` (`None` = withheld).
-  `AttributeValuePairStruct`'s eight value fields are each an `Option`;
-  exactly one should be set (its rustdoc says so; chip's server refuses a
-  pair without exactly one). `encode_add_scene` is pinned against a
-  matter.js byte vector. chip's zap and controller codegen still mark the
-  cluster provisional; the Matter 1.4.2 specification does not (revision 1
-  removed the provisional status), so its module docs carry chip's
-  provisional note rather than the specification's.
-
-### matter-clusters: Changed — rustdoc states provisional clusters and field dependencies
-
-- A cluster the Matter specification marks provisional as a whole carries a
-  module paragraph: its shape may change between specification revisions,
-  and a change is still a breaking release. EnergyPreference, added below,
-  is the first.
-- A struct field whose presence depends on another field of the struct
-  says so: "Required when `endpoint` is present" (or "absent"). When the
-  specification also disallows it in the opposite case (a bare conformance
-  such as `Endpoint` or `!Group`), the note adds "and must be omitted when
-  it is absent" (or "present"): chip's Binding server refuses a target
-  that carries `group` with `endpoint` or `node`. Nothing checks it on our
-  side. Today: Binding `TargetStruct` (`node`, `group`, `endpoint`) and
-  ElectricalPowerMeasurement `MeasurementRangeStruct` (the start, min and
-  max timestamps and systimes), both with the omitted half, and, below,
-  WaterHeaterManagement `WaterHeaterBoostInfoStruct.target_percentage`.
-
-### matter-clusters: Added — energy-management and messaging clusters
-
-- **EnergyPreference (0x009B)**, provisional: the specification marks the
-  whole cluster provisional (Matter 1.4.2, and still 1.5.1), and its module
-  rustdoc says so, so its shape may change in a later revision. Every
-  attribute, and the writers for `CurrentEnergyBalance` and
-  `CurrentLowPowerModeSensitivity`.
-- **PowerTopology (0x009C)**: `AvailableEndpoints` and `ActiveEndpoints`.
-  The model's `CircuitNodeStruct` is not generated: no attribute uses it,
-  and chip's 1.4.2 data model has no such struct.
-- **WaterHeaterManagement (0x0094)**, with its `BoostStarted` and
-  `BoostEnded` events: every attribute, `encode_boost` and
-  `encode_cancel_boost`. `WaterHeaterBoostInfoStruct`'s rustdoc states its
-  two rules, which the encoder does not check: at most one of `one_shot`
-  and `target_reheat`, and `target_percentage` whenever `target_reheat` is
-  set. chip's server with the TankPercent (TP) feature refuses a Boost
-  that breaks either with `InvalidCommand`; without TP it refuses any
-  Boost that carries `target_percentage` or `target_reheat`.
-- **DeviceEnergyManagement (0x0098)**, with its four events (`PowerAdjustEnd`
-  and `Resumed` carry a cause; `PowerAdjustStart` and `Paused` are ids
-  only): every attribute, including the nested `Forecast` (slots, each with
-  optional costs) and `PowerAdjustmentCapability`, and encoders for all
-  eight requests.
-- **EnergyEvse (0x0099)**, with its six events: every attribute, the
-  writers for `UserMaximumChargeCurrent`, `RandomizationDelayWindow` and
-  `ApproximateEvEfficiency`, encoders for all seven requests, and
-  `GetTargetsResponse`. Every request is a timed command; `Node::invoke`
-  retries it as a timed interaction when the device asks. Each
-  `ChargingTargetStruct` should carry at least one of `target_soc` and
-  `added_energy` (its rustdoc says so; the encoder does not check it).
-  chip's server also checks `target_soc` against the SOC feature: with
-  SOC, `target_soc` is required; without it, it may only be absent or 100.
-- **Messages (0x0097)**, with its three events: `Messages`,
-  `ActiveMessageIDs`, `encode_present_messages_request` and
-  `encode_cancel_messages_request`, both pinned against matter.js byte
-  vectors. `Messages` is fabric-scoped: another fabric's entry arrives
-  without its fabric-sensitive fields, so `MessageStruct`'s fields are
-  `Option` (`None` = withheld). Its `fabric_index`, and the events'
-  `fabric_index`, are `Option` too: chip does not fabric-scope them. chip's
-  SDK servers and tv-app's delegate do not filter entries by fabric, and no
-  chip-SDK server can send FabricIndex (the generated types have no field
-  254).
-
-chip's zap and controller codegen mark WaterHeaterManagement and
-DeviceEnergyManagement provisional (at v1.4.2.0 and master), and Messages at
-v1.4.2.0 (master no longer does); the Matter 1.4.2 specification marks none
-of the three provisional, so, as with ScenesManagement, their module docs
-carry chip's provisional note.
-
-EnergyPreference runs live against chip's all-clusters, both master (locally)
-and v1.4.2.0 (the nightly). WaterHeaterManagement runs live only against
-v1.4.2.0's all-clusters, in the nightly: master's all-clusters no longer
-serves it, and master's server is unexercised (water-heater-app, its master
-host, is not built). DeviceEnergyManagement, EnergyEvse and PowerTopology
-commands and events run live only against chip master's evse-app, locally
-(evse-app does not exist at v1.4.2.0 and is not in the nightly); the nightly
-decodes their attributes, and invokes GetTargets once, on v1.4.2.0's
-all-clusters. Messages runs live against chip's tv-app (its only chip host),
-built at master 5cd2917a and at v1.4.2.0 for Linux arm64 and run on a
-Raspberry Pi: both tests, `messages_present_and_cancel_round_trip` and
-`messages_refuse_malformed_requests`, pass at both refs with no pacing
-between exchanges. Until the controller ACKed each response as its exchange
-closed (matter-transport 0.7.4, matter-controller 0.18.2), master's tv-app
-ACKed a request in `messages_refuse_malformed_requests` and never answered it
-unless every exchange was paced: it gets a 15-buffer PacketBuffer pool (its
-`CHIPProjectAppConfig.h` sets 500 inside `#ifndef
-CHIP_DEVICE_LAYER_TARGET_DARWIN`, which is always defined), and responses the
-previous test's controller left unACKed when it was dropped exhausted it. At
-v1.4.2.0 both tests passed unpaced throughout. Since the media clusters were
-added, the nightly runs them at v1.4.2.0 (linux-x64), and both passed in
-nightly 38175373715 on 2245a81; they do not run on the Mac (tv-app needs
-Rosetta 2 to build on Apple silicon). Beyond those runs, Messages is validated by decode tests, two
-matter.js vectors and the chip 1.4.2 XML check. chip's servers send every
-`MessageStruct` field to every fabric and no FabricIndex, so on a chip device
-every entry decodes in full with `fabric_index` `None`.
-
-### matter-clusters: Added — diagnostics and infrastructure clusters
-
-- **LocalizationConfiguration (0x002B)**, **TimeFormatLocalization
-  (0x002C)**, **UnitLocalization (0x002D)** and **PowerSourceConfiguration
-  (0x002E)**: every attribute, and the writers for `ActiveLocale`,
-  `HourFormat`, `ActiveCalendarType` and `TemperatureUnit`. Attributes only.
-- **SoftwareDiagnostics (0x0034)**, **WiFiNetworkDiagnostics (0x0036)** and
-  **EthernetNetworkDiagnostics (0x0037)**: every attribute, the reset
-  commands, and the `SoftwareFault`, `Disconnection`, `AssociationFailure`
-  and `ConnectionStatus` events.
-- **DiagnosticLogs (0x0032)**: `RetrieveLogsRequest` and its response. Codecs
-  only: a BDX log transfer is not implemented.
-- **ThreadNetworkDiagnostics (0x0035)**: all 65 attributes (the neighbor and
-  route tables, `SecurityPolicy`, `OperationalDatasetComponents`, and
-  `MeshLocalPrefix`, an IPv6 prefix carried as its raw bytes: chip's
-  OpenThread provider sends nine, the prefix length in bits and then the
-  eight prefix bytes), `ResetCounts`, and the `ConnectionStatus` and
-  `NetworkFaultChange` events. `ExtAddress` and `Rloc16` are provisional.
-- **GeneralCommissioning (0x0030)** and **NetworkCommissioning (0x0031)**:
-  every attribute, command and response. Codecs only, for use outside
-  commissioning: `matter-commissioning` keeps driving commissioning with its
-  hand-written subset, and a new test there pins that the two encode every
-  command it sends identically. The generated response decoders follow the
-  specification, so `DebugText` (the ArmFailSafe, SetRegulatoryConfig and
-  CommissioningComplete responses), `ErrorValue` (`ConnectNetworkResponse`)
-  and `BasicCommissioningInfo`'s `MaxCumulativeFailsafeSeconds` are
-  mandatory; `matter-commissioning`'s response decoders, which the
-  commissioning flow uses, accept them missing. GeneralCommissioning's
-  NetworkRecovery (NR) feature and its three attributes
-  (`RecoveryIdentifier`, `NetworkRecoveryReason` and
-  `IsCommissioningWithoutPower`) come from the model only, where they are
-  provisional; the 1.4.2 XML does not have them. chip's Per-Device
-  Credentials elements of NetworkCommissioning (the PDC feature,
-  `QueryIdentity` and its response, and the `NetworkIdentity`,
-  `ClientIdentifier` and `PossessionNonce` fields), which chip's zap and
-  controller codegen carry at both refs, are not generated: the 1.4.2, 1.5
-  and 1.5.1 specification XML and the model do not have them.
-- **Actions (0x0025)**: `ActionList`, `EndpointLists`, `SetupURL`, the twelve
-  action commands, and the `StateChanged` and `ActionFailed` events.
-- **EcosystemInformation (0x0750)**: `DeviceDirectory` and
-  `LocationDirectory`. Both are fabric-scoped lists, so other fabrics'
-  entries decode with their fabric-sensitive fields `None`. The
-  global location struct is generated as
-  `ecosystem_information::LocationDescriptorStruct`. No chip example app
-  fills its directories (fabric-bridge-app and fabric-sync add the cluster,
-  empty, to their bridged-device endpoints), so it is checked by decode
-  smoke and `chip-xml-conformance.py` only.
-- **CommissionerControl (0x0751)**: `SupportedDeviceCategories`,
-  `RequestCommissioningApproval`, `CommissionNode` and its
-  `ReverseOpenCommissioningWindow` response, and the
-  `CommissioningRequestResult` event. Codecs only: the approval flow is not
-  implemented.
-- **WiFiNetworkManagement (0x0451)**, **ThreadBorderRouterManagement
-  (0x0452)** and **ThreadNetworkDirectory (0x0453)**: every attribute,
-  command and response. Codecs only.
-
-chip's zap and controller codegen mark UnitLocalization's
-`SupportedTemperatureUnits` provisional (at v1.4.2.0 and master), and so
-does v1.4.2.0's `data_model/1.4.2` XML (`P, TEMP`). Master's
-`data_model/1.4.2`, 1.5 and 1.5.1 XML and the matter.js model have it as
-`TEMP`, so it carries chip's provisional note. At v1.4.2.0 only, chip's zap
-XML marks the EcosystemInformation cluster and its `EcosystemLocationStruct`
-provisional and its controller codegen declares `provisional cluster
-EcosystemInformation`; master and the 1.4.2 spec XML at both refs do not, so
-it carries chip's provisional note in its module docs (CommissionerControl is
-marked provisional at neither ref).
-
-chip's zap XML marks GeneralCommissioning's TermsAndConditions (TC) feature,
-its five TC attributes and `SetTCAcknowledgements` (with its response)
-provisional at both refs, and its controller codegen marks the TC
-attributes; v1.4.2.0's zap and controller codegen also mark
-NetworkCommissioning's `SupportedWiFiBands`, `SupportedThreadFeatures` and
-`ThreadVersion`. The 1.4.2 XML and the model do not, so the five TC
-attributes and the three NetworkCommissioning attributes carry chip's
-provisional note (from the controller codegen); the TC feature and
-`SetTCAcknowledgements`, marked in zap only, carry none.
-
-How each of these clusters was validated:
-
-- **Live against chip's all-clusters**, at local master 5cd2917a and at
-  v1.4.2.0 in the nightly (run 38120287902 on 9fe51d8, linux-x64):
-  LocalizationConfiguration, TimeFormatLocalization, UnitLocalization,
-  PowerSourceConfiguration, Actions (refusals only: all-clusters' stub has
-  no real actions and emits no events), GeneralCommissioning,
-  NetworkCommissioning (Ethernet, reads only), DiagnosticLogs, and the
-  Software, Wi-Fi, Thread and Ethernet diagnostics clusters. The four tests
-  of the diagnostics clusters and DiagnosticLogs also passed against
-  v1.4.2.0's all-clusters built for Linux arm64 and run on a Raspberry Pi.
-- **Not run live; decode smoke and `chip-xml-conformance.py` only:**
-  EcosystemInformation (fabric-bridge-app and fabric-sync serve it with
-  empty directories), CommissionerControl (hosted by fabric-bridge-app and
-  fabric-sync; fabric-bridge-app builds on a Linux arm64 Pi at chip master
-  5cd2917a, but no test has run against it), and ThreadBorderRouterManagement,
-  ThreadNetworkDirectory and WiFiNetworkManagement (hosted by
-  network-manager-app; ThreadBorderRouterManagement also by thread-br-app and
-  others).
-
-### matter-clusters: Added — media and TV-platform clusters
-
-- **WakeOnLan (0x0503)**, **LowPower (0x0508)**, **KeypadInput (0x0509)**,
-  **MediaInput (0x0507)**, **AudioOutput (0x050B)** and **TargetNavigator
-  (0x0505)**: every attribute, command and response, and TargetNavigator's
-  `TargetUpdated` event. chip's zap XML and controller codegen mark
-  WakeOnLan's `LinkLocalAddress` provisional (v1.4.2.0 and master); the 1.4.2
-  spec XML and the model do not, so it carries chip's provisional note.
-- **ApplicationBasic (0x050D)**, **ApplicationLauncher (0x050C)**,
-  **AccountLogin (0x050E)** and **ContentAppObserver (0x0510)**: every
-  attribute, command and response, and AccountLogin's `LoggedOut` event.
-  `GetSetupPinResponse`'s setup PIN is a secret: its `Debug` output shows
-  `<redacted>`, like the secrets in the `Debug` fix below, and a raw
-  `InvokeResult` hides it from `matter-controller` 0.18.2. The model leaves
-  out `LoggedOut`'s implicit FabricIndex (so does matter.js); the decoder
-  skips it. ContentAppObserver's `ContentAppMessage` follows the
-  specification (`Data` mandatory, `EncodingHint` optional), where chip's
-  codegen has the opposite. At v1.4.2.0 only, chip's zap XML and controller
-  codegen mark ContentAppObserver provisional; master and the 1.4.2 spec XML
-  at both refs do not, so its module docs carry chip's provisional note.
-- **MediaPlayback (0x0506)**: every attribute, command and response, and the
-  `StateChanged` event. `TrackStruct.TrackAttributes` is nullable although
-  the specification says otherwise: chip declares it nullable and tv-app sends
-  it null for an inactive text track (a chip-wire relaxation, recorded in
-  `clusters.json` `meta.relaxed` as class N). chip numbers
-  `TrackAttributesStruct.DisplayName` at tag 1, where the specification has
-  `Characteristics`, so a display-name string a chip device sends there is
-  skipped (`DisplayName` reads as `None`), and a null one reads as a null
-  `Characteristics`; tv-app always sends a string. `ActivateAudioTrack`'s
-  `AudioOutputIndex` is nullable in the specification, and optional here as
-  in matter.js (its conformance is the AudioTracks feature); chip's codegen
-  makes it a plain `uint8`, so chip's server refuses a null one with
-  InvalidCommand.
-- **ContentLauncher (0x050A)**: every attribute, command and response. Its
-  requests are the first whose structs nest structs (three deep in
-  `LaunchURL`'s `BrandingInformation`), carry optional and nullable lists,
-  and a `double` (`DimensionStruct`); its two requests, `LaunchURL` and
-  `LaunchContent`, are pinned byte for byte against matter.js (four
-  vectors). `TrackPreferenceStruct.Characteristics` lists MediaPlayback's
-  `CharacteristicEnum`, which the module carries as its own copy. chip's
-  codegen makes `PlaybackPosition`, `TextTrack` and `AudioOutputIndex`
-  mandatory and none of the preferences nullable, so chip's server refuses a
-  null in them in `LaunchContent` (InvalidCommand). chip's `LaunchURL` has no
-  `PlaybackPreferences` field, so its server skips one sent there.
-- **Channel (0x0504)**: every attribute, command and response.
-  `ExternalIdList` entries are ContentLauncher's `AdditionalInfoStruct`,
-  which the module carries as its own copy. `GetProgramGuide` follows the
-  specification and matter.js, where `RecordingFlag`, `ExternalIDList` and
-  `Data` are fields 5, 6 and 7; chip's codegen numbers them 4, 5 and 6 (both
-  refs). chip's server therefore reads a `RecordingFlag` at tag 5 as
-  `ExternalIDList` and an `ExternalIDList` at tag 6 as `Data`, and refuses
-  either with InvalidCommand; it skips a `Data` at tag 7. Requests without
-  the three work with both. chip's codegen also makes `PageToken`
-  non-nullable, so chip's server refuses a null one (InvalidCommand). chip's
-  zap XML marks `ProgramGuideResponse` provisional (both refs); the 1.4.2
-  spec XML and the model do not, so it carries no provisional note.
-- **ContentControl (0x050F)**, **provisional**: the specification marks the
-  whole cluster provisional (Matter 1.4.2, and still 1.5.1), so its shape may
-  change between specification revisions; such a change is still a breaking
-  `matter-clusters` release. Every attribute, command and response, and both
-  events. `ResetPinResponse`'s PIN is redacted in its `Debug`, and in a raw
-  `InvokeResult` from `matter-controller` 0.18.2. chip's zap XML and
-  controller codegen mark the cluster provisional too (both refs). chip
-  v1.4.2.0's codegen has an older shape of the cluster (five features,
-  attributes 0 to 7, no block lists or block-list commands, one event (no
-  `EnteringBlockContentTimeWindow`), no `StatusCodeEnum`, and
-  `UpdatePIN.OldPIN` and `AddBonusTime.BonusTime` optional); master's
-  matches the specification. The generated encoders always send `OldPIN`
-  and `BonusTime`, which either decoder accepts.
-
-How each of these clusters was validated:
-
-- **Live against chip's tv-app**, built at master 5cd2917a and at v1.4.2.0
-  for Linux arm64 and run on a Raspberry Pi (`just integration-tv`; tv-app
-  does not build on Apple silicon without Rosetta 2; the nightly runs these
-  tests at v1.4.2.0 (linux-x64), green in nightly 38175373715 on 2245a81):
-  WakeOnLan, LowPower, KeypadInput, MediaInput, AudioOutput,
-  TargetNavigator, MediaPlayback, ContentLauncher, Channel,
-  ApplicationLauncher and ContentControl on its endpoint 1 (tv-app's
-  ContentControl delegate is a stub: the two rating lists fail to read and
-  the block-list commands are unsupported, so the live test covers
-  attributes 0, 2 and 4–7 and the status answers only), ApplicationBasic on
-  its five Content App endpoints, and AccountLogin on its Vendor3 Content
-  App. Every test passed at both refs, as did the Messages tests in the
-  same suite.
-- **Live against chip's all-clusters** as well: WakeOnLan and LowPower,
-  locally at master 5cd2917a on macOS and at v1.4.2.0 on the Pi, and in the
-  nightly at v1.4.2.0 (linux-x64), green in nightly 38175373715 on 2245a81.
-- **Not run live; decode smoke and `chip-xml-conformance.py` only:**
-  ContentAppObserver. Of chip's example apps only tv-casting-app serves it,
-  and the harness does not drive tv-casting-app.
-- **Events:** none has a stimulus that reaches tv-app's event log.
-  TargetUpdated and StateChanged are logged on endpoint 0 only, and only
-  when an ember attribute changes; chip's server never logs LoggedOut (it
-  leaves out the FabricIndex, so `LogEvent` refuses it) or any ContentControl
-  event. They are covered by decode smoke only.
-
-The live tests run without pacing. chip master's tv-app has only 15 packet
-buffers, each held by a response until its ACK arrives; the controller ACKs
-every response as its exchange closes (matter-transport 0.7.4,
-matter-controller 0.18.2).
-
-### matter-clusters: Fixed (security) — `Debug` output leaves secrets out
-
-- GroupKeyManagement `GroupKeySetStruct`'s derived `Debug` printed its three
-  epoch keys (`EpochKey0`/`1`/`2`) in full, in every release since the
-  cluster was generated (M9-A2.5; 0.5.0 included), so a `{:?}` log of a key
-  set leaked the group keys. It now prints `<redacted>` for each key. Not a
-  breaking change: the struct still implements `Clone`, `Debug` and
-  `PartialEq` (`Debug` is now written by hand instead of derived), and its
-  fields, types and wire bytes are unchanged. `KeySetReadResponse`'s `{:?}`
-  output changes too: it holds a `GroupKeySetStruct`, and its derived
-  `Debug` prints it through the redacting one.
-- The same applies to the structs this release adds that carry a secret:
-  ThreadBorderRouterManagement `DatasetResponse` and ThreadNetworkDirectory
-  `OperationalDatasetResponse` (Thread datasets, network key included),
-  WiFiNetworkManagement `NetworkPassphraseResponse` (the Wi-Fi passphrase),
-  CommissionerControl `ReverseOpenCommissioningWindow`'s PAKE verifier,
-  AccountLogin `GetSetupPinResponse` (a setup PIN for PASE with the
-  Commissionee) and
-  ContentControl `ResetPinResponse` (the new content-control PIN).
-  Each secret field's rustdoc says so. Values are untouched; only the `{:?}`
-  rendering differs (it was never a stable format).
-
-### matter-clusters: Changed (breaking) — generated names keep acronyms whole
-
-The codegen no longer splits `IDs`, `IPv`, `SoC`, `WiFi` and `V2X` in the
-middle when it turns a model name into a Rust name. Names that 0.5.0 had:
-
-| 0.5.0 | 0.6.0 |
-|---|---|
-| `general_diagnostics::NetworkInterface::off_premise_services_reachable_i_pv4` | `off_premise_services_reachable_ipv4` |
-| `general_diagnostics::NetworkInterface::off_premise_services_reachable_i_pv6` | `off_premise_services_reachable_ipv6` |
-| `general_diagnostics::NetworkInterface::i_pv4_addresses` | `ipv4_addresses` |
-| `general_diagnostics::NetworkInterface::i_pv6_addresses` | `ipv6_addresses` |
-| `group_key_management::KeySetReadAllIndicesResponse::group_key_set_i_ds` | `group_key_set_ids` |
-
-The clusters first released in 0.6.0 follow the same rule from the start:
-for example `wifi_network_diagnostics` and `wifi_network_management` (the
-modules), `network_commissioning::encode_add_or_update_wifi_network`,
-`messages::decode_active_message_ids`,
-`energy_evse::ChargingTargetStruct::target_soc` and
-`energy_evse::Feature::V2X`. Type names are the model's own and do not
-change.
-
-Enum members whose model name starts with a digit get a name, not a `_`
-prefix: `time_format_localization::HourFormatEnum::{Hr12, Hr24}` and
-`network_commissioning::WiFiBandEnum::{Band2G4, Band3G65, Band5G, Band6G,
-Band60G, Band1G}` (both new in 0.6.0). PowerSource's battery designations
-keep their `_` prefix (`BatCommonDesignationEnum::_4V5`, `_18650`): they are
-catalogue codes that mix sizes and voltages, so no one word fits them all.
-
-### matter-clusters: Changed (breaking) — secret request arguments are `Secret<T>`
-
-New `matter_clusters::types::Secret<T>`: a wrapper whose `Debug` prints the
-quoted placeholder `"<redacted>"` and that has no `Display`; `new`, `expose`,
-`into_inner` and `From<T>`. It guards logs only: the value is not zeroed, and
-the payload an encoder returns carries it in clear.
-
-Every request argument that carries a secret now takes it as `&Secret<T>`
-(required) or `Option<Secret<T>>` (optional), and the encoder's rustdoc warns
-about the payload. Wrap the value you passed before with `Secret::new(..)`;
-the encoded bytes are unchanged. Of these, 0.5.0 already had
-`administrator_commissioning::encode_open_commissioning_window`
-(`pake_passcode_verifier`), `door_lock::{encode_set_credential,
-encode_lock_door, encode_unlock_door, encode_unlock_with_timeout,
-encode_unbolt_door}`, `general_diagnostics::{encode_test_event_trigger,
-encode_payload_test_request}` (`enable_key`),
-`icd_management::{encode_register_client, encode_unregister_client}` (`key`,
-`verification_key`) and `operational_credentials::encode_add_noc`
-(`ipk_value`). The others are new in this release: AccountLogin `Login`,
-ContentControl `UpdatePin` and `AddBonusTime`, NetworkCommissioning
-`AddOrUpdateWiFiNetwork` and `AddOrUpdateThreadNetwork`,
-ThreadBorderRouterManagement `SetActiveDatasetRequest` and
-`SetPendingDatasetRequest`, and ThreadNetworkDirectory `AddNetwork`.
-GroupKeyManagement `encode_key_set_write` keeps its `GroupKeySetStruct`
-argument (that struct's `Debug` already redacts its epoch keys) and gains the
-same warning.
-
-### matter-clusters: Changed — structs a writable attribute carries are constructible
-
-A struct that has an encoder is no longer `#[non_exhaustive]`, so a caller
-can build a new entry with a struct literal, not only re-encode a decoded
-one. This affects the eight structs that have an encoder only because a
-writable list attribute carries them: `binding::TargetStruct`,
-`user_label::LabelStruct`, `group_key_management::GroupKeyMapStruct`,
-`ota_software_update_requestor::ProviderLocation`,
-`thermostat::{PresetStruct, ScheduleTransitionStruct}` and
-`access_control::{AccessControlExtensionStruct, AccessControlTargetStruct}`.
-Additive. `AccessControlExtensionStruct`'s encoder still refuses a `None`
-`data` (`ClusterError::MissingField`), so a withheld entry is never written
-back. Structs without a generated encoder stay `#[non_exhaustive]`.
-
-### matter-clusters: Fixed — fabric-scoped list entries are encoded for a write without `FabricIndex`
-
-`binding::TargetStruct`, `group_key_management::GroupKeyMapStruct`,
-`ota_software_update_requestor::ProviderLocation` and
-`access_control::AccessControlExtensionStruct` have an encoder only so their
-writable list attributes (Binding, GroupKeyMap, DefaultOTAProviders, the ACL
-Extension) can be written. Their `encode`/`write_fields` now leave
-`FabricIndex` (tag 254) out, as chip's `EncodeForWrite` does: a server sets
-it to the fabric of the session that writes the list, whatever the client
-sends. Before, the encoder wrote the struct's `fabric_index`. This is a wire
-change for these writes only; the bytes match matter.js 0.16.11's write
-encoding (four new vectors). Decoding is unchanged: a read still carries
-`FabricIndex`, and the field stays in the struct (any value works in an entry
-built to write). No request command carries these structs.
-
-Migration: decoding an entry's own `encode()` output now fails with
-`ClusterError::MissingField("FabricIndex")`, because the index is the
-server's to add (a read returns it). Code that re-encoded a decoded entry to
-compare or store it, rather than to write it, must keep the decoded value
-instead.
-
-### matter-clusters: Changed (breaking) — `CLUSTER_REVISION` is the Matter 1.4.2 revision
-
-Each module's `CLUSTER_REVISION` is now the cluster's revision in Matter
-1.4.2 (from chip's 1.4.2 data model; matter.js 0.16.11 has the same value for
-all 113 clusters), not the codegen model's (Matter 1.5.1). The value drops
-for 28 clusters, for example LevelControl 7 → 6, ColorControl 9 → 7,
-WindowCovering 8 → 6, Thermostat 10 → 9, DoorLock 10 → 9 and the ten
-concentration-measurement clusters 4 → 3. A device reports its own revision
-in the global `ClusterRevision` attribute; where the model's revision is
-higher, the constant's rustdoc says the module follows the model for what
-changed after 1.4.2. The constant is the specification's revision, not what
-a given device reports: chip's v1.4.2.0 SDK builds 20 of these clusters at a
-different revision (most lower, such as DoorLock 7 and OperationalState 1;
-ValveConfigurationAndControl and ElectricalEnergyMeasurement at 2, one
-higher), and that tag's copy of the 1.4.2 data model has Identify at 5, where
-chip's current copy and matter.js have 6. Read `ClusterRevision` from the
-device before relying on an element a later revision added. The revisions are frozen in the repository
-(`xtask/scripts/dump-model/chip-1.4.2.json`, written by
-`scripts/chip-facts.py`), so generating needs no chip checkout.
-
-### matter-clusters: Changed — rustdoc notes what chip's 1.4.2 data marks provisional
-
-Every generated element that chip's Matter 1.4.2 data marks provisional
-while the codegen model does not now carries one rustdoc line saying so: 36
-elements (EnergyEvse's `SOC`, `PNC` and `V2X` features; GeneralCommissioning's
-five TC attributes; NetworkCommissioning's `SupportedWiFiBands`,
-`SupportedThreadFeatures` and `ThreadVersion`; UnitLocalization's
-`SupportedTemperatureUnits`; WakeOnLan's `LinkLocalAddress`; Descriptor's
-`EndpointUniqueId`; GroupKeyManagement's `GroupKeyMulticastPolicy`;
-OperationalCredentials' VID-verification commands and fields;
-DishwasherAlarm's five alarm bits; RvcOperationalState's eleven newer state
-and error values), and, in their module docs, the seven clusters chip's
-v1.4.2.0 controller codegen marks provisional as a whole (ScenesManagement,
-Messages, DeviceEnergyManagement, DeviceEnergyManagementMode,
-WaterHeaterManagement, EcosystemInformation, ContentAppObserver). The sources
-are chip's 1.4.2 data model (in its current tree and at the v1.4.2.0 release)
-and v1.4.2.0's controller codegen, frozen in
-`xtask/scripts/dump-model/chip-1.4.2.json`. Documentation only: no type,
-value or byte changes.
 
 ## matter-transport 0.7.3 + matter-controller 0.18.1
 

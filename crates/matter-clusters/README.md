@@ -13,7 +13,7 @@ Part of [`matter-rust`](https://github.com/phunapps/matter-rust).
 
 ```toml
 [dependencies]
-matter-clusters = "0.5"
+matter-clusters = "0.6"
 ```
 
 ## What this crate does
@@ -45,7 +45,7 @@ matter-clusters = "0.5"
 
 ## Status
 
-**0.5.0**. Stability: a `0.x` crate, so a **minor** bump
+**0.6.0**. Stability: a `0.x` crate, so a **minor** bump
 may break API — and adding clusters is a routine minor bump.
 
 ## Clusters

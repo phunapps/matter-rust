@@ -5,7 +5,7 @@ attestation, NOC issuance, and network commissioning.
 
 Part of [`matter-rust`](https://github.com/phunapps/matter-rust).
 
-> Status: **0.10.1**, published on crates.io. The commissioning flow here has
+> Status: **0.10.2**. The commissioning flow here has
 > been driven against real Matter hardware — over IP and over BLE, onto Wi-Fi
 > and onto Thread — not only against tests.
 >
@@ -436,7 +436,7 @@ what comes back, but never touches a socket. The `driver` feature adds the
 Tokio IO layer that closes the loop:
 
 ```toml
-matter-commissioning = { version = "0.5", features = ["driver"] }
+matter-commissioning = { version = "0.10", features = ["driver"] }
 ```
 
 `driver::commission` takes a `DriverConfig` — the same `CommissionerConfig` as

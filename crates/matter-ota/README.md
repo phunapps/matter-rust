@@ -29,7 +29,7 @@ the protocol testable without a network:
 
 ```toml
 [dependencies]
-matter-ota = "0.5"
+matter-ota = "0.6"
 ```
 
 ## Status
