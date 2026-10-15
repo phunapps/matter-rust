@@ -141,6 +141,28 @@ msrv:
     echo "msrv: building under Rust $MSRV"
     CARGO_TARGET_DIR=target/msrv cargo "+$MSRV" build --workspace --all-features
 
+# --------------------------------------------------------------- scripts ---
+
+# Syntax-check every tracked helper script: `node --check` on each
+# xtask/scripts/**/*.js (the capture and dump scripts; node_modules is not
+# tracked) and `python3 -m py_compile` on each scripts/*.py. No Rust test runs
+# them, so without this a syntax error in one (a stray backtick in a template
+# literal, say) passes the whole gate and surfaces only when someone next
+# captures vectors or dumps the model. Fails if either list comes back empty,
+# so a moved directory cannot turn the check into a silent pass.
+scripts-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    js=$(git ls-files 'xtask/scripts/**/*.js' | grep -v '/node_modules/' || true)
+    py=$(git ls-files 'scripts/*.py')
+    if [ -z "$js" ] || [ -z "$py" ]; then
+        echo "scripts-check: no tracked .js under xtask/scripts or .py under scripts" >&2
+        exit 1
+    fi
+    for f in $js; do node --check "$f"; done
+    python3 -m py_compile $py
+    echo "scripts-check: $(echo "$js" | wc -l | tr -d ' ') js, $(echo "$py" | wc -l | tr -d ' ') py OK"
+
 # ---------------------------------------------------------- supply chain ---
 
 # Dependency license / ban / advisory checks (CI: deny job).
@@ -156,7 +178,7 @@ audit:
 # Stops at the first failing recipe.
 
 # Full pre-push gate, mirroring CI end-to-end (run before every push).
-gate: fmt-check lint lint-default test doctest codegen-check docs embedded controller-no-ota msrv deny audit
+gate: fmt-check scripts-check lint lint-default test doctest codegen-check docs embedded controller-no-ota msrv deny audit
     @echo "gate: all green ✓"
 
 # ------------------------------------------------------------ benchmarks ---
