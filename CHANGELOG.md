@@ -1642,7 +1642,7 @@ writable list attribute carries them: `binding::TargetStruct`,
 `access_control::{AccessControlExtensionStruct, AccessControlTargetStruct}`.
 Additive. `AccessControlExtensionStruct`'s encoder still refuses a `None`
 `data` (`ClusterError::MissingField`), so a withheld entry is never written
-back. Structs only a device sends stay `#[non_exhaustive]`.
+back. Structs without a generated encoder stay `#[non_exhaustive]`.
 
 ## matter-transport 0.7.3 + matter-controller 0.18.1
 

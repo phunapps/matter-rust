@@ -30,7 +30,7 @@ pub mod attribute_id {
 
 /// `LabelStruct` struct.
 ///
-/// Encodable because a writable attribute carries it: build one and write it with `encode` (or `write_fields`, inside the attribute's list).
+/// Encodable because a writable attribute carries it: build one and write it with `encode` (or `write_fields`, inside the list that carries it).
 #[derive(Clone, Debug, PartialEq)]
 pub struct LabelStruct {
     /// Field Label (tag 0).

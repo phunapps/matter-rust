@@ -172,7 +172,7 @@ pub struct AccessControlEntryStruct {
 
 /// `AccessControlExtensionStruct` struct.
 ///
-/// Encodable because a writable attribute carries it: build one and write it with `encode` (or `write_fields`, inside the attribute's list).
+/// Encodable because a writable attribute carries it: build one and write it with `encode` (or `write_fields`, inside the list that carries it).
 #[derive(Clone, Debug, PartialEq)]
 pub struct AccessControlExtensionStruct {
     /// Field Data (tag 1).
@@ -185,7 +185,7 @@ pub struct AccessControlExtensionStruct {
 
 /// `AccessControlTargetStruct` struct.
 ///
-/// Encodable because a writable attribute carries it: build one and write it with `encode` (or `write_fields`, inside the attribute's list).
+/// Encodable because a writable attribute carries it: build one and write it with `encode` (or `write_fields`, inside the list that carries it).
 #[derive(Clone, Debug, PartialEq)]
 pub struct AccessControlTargetStruct {
     /// Field Cluster (tag 0).

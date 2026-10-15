@@ -25,7 +25,8 @@ fn field_ident(name: &str) -> String {
 /// transitively through struct fields and list-of-struct entries. These structs
 /// need an encodable `write_fields` even when they carry a list field (the
 /// scalar-only [`struct_is_write_capable`] rule alone would leave them
-/// decode-only) and must stay constructible by callers (not `#[non_exhaustive]`).
+/// decode-only). Like every struct that gets an encoder, they are constructible
+/// by callers (not `#[non_exhaustive]`).
 /// Empty for every cluster whose request commands take only scalars/lists-of-scalar.
 pub(crate) fn command_encode_reachable_structs<'a>(
     c: &'a Cluster,

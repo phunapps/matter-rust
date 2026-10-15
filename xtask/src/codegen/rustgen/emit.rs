@@ -28,7 +28,7 @@ pub const PROVISIONAL_DOC: &str =
 /// constructible (no `#[non_exhaustive]`), so a caller can build a new entry,
 /// not only re-encode a decoded one.
 pub const WRITABLE_ATTRIBUTE_ENCODER_DOC: &str = "Encodable because a writable attribute carries \
-     it: build one and write it with `encode` (or `write_fields`, inside the attribute's list).";
+     it: build one and write it with `encode` (or `write_fields`, inside the list that carries it).";
 
 /// The rustdoc line on a field that carries a secret (`FieldDef::secret`,
 /// M9-A3 B6): its struct's `Debug` output shows a placeholder instead.
@@ -189,8 +189,9 @@ pub fn generate_cluster(c: &Cluster) -> String {
     emit_header(&mut s, c);
     emit_ids(&mut s, c);
     emit_feature_bitflags(&mut s, c);
-    // Structs reachable from a request command are built by callers (to encode),
-    // so their declaration must stay constructible (no `#[non_exhaustive]`).
+    // A struct that gets an encoder (a request reaches it, or a writable
+    // attribute carries it) is built by callers, so its declaration stays
+    // constructible (no `#[non_exhaustive]`).
     let dts = c.datatypes.iter().map(|d| (d.name.as_str(), d)).collect();
     let encode_reachable = super::emit_codecs::command_encode_reachable_structs(c, &dts);
     let encoded = super::emit_codecs::encoded_struct_names(c);
