@@ -211,8 +211,8 @@ pub const DIGIT_MEMBER_NAMES: [(&str, &str, &str); 8] = [
 
 /// Enums whose digit-initial members keep the `_` prefix [`ident`] gives
 /// them: `PowerSource`'s battery designations (`4V5`, `18650`, `523`) are
-/// product numbers with no unit or kind to lead with, so `_4V5` reads as the
-/// designation itself.
+/// catalogue codes that mix sizes and voltages, so no one word fits them all
+/// and `_4V5` reads as the designation itself.
 pub const UNDERSCORE_DIGIT_ENUMS: [&str; 1] = ["BatCommonDesignationEnum"];
 
 /// The Rust name of member `member` of enum `enum_name`: [`ident`], except a
