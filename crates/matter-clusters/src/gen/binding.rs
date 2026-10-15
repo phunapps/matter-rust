@@ -30,9 +30,8 @@ pub mod attribute_id {
 
 /// `TargetStruct` struct.
 ///
-/// Encodable because a writable attribute carries it; `#[non_exhaustive]`, so outside this crate only a decoded value can be re-encoded.
+/// Encodable because a writable attribute carries it: build one and write it with `encode` (or `write_fields`, inside the attribute's list).
 #[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
 pub struct TargetStruct {
     /// Field Node (tag 1).
     /// Required when `endpoint` is present, and must be omitted when it is absent. Neither encoding nor decoding checks it.

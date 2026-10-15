@@ -133,11 +133,11 @@ fn the_provisional_doc_names_the_models_spec_revision() {
 }
 
 /// The structs that have an encoder only because a writable attribute carries
-/// them, and so stay `#[non_exhaustive]` with
-/// `WRITABLE_ATTRIBUTE_ENCODER_DOC` on them (M9-A3 B4 review finding 3, which
-/// listed seven: `AccessControlTargetStruct`, the all-scalar entry of `Acl`'s
-/// `Targets` list, is the eighth; the `#[non_exhaustive]` decision is open in
-/// TODO-1.0.md).
+/// them, with `WRITABLE_ATTRIBUTE_ENCODER_DOC` on them. Like every struct
+/// with an encoder they are constructible (no `#[non_exhaustive]`);
+/// `crates/matter-clusters/tests/writable_structs.rs` builds each one from
+/// outside the crate. `AccessControlTargetStruct` is the all-scalar entry of
+/// an `Acl` entry's `Targets` list.
 const WRITABLE_ATTRIBUTE_ONLY_ENCODED: [(&str, &str); 8] = [
     ("AccessControl", "AccessControlExtensionStruct"),
     ("AccessControl", "AccessControlTargetStruct"),
@@ -150,7 +150,7 @@ const WRITABLE_ATTRIBUTE_ONLY_ENCODED: [(&str, &str); 8] = [
 ];
 
 #[test]
-fn writable_attribute_only_encoded_structs_say_they_are_not_constructible() {
+fn writable_attribute_only_encoded_structs_are_constructible_and_say_so() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -158,7 +158,7 @@ fn writable_attribute_only_encoded_structs_say_they_are_not_constructible() {
     let model = xtask::codegen::model::load(&root.join("xtask/model/clusters.json"))
         .expect("real model loads + validates");
     let doc = format!(
-        "/// {}\n#[derive(Clone, Debug, PartialEq)]\n#[non_exhaustive]\npub struct ",
+        "/// {}\n#[derive(Clone, Debug, PartialEq)]\npub struct ",
         xtask::codegen::rustgen::emit::WRITABLE_ATTRIBUTE_ENCODER_DOC
     );
     let mut got = Vec::new();

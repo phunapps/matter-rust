@@ -464,15 +464,14 @@ against the fixture via the shared `tests/e2e_fixture` harness.
 
 ## matter-clusters
 
-### Encoders on structs a client cannot build — USER DECISION before 1.0
+### Encoders on structs a client cannot build — CLOSED (constructible since 0.6.0)
 
-**Status:** OPEN (M9-A3 B4 whole-batch review, finding 3; B4 took option (b)).
+**Status:** CLOSED in `matter-clusters` 0.6.0: a struct that has an encoder
+is constructible.
 
-Eight generated structs keep `write_fields` / `encode` only because a
-writable list attribute carries them (directly, or as the all-scalar entry of
-a list field of one), yet they are still `#[non_exhaustive]`
-(that attribute follows command-request reachability), with no constructor and
-no `Default`:
+Until 0.6.0 the eight structs that keep `write_fields` / `encode` only
+because a writable list attribute carries them were `#[non_exhaustive]`, so
+outside `matter-clusters` only a decoded entry could be re-encoded:
 
 - `binding::TargetStruct`
 - `user_label::LabelStruct`
@@ -481,25 +480,13 @@ no `Default`:
 - `thermostat::PresetStruct`
 - `thermostat::ScheduleTransitionStruct`
 - `access_control::AccessControlExtensionStruct`
-- `access_control::AccessControlTargetStruct` (the review listed seven; this
-  one, the entry of an `Acl` entry's `Targets`, has the same shape)
+- `access_control::AccessControlTargetStruct` (the all-scalar entry of an
+  `Acl` entry's `Targets`)
 
-Outside `matter-clusters` a value of these types can only come from a decode
-(struct-update syntax is refused on a foreign `#[non_exhaustive]` struct), so
-the encoder re-encodes a decoded entry and nothing else: a new entry, or a
-list built from scratch, cannot be written through the typed API.
-
-- **(a)** key `#[non_exhaustive]` on the encoder rule (`encoded_struct_names`)
-  instead of command reachability, so the eight become constructible. Removing
-  the attribute is additive (non-breaking) and carries the same future-field
-  cost the command-reachable structs already accept.
-- **(b)** (what B4 shipped) keep `#[non_exhaustive]` and say so: each struct's
-  rustdoc, the CHANGELOG and `docs/matter-js-comparison.md` state that the
-  encoder re-encodes a decoded entry only.
-
-Because (a) is additive, it can still land in any 0.x or 1.x minor; the
-decision is due at the M9-A3 final review. `codegen_real_model`
-(`WRITABLE_ATTRIBUTE_ONLY_ENCODED`) pins the set.
+They are now constructible; `crates/matter-clusters/tests/writable_structs.rs`
+builds each one from outside the crate, and `codegen_real_model`
+(`WRITABLE_ATTRIBUTE_ONLY_ENCODED`) pins the set. The cost is the one every
+request-reachable struct already carries: adding a field later is breaking.
 
 ### Codegen scalar narrowing: `fabric-id` fields emitted as `u32` instead of `u64`
 

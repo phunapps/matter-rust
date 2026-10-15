@@ -24,12 +24,11 @@ pub const PROVISIONAL_DOC: &str =
 
 /// The rustdoc paragraph on a struct that has an encoder only because a
 /// writable attribute carries it (in `encoded_struct_names` but not reachable
-/// from a request command): it stays `#[non_exhaustive]`, which follows
-/// command reachability, so a crate outside `matter-clusters` cannot build
-/// one, only re-encode a decoded one (M9-A3 B4 review finding 3; whether to
-/// drop `#[non_exhaustive]` here is an open decision in `TODO-1.0.md`).
+/// from a request command). Like every struct with an encoder it is
+/// constructible (no `#[non_exhaustive]`), so a caller can build a new entry,
+/// not only re-encode a decoded one.
 pub const WRITABLE_ATTRIBUTE_ENCODER_DOC: &str = "Encodable because a writable attribute carries \
-     it; `#[non_exhaustive]`, so outside this crate only a decoded value can be re-encoded.";
+     it: build one and write it with `encode` (or `write_fields`, inside the attribute's list).";
 
 /// The rustdoc line on a field that carries a secret (`FieldDef::secret`,
 /// M9-A3 B6): its struct's `Debug` output shows a placeholder instead.
@@ -585,9 +584,9 @@ fn emit_bitmap(s: &mut String, d: &Datatype) {
     line!(s, "}}\n");
 }
 
-/// `encode_reachable`: structs a request command reaches (constructible, no
-/// `#[non_exhaustive]`); `encoded`: structs that get an encoder
-/// (`encoded_struct_names`). One in `encoded` but not `encode_reachable` gets
+/// `encode_reachable`: structs a request command reaches; `encoded`: structs
+/// that get an encoder (`encoded_struct_names`), which are constructible (no
+/// `#[non_exhaustive]`). One in `encoded` but not `encode_reachable` gets
 /// [`WRITABLE_ATTRIBUTE_ENCODER_DOC`].
 fn emit_struct(
     s: &mut String,
@@ -615,9 +614,10 @@ fn emit_struct(
     }
     line!(s, "{}", struct_derive(&d.fields));
     // `#[non_exhaustive]` future-proofs decode-only data structs, but blocks the
-    // struct-literal construction that command-encode callers need; skip it for
-    // structs reachable from a request command (they are built to be encoded).
-    if !encode_reachable.contains(d.name.as_str()) {
+    // struct-literal construction a caller needs to encode one; a struct that
+    // gets an encoder (a request command or a writable attribute reaches it)
+    // is built to be encoded, so it is constructible.
+    if !encoded.contains(name) {
         line!(s, "#[non_exhaustive]");
     }
     line!(s, "pub struct {} {{", d.name);
@@ -927,7 +927,7 @@ mod tests {
     }
 
     #[test]
-    fn non_exhaustive_skipped_for_command_encode_reachable_structs() {
+    fn non_exhaustive_only_on_structs_without_an_encoder() {
         use std::collections::HashSet;
         let d = Datatype {
             name: "EncStruct".to_string(),
@@ -951,11 +951,12 @@ mod tests {
         emit_struct(&mut enc, &d, &reachable, &reachable);
         assert!(!enc.contains("#[non_exhaustive]"), "{enc}");
         assert!(!enc.contains(WRITABLE_ATTRIBUTE_ENCODER_DOC), "{enc}");
-        // Encoded only because a writable attribute carries it: it stays
-        // #[non_exhaustive], and its rustdoc says what that leaves a caller.
+        // Encoded only because a writable attribute carries it: constructible
+        // too (a caller builds a new entry to write), and its rustdoc says how
+        // it is written.
         let mut writable = String::new();
         emit_struct(&mut writable, &d, &HashSet::new(), &reachable);
-        assert!(writable.contains("#[non_exhaustive]"), "{writable}");
+        assert!(!writable.contains("#[non_exhaustive]"), "{writable}");
         assert!(
             writable.starts_with(&format!(
                 "/// `EncStruct` struct.\n///\n/// {WRITABLE_ATTRIBUTE_ENCODER_DOC}\n"

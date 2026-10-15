@@ -73,9 +73,8 @@ pub struct GroupInfoMapStruct {
 
 /// `GroupKeyMapStruct` struct.
 ///
-/// Encodable because a writable attribute carries it; `#[non_exhaustive]`, so outside this crate only a decoded value can be re-encoded.
+/// Encodable because a writable attribute carries it: build one and write it with `encode` (or `write_fields`, inside the attribute's list).
 #[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
 pub struct GroupKeyMapStruct {
     /// Field GroupId (tag 1).
     pub group_id: u16,

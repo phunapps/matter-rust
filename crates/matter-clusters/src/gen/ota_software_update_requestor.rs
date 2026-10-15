@@ -129,9 +129,8 @@ impl ChangeReasonEnum {
 
 /// `ProviderLocation` struct.
 ///
-/// Encodable because a writable attribute carries it; `#[non_exhaustive]`, so outside this crate only a decoded value can be re-encoded.
+/// Encodable because a writable attribute carries it: build one and write it with `encode` (or `write_fields`, inside the attribute's list).
 #[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
 pub struct ProviderLocation {
     /// Field ProviderNodeId (tag 1).
     pub provider_node_id: u64,

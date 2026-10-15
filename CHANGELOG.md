@@ -1207,10 +1207,8 @@ The codegen now generates only what a client can use:
   `ota_software_update_requestor::ProviderLocation`,
   `thermostat::{PresetStruct, ScheduleTransitionStruct}`,
   `access_control::{AccessControlExtensionStruct,
-  AccessControlTargetStruct}`), but they are `#[non_exhaustive]` without a
-  constructor, so the encoder re-encodes a decoded entry only: building a
-  new entry from outside the crate is not yet possible (an open decision
-  before 1.0), and each of them says so in its rustdoc. Every decoder
+  AccessControlTargetStruct}`), and they are constructible (see "structs a
+  writable attribute carries are constructible" below). Every decoder
   stays. Removed from:
   `basic_information::{CapabilityMinimaStruct, ProductAppearanceStruct}`,
   `bridged_device_basic_information::ProductAppearanceStruct`,
@@ -1631,6 +1629,20 @@ ThreadBorderRouterManagement `SetActiveDatasetRequest` and
 GroupKeyManagement `encode_key_set_write` keeps its `GroupKeySetStruct`
 argument (that struct's `Debug` already redacts its epoch keys) and gains the
 same warning.
+
+### matter-clusters: Changed — structs a writable attribute carries are constructible
+
+A struct that has an encoder is no longer `#[non_exhaustive]`, so a caller
+can build a new entry with a struct literal, not only re-encode a decoded
+one. This affects the eight structs that have an encoder only because a
+writable list attribute carries them: `binding::TargetStruct`,
+`user_label::LabelStruct`, `group_key_management::GroupKeyMapStruct`,
+`ota_software_update_requestor::ProviderLocation`,
+`thermostat::{PresetStruct, ScheduleTransitionStruct}` and
+`access_control::{AccessControlExtensionStruct, AccessControlTargetStruct}`.
+Additive. `AccessControlExtensionStruct`'s encoder still refuses a `None`
+`data` (`ClusterError::MissingField`), so a withheld entry is never written
+back. Structs only a device sends stay `#[non_exhaustive]`.
 
 ## matter-transport 0.7.3 + matter-controller 0.18.1
 

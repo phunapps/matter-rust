@@ -502,9 +502,8 @@ impl PresetScenarioEnum {
 
 /// `PresetStruct` struct.
 ///
-/// Encodable because a writable attribute carries it; `#[non_exhaustive]`, so outside this crate only a decoded value can be re-encoded.
+/// Encodable because a writable attribute carries it: build one and write it with `encode` (or `write_fields`, inside the attribute's list).
 #[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
 pub struct PresetStruct {
     /// Field PresetHandle (tag 0).
     pub preset_handle: Nullable<Vec<u8>>,
@@ -631,9 +630,8 @@ pub struct ScheduleStruct {
 
 /// `ScheduleTransitionStruct` struct.
 ///
-/// Encodable because a writable attribute carries it; `#[non_exhaustive]`, so outside this crate only a decoded value can be re-encoded.
+/// Encodable because a writable attribute carries it: build one and write it with `encode` (or `write_fields`, inside the attribute's list).
 #[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
 pub struct ScheduleTransitionStruct {
     /// Field DayOfWeek (tag 0).
     pub day_of_week: ScheduleDayOfWeekBitmap,
