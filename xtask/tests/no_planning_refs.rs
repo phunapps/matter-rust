@@ -82,7 +82,7 @@ const POINTERS: &[Rule] = &[
     },
     Rule {
         what: "an A3 batch label outside a plain `//` comment",
-        regex: r"^(?!\s*//(?![/!])).*(?:(?<![-\w.])B[1-7]\b(?! chunked)|\bA3-B[1-7]\b)",
+        regex: r"^(?!\s*//(?![/!])).*(?<![-\w.])B[1-7]\b(?! chunked)",
         example: "/// Every B3 cluster all-clusters serves lives on endpoint 1.",
         // The released CHANGELOG and the runbooks use the public M9-B1..B5
         // milestone labels (CHANGELOG's 0.6.0 section is checked by hand),
@@ -92,6 +92,12 @@ const POINTERS: &[Rule] = &[
             ":!docs/runbooks",
             ":!crates/matter-controller/examples/d_hardware_extras.rs",
         ],
+    },
+    Rule {
+        what: "an A3-B<n> batch label outside a plain `//` comment",
+        regex: r"^(?!\s*//(?![/!])).*\bA3-B[1-7]\b",
+        example: "\"10 A3-B2 ModeBase + 1 ModeSelect\"",
+        except: &[],
     },
     Rule {
         what: "a design-decision number",

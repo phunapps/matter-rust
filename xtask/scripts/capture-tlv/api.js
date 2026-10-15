@@ -7,7 +7,7 @@ function pick(name) {
   if (!mjs[name]) {
     throw new Error(
       `matter.js does not export '${name}' from @matter/types/tlv. ` +
-      `Did the matter.js API move? List `Object.keys` of the module to find where it moved.`,
+      `Did the matter.js API move? Log Object.keys(mjs) to find where '${name}' went.`,
     );
   }
   return mjs[name];

@@ -38,8 +38,8 @@ finding not listed in `chip-xml-conformance.allow`; 2 on a usage or input
 error.
 
 **Requires:** Python 3 (standard library only) and a connectedhomeip checkout.
-Not part of `just gate` (CI has no chip checkout): each cluster batch runs it
-and quotes the output in its review.
+Not part of `just gate` (CI has no chip checkout): run it by hand after
+`cargo xtask dump-model` and before a `matter-clusters` release.
 
 **Run:**
 

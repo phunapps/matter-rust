@@ -203,8 +203,8 @@ network commissioning, OTA/BDX transfer, ICD, BLE/Thread transport.
 | List fabrics (≥ 2 admins) | `multi_admin` | ✓-live |
 | Remove a fabric by index (with self-removal guard) | `multi_admin` | ✓-live |
 
-> Note: the open risk (whether `commission` consumes an open-window manual
-> code directly) is **resolved** — the full multi-admin loop runs live, no
+> Note: the risk that `commission` might not consume an open-window manual
+> code directly is **resolved** — the full multi-admin loop runs live, no
 > fallback. A 2nd-controller commission failure is now a hard test error, so the
 > loop cannot pass vacuously.
 

@@ -61,7 +61,7 @@ Reported without failing:
   SUPPLEMENTED meta.supplemented elements verified against 1.4.2 (no S finding)
 
 Python 3 standard library only. Dev-only: CI has no chip checkout, so this is
-not part of `just gate`; each batch runs it and quotes the output.
+not part of `just gate`; run it by hand after a regeneration.
 
 Usage:
     python3 scripts/chip-xml-conformance.py <chip-checkout> [--cluster <Name>]...

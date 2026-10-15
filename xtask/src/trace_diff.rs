@@ -24,7 +24,8 @@ use matter_codec::{ContainerKind, Element, Tag, TlvReader};
 use serde::Deserialize;
 use std::path::Path;
 
-/// One captured wire message (schema per the M6 cross-verification design).
+/// One captured wire message: one line of the JSON-lines trace that
+/// `commission_ip --trace-out` and `capture-commission-trace` both write.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct TraceRecord {
     pub seq: u64,
