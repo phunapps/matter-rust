@@ -12,6 +12,7 @@
 use crate::datatypes::SemanticTagStruct;
 use crate::error::ClusterError;
 use crate::types::Nullable;
+use crate::types::Secret;
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
 /// Cluster ID.
@@ -188,11 +189,13 @@ pub fn decode_admin_vendor_id(tlv: &[u8]) -> Result<Nullable<u16>, ClusterError>
 }
 
 /// Encode the `OpenCommissioningWindow` command request payload.
+///
+/// `pake_passcode_verifier` carries a secret: its `Debug` output shows `"<redacted>"`, but the returned payload carries it in clear, so do not log the payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_open_commissioning_window(
     commissioning_timeout: u16,
-    pake_passcode_verifier: &Vec<u8>,
+    pake_passcode_verifier: &Secret<Vec<u8>>,
     discriminator: u16,
     iterations: u32,
     salt: &Vec<u8>,
@@ -203,7 +206,7 @@ pub fn encode_open_commissioning_window(
         .expect("infallible: vec writer");
     w.put_uint(Tag::Context(0), u64::from(commissioning_timeout))
         .expect("infallible: vec writer");
-    w.put_bytes(Tag::Context(1), &pake_passcode_verifier)
+    w.put_bytes(Tag::Context(1), &pake_passcode_verifier.expose())
         .expect("infallible: vec writer");
     w.put_uint(Tag::Context(2), u64::from(discriminator))
         .expect("infallible: vec writer");

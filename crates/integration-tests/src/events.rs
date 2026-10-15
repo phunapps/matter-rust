@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use matter_clusters::clusters::general_diagnostics;
+use matter_clusters::types::Secret;
 use matter_codec::{Tag, TlvWriter, Value};
 use matter_controller::{
     CommandPath, EventPath, EventReport, EventReportItem, ImStatus, InvokeResult, Node,
@@ -54,8 +55,10 @@ pub fn payload_tlv(value: &Value) -> Vec<u8> {
 /// answers `ConstraintError` for a wrong key and `InvalidCommand` for a
 /// trigger no handler claims).
 pub async fn test_event_trigger(node: &Node, trigger: u64) -> Result<()> {
-    let fields =
-        general_diagnostics::encode_test_event_trigger(&TEST_EVENT_ENABLE_KEY.to_vec(), trigger);
+    let fields = general_diagnostics::encode_test_event_trigger(
+        &Secret::new(TEST_EVENT_ENABLE_KEY.to_vec()),
+        trigger,
+    );
     let path = CommandPath {
         endpoint: 0,
         cluster: general_diagnostics::CLUSTER_ID,

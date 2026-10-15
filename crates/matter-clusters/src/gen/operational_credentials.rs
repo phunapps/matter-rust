@@ -12,6 +12,7 @@
 use crate::datatypes::SemanticTagStruct;
 use crate::error::ClusterError;
 use crate::types::Nullable;
+use crate::types::Secret;
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
 /// Cluster ID.
@@ -741,12 +742,14 @@ impl CsrResponse {
 }
 
 /// Encode the `AddNoc` command request payload.
+///
+/// `ipk_value` carries a secret: its `Debug` output shows `"<redacted>"`, but the returned payload carries it in clear, so do not log the payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_add_noc(
     noc_value: &Vec<u8>,
     icac_value: Option<Vec<u8>>,
-    ipk_value: &Vec<u8>,
+    ipk_value: &Secret<Vec<u8>>,
     case_admin_subject: u64,
     admin_vendor_id: u16,
 ) -> Vec<u8> {
@@ -760,7 +763,7 @@ pub fn encode_add_noc(
         w.put_bytes(Tag::Context(1), &icac_value)
             .expect("infallible: vec writer");
     }
-    w.put_bytes(Tag::Context(2), &ipk_value)
+    w.put_bytes(Tag::Context(2), &ipk_value.expose())
         .expect("infallible: vec writer");
     w.put_uint(Tag::Context(3), u64::from(case_admin_subject))
         .expect("infallible: vec writer");

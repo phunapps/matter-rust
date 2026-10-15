@@ -24,7 +24,7 @@
 //   field = { id, name, type, metatype, entryType?, nullable, optional, description,
 //             fabricSensitive?, mandatoryOnWrite?, requiredWhen?,
 //                                     (all three: datatype struct fields only)
-//             provisional?, choice?, secret? (SECRET_FIELDS),
+//             provisional?, choice?, secret? (SECRET_FIELDS; on any field kind),
 //             relaxedReason? / nullableReason? (FIELD_RELAXATIONS, class P / N) }
 //   provisional? (true only) also on clusters (PROVISIONAL_CLUSTERS), features,
 //   attributes, commands, events;
@@ -511,15 +511,16 @@ for (const [key, r] of FIELD_RELAXATIONS) {
 }
 const appliedFieldRelaxations = new Set();
 
-// M9-A3 B6: fields that carry a secret. The dump marks each `secret: true` and
-// the emitter keeps it out of the struct's generated `Debug` output (it prints
-// `<redacted>`), the discipline matter-commissioning's ThreadDataset and
-// WiFiCredentials already follow: a key logged with `{:?}` must not leak. Wire
-// bytes, types and the public API are unchanged. Keys use the checker's
-// spelling, `<Cluster>.<Struct|Command|Event>.<Field>`. The dump fails when a
-// key whose cluster is allowlisted matches no field, when the field is not a
-// byte or character string, or when it is a request field (a request has no
-// generated struct, so there is no `Debug` to redact).
+// Fields that carry a secret. The dump marks each `secret: true`. On a struct,
+// response or event field the emitter keeps it out of the generated `Debug`
+// output (it prints `<redacted>`), the discipline matter-commissioning's
+// ThreadDataset and WiFiCredentials already follow: a key logged with `{:?}`
+// must not leak. On a request field the encoder takes the value as
+// `Secret<T>`, whose `Debug` prints `"<redacted>"`, and its rustdoc warns that
+// the returned payload carries the secret in clear. Wire bytes are unchanged.
+// Keys use the checker's spelling, `<Cluster>.<Struct|Command|Event>.<Field>`.
+// The dump fails when a key whose cluster is allowlisted matches no field, or
+// when the field is not a byte or character string.
 const SECRET_FIELDS = new Map([
   ['CommissionerControl.ReverseOpenCommissioningWindow.PakePasscodeVerifier', 'a PAKE passcode verifier: the setup passcode can be brute-forced from it offline'],
   ['GroupKeyManagement.GroupKeySetStruct.EpochKey0', 'an operational group epoch key'],
@@ -530,6 +531,28 @@ const SECRET_FIELDS = new Map([
   ['WiFiNetworkManagement.NetworkPassphraseResponse.Passphrase', 'the Wi-Fi network passphrase'],
   ['AccountLogin.GetSetupPinResponse.SetupPin', 'the setup PIN for PASE with the Commissionee'],
   ['ContentControl.ResetPinResponse.PinCode', 'the new content-control PIN'],
+  // Request fields (the encoder argument is `Secret<T>`):
+  ['AccountLogin.Login.SetupPin', 'the setup PIN for PASE with the Commissionee'],
+  ['AdministratorCommissioning.OpenCommissioningWindow.PakePasscodeVerifier', 'a PAKE passcode verifier: the setup passcode can be brute-forced from it offline'],
+  ['ContentControl.AddBonusTime.PinCode', 'the content-control PIN'],
+  ['ContentControl.UpdatePin.NewPin', 'the new content-control PIN'],
+  ['ContentControl.UpdatePin.OldPin', 'the current content-control PIN'],
+  ['DoorLock.LockDoor.PinCode', 'a door-lock PIN'],
+  ['DoorLock.SetCredential.CredentialData', 'a door-lock credential (a PIN, RFID or biometric value)'],
+  ['DoorLock.UnboltDoor.PinCode', 'a door-lock PIN'],
+  ['DoorLock.UnlockDoor.PinCode', 'a door-lock PIN'],
+  ['DoorLock.UnlockWithTimeout.PinCode', 'a door-lock PIN'],
+  ['GeneralDiagnostics.PayloadTestRequest.EnableKey', 'the manufacturer test-event enable key'],
+  ['GeneralDiagnostics.TestEventTrigger.EnableKey', 'the manufacturer test-event enable key'],
+  ['IcdManagement.RegisterClient.Key', 'the ICD Check-In symmetric key'],
+  ['IcdManagement.RegisterClient.VerificationKey', 'the ICD Check-In key already stored on the server'],
+  ['IcdManagement.UnregisterClient.VerificationKey', 'the ICD Check-In key already stored on the server'],
+  ['NetworkCommissioning.AddOrUpdateThreadNetwork.OperationalDataset', 'a Thread operational dataset, network key included'],
+  ['NetworkCommissioning.AddOrUpdateWiFiNetwork.Credentials', 'the Wi-Fi network passphrase or PSK'],
+  ['OperationalCredentials.AddNoc.IpkValue', 'the fabric Identity Protection Key epoch key'],
+  ['ThreadBorderRouterManagement.SetActiveDatasetRequest.ActiveDataset', 'a Thread operational dataset, network key included'],
+  ['ThreadBorderRouterManagement.SetPendingDatasetRequest.PendingDataset', 'a Thread operational dataset, network key included'],
+  ['ThreadNetworkDirectory.AddNetwork.OperationalDataset', 'a Thread operational dataset, network key included'],
 ]);
 const appliedSecretFields = new Set();
 
@@ -964,7 +987,6 @@ function dumpField(f, where, ctx) {
   const cluster = where.split('.')[0];
   const relaxKey = `${cluster}.${ctx.element}.${f.name}`;
   if (SECRET_FIELDS.has(relaxKey)) {
-    if (ctx.role === 'request') fail(`SECRET_FIELDS ${relaxKey} is a request field — no generated struct holds it`);
     if (out.metatype !== 'bytes' && out.metatype !== 'string') {
       fail(`SECRET_FIELDS ${relaxKey} has metatype ${out.metatype}, not a byte or character string — review the entry`);
     }

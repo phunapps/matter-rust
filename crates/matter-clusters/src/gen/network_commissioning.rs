@@ -12,6 +12,7 @@
 use crate::datatypes::SemanticTagStruct;
 use crate::error::ClusterError;
 use crate::types::Nullable;
+use crate::types::Secret;
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
 /// Cluster ID.
@@ -940,11 +941,13 @@ impl ScanNetworksResponse {
 }
 
 /// Encode the `AddOrUpdateWiFiNetwork` command request payload.
+///
+/// `credentials` carries a secret: its `Debug` output shows `"<redacted>"`, but the returned payload carries it in clear, so do not log the payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_add_or_update_wifi_network(
     ssid: &Vec<u8>,
-    credentials: &Vec<u8>,
+    credentials: &Secret<Vec<u8>>,
     breadcrumb: Option<u64>,
 ) -> Vec<u8> {
     let mut buf = Vec::new();
@@ -953,7 +956,7 @@ pub fn encode_add_or_update_wifi_network(
         .expect("infallible: vec writer");
     w.put_bytes(Tag::Context(0), &ssid)
         .expect("infallible: vec writer");
-    w.put_bytes(Tag::Context(1), &credentials)
+    w.put_bytes(Tag::Context(1), &credentials.expose())
         .expect("infallible: vec writer");
     if let Some(breadcrumb) = breadcrumb {
         w.put_uint(Tag::Context(2), u64::from(breadcrumb))
@@ -964,17 +967,19 @@ pub fn encode_add_or_update_wifi_network(
 }
 
 /// Encode the `AddOrUpdateThreadNetwork` command request payload.
+///
+/// `operational_dataset` carries a secret: its `Debug` output shows `"<redacted>"`, but the returned payload carries it in clear, so do not log the payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_add_or_update_thread_network(
-    operational_dataset: &Vec<u8>,
+    operational_dataset: &Secret<Vec<u8>>,
     breadcrumb: Option<u64>,
 ) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");
-    w.put_bytes(Tag::Context(0), &operational_dataset)
+    w.put_bytes(Tag::Context(0), &operational_dataset.expose())
         .expect("infallible: vec writer");
     if let Some(breadcrumb) = breadcrumb {
         w.put_uint(Tag::Context(1), u64::from(breadcrumb))

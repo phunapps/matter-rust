@@ -23,6 +23,10 @@ matter-clusters = "0.5"
 - Models cluster enums with an `Unknown(n)` variant (forward-compatible decode),
   feature maps as `bitflags`, and nullable fields as `Nullable<T>` (distinct
   from `Option<T>`).
+- Takes every secret a request carries (a PIN, a passcode verifier, a key, a
+  Thread dataset, Wi-Fi credentials) as `Secret<T>`, whose `Debug` prints
+  `"<redacted>"`, and keeps decoded secrets out of the structs' `Debug`
+  output. The encoded payload still carries the secret in clear.
 - Generates all of the above from the spec model, gated against drift in CI.
 
 ## What this crate does not do

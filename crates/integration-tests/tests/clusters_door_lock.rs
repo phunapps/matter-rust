@@ -9,7 +9,7 @@
 )]
 
 use matter_clusters::clusters::door_lock::{self, LockStateEnum};
-use matter_clusters::types::Nullable;
+use matter_clusters::types::{Nullable, Secret};
 use matter_codec::{Tag, TlvWriter};
 use matter_controller::{CommandPath, Node, ReadPath, Value};
 
@@ -348,7 +348,7 @@ async fn lock_operation_error_event(node: &Node) {
     let r = node
         .invoke_timed_tlv(
             dl_cmd(CMD_UNLOCK_DOOR),
-            door_lock::encode_unlock_door(Some(b"000000".to_vec())),
+            door_lock::encode_unlock_door(Some(Secret::new(b"000000".to_vec()))),
             Some(3000),
         )
         .await

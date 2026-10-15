@@ -12,6 +12,7 @@
 use crate::datatypes::SemanticTagStruct;
 use crate::error::ClusterError;
 use crate::types::Nullable;
+use crate::types::Secret;
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
 /// Cluster ID.
@@ -481,13 +482,15 @@ pub fn decode_maximum_check_in_backoff(tlv: &[u8]) -> Result<u32, ClusterError> 
 }
 
 /// Encode the `RegisterClient` command request payload.
+///
+/// `key` and `verification_key` carry secrets: their `Debug` output shows `"<redacted>"`, but the returned payload carries them in clear, so do not log the payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_register_client(
     check_in_node_id: u64,
     monitored_subject: u64,
-    key: &Vec<u8>,
-    verification_key: Option<Vec<u8>>,
+    key: &Secret<Vec<u8>>,
+    verification_key: Option<Secret<Vec<u8>>>,
     client_type: ClientTypeEnum,
 ) -> Vec<u8> {
     let mut buf = Vec::new();
@@ -498,10 +501,10 @@ pub fn encode_register_client(
         .expect("infallible: vec writer");
     w.put_uint(Tag::Context(1), u64::from(monitored_subject))
         .expect("infallible: vec writer");
-    w.put_bytes(Tag::Context(2), &key)
+    w.put_bytes(Tag::Context(2), &key.expose())
         .expect("infallible: vec writer");
     if let Some(verification_key) = verification_key {
-        w.put_bytes(Tag::Context(3), &verification_key)
+        w.put_bytes(Tag::Context(3), &verification_key.expose())
             .expect("infallible: vec writer");
     }
     w.put_uint(Tag::Context(4), u64::from(client_type.to_raw()))
@@ -568,11 +571,13 @@ impl RegisterClientResponse {
 }
 
 /// Encode the `UnregisterClient` command request payload.
+///
+/// `verification_key` carries a secret: its `Debug` output shows `"<redacted>"`, but the returned payload carries it in clear, so do not log the payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_unregister_client(
     check_in_node_id: u64,
-    verification_key: Option<Vec<u8>>,
+    verification_key: Option<Secret<Vec<u8>>>,
 ) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
@@ -581,7 +586,7 @@ pub fn encode_unregister_client(
     w.put_uint(Tag::Context(0), u64::from(check_in_node_id))
         .expect("infallible: vec writer");
     if let Some(verification_key) = verification_key {
-        w.put_bytes(Tag::Context(1), &verification_key)
+        w.put_bytes(Tag::Context(1), &verification_key.expose())
             .expect("infallible: vec writer");
     }
     w.end_container().expect("infallible: vec writer");

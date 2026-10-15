@@ -9,7 +9,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use matter_clusters::clusters;
-use matter_clusters::types::Nullable;
+use matter_clusters::types::{Nullable, Secret};
 use matter_codec::{Tag, TlvWriter};
 
 /// Encode a single anonymous-tagged unsigned scalar (the wire shape of a
@@ -5544,14 +5544,14 @@ fn thread_border_router_management_requests_and_dataset_response_decode() {
     assert_eq!(command_id::DATASET_RESPONSE, 0x02);
     let dataset = vec![0x0e, 0x08, 0, 0, 0, 0, 0, 1, 0, 0];
     assert!(
-        encode_set_active_dataset_request(&dataset, Some(9))
+        encode_set_active_dataset_request(&Secret::new(dataset.clone()), Some(9))
             == struct_of(&|w| {
                 w.put_bytes(Tag::Context(0), &dataset).unwrap();
                 w.put_uint(Tag::Context(1), 9).unwrap();
             })
     );
     assert!(
-        encode_set_pending_dataset_request(&dataset)
+        encode_set_pending_dataset_request(&Secret::new(dataset.clone()))
             == struct_of(&|w| w.put_bytes(Tag::Context(0), &dataset).unwrap())
     );
     let response = DatasetResponse::decode(&struct_of(&|w| {
@@ -5606,7 +5606,7 @@ fn thread_network_directory_networks_requests_and_response_decode() {
     );
     // AddNetwork carries an operational dataset (a secret on a real network).
     assert!(
-        encode_add_network(&vec![0x0e, 0x08])
+        encode_add_network(&Secret::new(vec![0x0e, 0x08]))
             == struct_of(&|w| w.put_bytes(Tag::Context(0), &[0x0e, 0x08]).unwrap())
     );
     assert_eq!(
@@ -6070,7 +6070,7 @@ fn account_login_requests_secret_response_and_event() {
     assert!(
         alog::encode_login(
             &"AAAABBBBCCCCDDDD".to_string(),
-            &"20202021".to_string(),
+            &Secret::new("20202021".to_string()),
             Some(0x1122)
         ) == struct_of(&|w| {
             w.put_utf8(Tag::Context(0), "AAAABBBBCCCCDDDD").unwrap();
@@ -6748,11 +6748,13 @@ fn content_control_requests_encode_and_pin_response_is_secret() {
     };
     // UpdatePIN's payload carries two PINs, so it is compared with assert!.
     assert!(
-        cc::encode_update_pin(&"1234".to_string(), &"5678".to_string())
-            == struct_of(&|w| {
-                w.put_utf8(Tag::Context(0), "1234").unwrap();
-                w.put_utf8(Tag::Context(1), "5678").unwrap();
-            }),
+        cc::encode_update_pin(
+            &Secret::new("1234".to_string()),
+            &Secret::new("5678".to_string())
+        ) == struct_of(&|w| {
+            w.put_utf8(Tag::Context(0), "1234").unwrap();
+            w.put_utf8(Tag::Context(1), "5678").unwrap();
+        }),
         "unexpected UpdatePIN payload"
     );
     // PINCode is optional; BonusTime is mandatory.
@@ -6762,7 +6764,7 @@ fn content_control_requests_encode_and_pin_response_is_secret() {
     );
     // With a PIN the payload is compared with assert! too.
     assert!(
-        cc::encode_add_bonus_time(Some("1234".to_string()), 60)
+        cc::encode_add_bonus_time(Some(Secret::new("1234".to_string())), 60)
             == struct_of(&|w| {
                 w.put_utf8(Tag::Context(0), "1234").unwrap();
                 w.put_uint(Tag::Context(1), 60).unwrap();

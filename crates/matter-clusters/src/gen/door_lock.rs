@@ -12,6 +12,7 @@
 use crate::datatypes::SemanticTagStruct;
 use crate::error::ClusterError;
 use crate::types::Nullable;
+use crate::types::Secret;
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
 /// Cluster ID.
@@ -2068,15 +2069,17 @@ pub fn encode_expiring_user_timeout(value: u16) -> Vec<u8> {
 }
 
 /// Encode the `LockDoor` command request payload.
+///
+/// `pin_code` carries a secret: its `Debug` output shows `"<redacted>"`, but the returned payload carries it in clear, so do not log the payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
-pub fn encode_lock_door(pin_code: Option<Vec<u8>>) -> Vec<u8> {
+pub fn encode_lock_door(pin_code: Option<Secret<Vec<u8>>>) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");
     if let Some(pin_code) = pin_code {
-        w.put_bytes(Tag::Context(0), &pin_code)
+        w.put_bytes(Tag::Context(0), &pin_code.expose())
             .expect("infallible: vec writer");
     }
     w.end_container().expect("infallible: vec writer");
@@ -2084,15 +2087,17 @@ pub fn encode_lock_door(pin_code: Option<Vec<u8>>) -> Vec<u8> {
 }
 
 /// Encode the `UnlockDoor` command request payload.
+///
+/// `pin_code` carries a secret: its `Debug` output shows `"<redacted>"`, but the returned payload carries it in clear, so do not log the payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
-pub fn encode_unlock_door(pin_code: Option<Vec<u8>>) -> Vec<u8> {
+pub fn encode_unlock_door(pin_code: Option<Secret<Vec<u8>>>) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");
     if let Some(pin_code) = pin_code {
-        w.put_bytes(Tag::Context(0), &pin_code)
+        w.put_bytes(Tag::Context(0), &pin_code.expose())
             .expect("infallible: vec writer");
     }
     w.end_container().expect("infallible: vec writer");
@@ -2100,9 +2105,11 @@ pub fn encode_unlock_door(pin_code: Option<Vec<u8>>) -> Vec<u8> {
 }
 
 /// Encode the `UnlockWithTimeout` command request payload.
+///
+/// `pin_code` carries a secret: its `Debug` output shows `"<redacted>"`, but the returned payload carries it in clear, so do not log the payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
-pub fn encode_unlock_with_timeout(timeout: u16, pin_code: Option<Vec<u8>>) -> Vec<u8> {
+pub fn encode_unlock_with_timeout(timeout: u16, pin_code: Option<Secret<Vec<u8>>>) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
@@ -2110,7 +2117,7 @@ pub fn encode_unlock_with_timeout(timeout: u16, pin_code: Option<Vec<u8>>) -> Ve
     w.put_uint(Tag::Context(0), u64::from(timeout))
         .expect("infallible: vec writer");
     if let Some(pin_code) = pin_code {
-        w.put_bytes(Tag::Context(1), &pin_code)
+        w.put_bytes(Tag::Context(1), &pin_code.expose())
             .expect("infallible: vec writer");
     }
     w.end_container().expect("infallible: vec writer");
@@ -2968,12 +2975,14 @@ pub fn encode_clear_user(user_index: u16) -> Vec<u8> {
 }
 
 /// Encode the `SetCredential` command request payload.
+///
+/// `credential_data` carries a secret: its `Debug` output shows `"<redacted>"`, but the returned payload carries it in clear, so do not log the payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_set_credential(
     operation_type: DataOperationTypeEnum,
     credential: CredentialStruct,
-    credential_data: &Vec<u8>,
+    credential_data: &Secret<Vec<u8>>,
     user_index: Nullable<u16>,
     user_status: Nullable<UserStatusEnum>,
     user_type: Nullable<UserTypeEnum>,
@@ -2988,7 +2997,7 @@ pub fn encode_set_credential(
         .expect("infallible: vec writer");
     credential.write_fields(&mut w);
     w.end_container().expect("infallible: vec writer");
-    w.put_bytes(Tag::Context(2), &credential_data)
+    w.put_bytes(Tag::Context(2), &credential_data.expose())
         .expect("infallible: vec writer");
     match user_index {
         Nullable::Null => w.put_null(Tag::Context(3)).expect("infallible: vec writer"),
@@ -3277,15 +3286,17 @@ pub fn encode_clear_credential(credential: Nullable<CredentialStruct>) -> Vec<u8
 }
 
 /// Encode the `UnboltDoor` command request payload.
+///
+/// `pin_code` carries a secret: its `Debug` output shows `"<redacted>"`, but the returned payload carries it in clear, so do not log the payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
-pub fn encode_unbolt_door(pin_code: Option<Vec<u8>>) -> Vec<u8> {
+pub fn encode_unbolt_door(pin_code: Option<Secret<Vec<u8>>>) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");
     if let Some(pin_code) = pin_code {
-        w.put_bytes(Tag::Context(0), &pin_code)
+        w.put_bytes(Tag::Context(0), &pin_code.expose())
             .expect("infallible: vec writer");
     }
     w.end_container().expect("infallible: vec writer");

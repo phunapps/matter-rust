@@ -91,8 +91,8 @@ fn controller_table(source: &str) -> BTreeSet<(u32, u32)> {
 }
 
 /// Every string-typed secret field in a response command, as
-/// `(cluster id, response command id)`. A string secret anywhere else (a
-/// request, an event, a struct) has no row to map to, so it fails here with
+/// `(cluster id, response command id)`. A string secret in an event or a
+/// struct has no row to map to, so it fails here with
 /// a pointer to extend the table and this test.
 fn string_secret_responses(model: &Value) -> BTreeSet<(u32, u32)> {
     let mut found = BTreeSet::new();
@@ -102,6 +102,11 @@ fn string_secret_responses(model: &Value) -> BTreeSet<(u32, u32)> {
             for element in cluster[key].as_array().into_iter().flatten() {
                 for field in element["fields"].as_array().into_iter().flatten() {
                     if field["secret"] != true || field["metatype"] != "string" {
+                        continue;
+                    }
+                    // A request's secret is the caller's own argument, taken
+                    // as `Secret<T>`: no invoke response carries it back.
+                    if key == "commands" && element["direction"] == "request" {
                         continue;
                     }
                     let what = format!(

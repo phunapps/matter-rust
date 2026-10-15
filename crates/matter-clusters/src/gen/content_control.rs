@@ -17,6 +17,7 @@
 use crate::datatypes::SemanticTagStruct;
 use crate::error::ClusterError;
 use crate::types::Nullable;
+use crate::types::Secret;
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
 /// Cluster ID.
@@ -1009,16 +1010,18 @@ pub fn decode_block_content_time_window(tlv: &[u8]) -> Result<Vec<TimeWindowStru
 }
 
 /// Encode the `UpdatePin` command request payload.
+///
+/// `old_pin` and `new_pin` carry secrets: their `Debug` output shows `"<redacted>"`, but the returned payload carries them in clear, so do not log the payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
-pub fn encode_update_pin(old_pin: &String, new_pin: &String) -> Vec<u8> {
+pub fn encode_update_pin(old_pin: &Secret<String>, new_pin: &Secret<String>) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");
-    w.put_utf8(Tag::Context(0), &old_pin)
+    w.put_utf8(Tag::Context(0), &old_pin.expose())
         .expect("infallible: vec writer");
-    w.put_utf8(Tag::Context(1), &new_pin)
+    w.put_utf8(Tag::Context(1), &new_pin.expose())
         .expect("infallible: vec writer");
     w.end_container().expect("infallible: vec writer");
     buf
@@ -1123,15 +1126,17 @@ pub fn encode_disable() -> Vec<u8> {
 }
 
 /// Encode the `AddBonusTime` command request payload.
+///
+/// `pin_code` carries a secret: its `Debug` output shows `"<redacted>"`, but the returned payload carries it in clear, so do not log the payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
-pub fn encode_add_bonus_time(pin_code: Option<String>, bonus_time: u32) -> Vec<u8> {
+pub fn encode_add_bonus_time(pin_code: Option<Secret<String>>, bonus_time: u32) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");
     if let Some(pin_code) = pin_code {
-        w.put_utf8(Tag::Context(0), &pin_code)
+        w.put_utf8(Tag::Context(0), &pin_code.expose())
             .expect("infallible: vec writer");
     }
     w.put_uint(Tag::Context(1), u64::from(bonus_time))

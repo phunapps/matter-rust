@@ -12,6 +12,7 @@
 use crate::datatypes::SemanticTagStruct;
 use crate::error::ClusterError;
 use crate::types::Nullable;
+use crate::types::Secret;
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
 /// Cluster ID.
@@ -221,14 +222,16 @@ pub fn decode_thread_network_table_size(tlv: &[u8]) -> Result<u8, ClusterError> 
 }
 
 /// Encode the `AddNetwork` command request payload.
+///
+/// `operational_dataset` carries a secret: its `Debug` output shows `"<redacted>"`, but the returned payload carries it in clear, so do not log the payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
-pub fn encode_add_network(operational_dataset: &Vec<u8>) -> Vec<u8> {
+pub fn encode_add_network(operational_dataset: &Secret<Vec<u8>>) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");
-    w.put_bytes(Tag::Context(0), &operational_dataset)
+    w.put_bytes(Tag::Context(0), &operational_dataset.expose())
         .expect("infallible: vec writer");
     w.end_container().expect("infallible: vec writer");
     buf

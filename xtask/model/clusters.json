@@ -7268,7 +7268,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": false,
-              "description": "Credentials is the passphrase or PSK for the network (if any is needed).\nSecurity type, cipher and credential format (passphrase or PSK) shall be contextually auto-selected during execution of the ConnectNetwork command and during subsequent operational state network connections, based on the most secure Wi-Fi security type available within beacons and probe responses for the set of all discovered BSSIDs for the configured SSID. The type of PSK or passphrase used shall be inferred based on the length and contents of the Credentials field provided, matching the security type chosen.\nValid Credentials length are:\n  - 0 bytes: Unsecured (open) connection\n  - 5 bytes: WEP-64 passphrase\n  - 10 hexadecimal ASCII characters: WEP-64 40-bit hex raw PSK\n  - 13 bytes: WEP-128 passphrase\n  - 26 hexadecimal ASCII characters: WEP-128 104-bit hex raw PSK\n  - 8..63 bytes: WPA/WPA2/WPA3 passphrase\n  - 64 bytes: WPA/WPA2/WPA3 raw hex PSK These lengths shall be contextually interpreted based on the security type of the BSSID where connection will occur.\nWhen the length of Credentials and available set of BSSID admits more than one option, such as the presence of both WPA2 and WPA security type within the result set, WPA2 shall be considered more secure.\nNote that it may occur that a station cannot connect to a particular access point with higher security and selects a lower security connectivity type if the link quality is deemed to be too low to achieve successful operation, or if all retry attempts fail."
+              "description": "Credentials is the passphrase or PSK for the network (if any is needed).\nSecurity type, cipher and credential format (passphrase or PSK) shall be contextually auto-selected during execution of the ConnectNetwork command and during subsequent operational state network connections, based on the most secure Wi-Fi security type available within beacons and probe responses for the set of all discovered BSSIDs for the configured SSID. The type of PSK or passphrase used shall be inferred based on the length and contents of the Credentials field provided, matching the security type chosen.\nValid Credentials length are:\n  - 0 bytes: Unsecured (open) connection\n  - 5 bytes: WEP-64 passphrase\n  - 10 hexadecimal ASCII characters: WEP-64 40-bit hex raw PSK\n  - 13 bytes: WEP-128 passphrase\n  - 26 hexadecimal ASCII characters: WEP-128 104-bit hex raw PSK\n  - 8..63 bytes: WPA/WPA2/WPA3 passphrase\n  - 64 bytes: WPA/WPA2/WPA3 raw hex PSK These lengths shall be contextually interpreted based on the security type of the BSSID where connection will occur.\nWhen the length of Credentials and available set of BSSID admits more than one option, such as the presence of both WPA2 and WPA security type within the result set, WPA2 shall be considered more secure.\nNote that it may occur that a station cannot connect to a particular access point with higher security and selects a lower security connectivity type if the link quality is deemed to be too low to achieve successful operation, or if all retry attempts fail.",
+              "secret": true
             },
             {
               "id": 2,
@@ -7294,7 +7295,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": false,
-              "description": "The OperationalDataset field shall contain the Thread Network Parameters, including channel, PAN ID, and Extended PAN ID.\nThe encoding for the OperationalDataset field is defined in the Thread specification.\nThe client shall pass the OperationalDataset as an opaque octet string."
+              "description": "The OperationalDataset field shall contain the Thread Network Parameters, including channel, PAN ID, and Extended PAN ID.\nThe encoding for the OperationalDataset field is defined in the Thread specification.\nThe client shall pass the OperationalDataset as an opaque octet string.",
+              "secret": true
             },
             {
               "id": 1,
@@ -8101,7 +8103,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": false,
-              "description": "The EnableKey is a 128 bit value provided by the client in this command, which needs to match a value chosen by the manufacturer and configured on the server using manufacturer-specific means, such as pre-provisioning. The value of all zeroes is reserved to indicate that no EnableKey is set. Therefore, if the EnableKey field is received with all zeroes, this command shall FAIL with a response status of CONSTRAINT_ERROR.\nThe EnableKey SHOULD be unique per exact set of devices going to a certification test.\nDevices not targeted towards going to a certification test event shall NOT have a non-zero EnableKey value configured, so that only devices in test environments are responsive to this command.\nIn order to prevent unwittingly actuating a particular trigger, this command shall respond with a response status of CONSTRAINT_ERROR if the EnableKey field does not match the a-priori value configured on the device."
+              "description": "The EnableKey is a 128 bit value provided by the client in this command, which needs to match a value chosen by the manufacturer and configured on the server using manufacturer-specific means, such as pre-provisioning. The value of all zeroes is reserved to indicate that no EnableKey is set. Therefore, if the EnableKey field is received with all zeroes, this command shall FAIL with a response status of CONSTRAINT_ERROR.\nThe EnableKey SHOULD be unique per exact set of devices going to a certification test.\nDevices not targeted towards going to a certification test event shall NOT have a non-zero EnableKey value configured, so that only devices in test environments are responsive to this command.\nIn order to prevent unwittingly actuating a particular trigger, this command shall respond with a response status of CONSTRAINT_ERROR if the EnableKey field does not match the a-priori value configured on the device.",
+              "secret": true
             },
             {
               "id": 1,
@@ -8160,7 +8163,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": false,
-              "description": "This field shall have the same meaning and usage as the TestEventTrigger EnableKey field."
+              "description": "This field shall have the same meaning and usage as the TestEventTrigger EnableKey field.",
+              "secret": true
             },
             {
               "id": 1,
@@ -11872,7 +11876,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": false,
-              "description": "This field shall specify an ephemeral PAKE passcode verifier (see Section 3.10, \"Password-Authenticated Key Exchange (PAKE)\") computed by the existing Administrator to be used for this commissioning. The field is concatenation of two values (w0 || L) shall be (CRYPTO_GROUP_SIZE_BYTES + CRYPTO_PUBLIC_KEY_SIZE_BYTES)-octets long as detailed in Crypto_PAKEValues_Responder. It shall be derived from an ephemeral passcode (See PAKE). It shall be deleted by the Node at the end of commissioning or expiration of the OpenCommissioningWindow command, and shall be deleted by the existing Administrator after sending it to the Node(s)."
+              "description": "This field shall specify an ephemeral PAKE passcode verifier (see Section 3.10, \"Password-Authenticated Key Exchange (PAKE)\") computed by the existing Administrator to be used for this commissioning. The field is concatenation of two values (w0 || L) shall be (CRYPTO_GROUP_SIZE_BYTES + CRYPTO_PUBLIC_KEY_SIZE_BYTES)-octets long as detailed in Crypto_PAKEValues_Responder. It shall be derived from an ephemeral passcode (See PAKE). It shall be deleted by the Node at the end of commissioning or expiration of the OpenCommissioningWindow command, and shall be deleted by the existing Administrator after sending it to the Node(s).",
+              "secret": true
             },
             {
               "id": 2,
@@ -12209,7 +12214,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": false,
-              "description": "This field shall contain the value of the Epoch Key for the Identity Protection Key (IPK) to set for the Fabric which is to be added. This is needed to bootstrap a necessary configuration value for subsequent CASE to succeed. See Section 4.14.2.6.1, \"Identity Protection Key (IPK)\" for details.\nThe IPK shall be provided as an octet string of length CRYPTO_SYMMETRIC_KEY_LENGTH_BYTES.\nOn successful execution of the AddNOC command, the side-effect of having provided this field shall be equivalent to having done a GroupKeyManagement cluster KeySetWrite command invocation using the newly joined fabric as the accessing fabric and with the following argument fields (assuming KeySetWrite allowed a GroupKeySetID set to 0):"
+              "description": "This field shall contain the value of the Epoch Key for the Identity Protection Key (IPK) to set for the Fabric which is to be added. This is needed to bootstrap a necessary configuration value for subsequent CASE to succeed. See Section 4.14.2.6.1, \"Identity Protection Key (IPK)\" for details.\nThe IPK shall be provided as an octet string of length CRYPTO_SYMMETRIC_KEY_LENGTH_BYTES.\nOn successful execution of the AddNOC command, the side-effect of having provided this field shall be equivalent to having done a GroupKeyManagement cluster KeySetWrite command invocation using the newly joined fabric as the accessing fabric and with the following argument fields (assuming KeySetWrite allowed a GroupKeySetID set to 0):",
+              "secret": true
             },
             {
               "id": 3,
@@ -13327,7 +13333,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": false,
-              "description": "This field shall contain the ICDToken, a 128-bit symmetric key shared by the ICD and the ICD Client, used to encrypt Check-In messages from this ICD to the MonitoredSubject."
+              "description": "This field shall contain the ICDToken, a 128-bit symmetric key shared by the ICD and the ICD Client, used to encrypt Check-In messages from this ICD to the MonitoredSubject.",
+              "secret": true
             },
             {
               "id": 3,
@@ -13336,7 +13343,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": true,
-              "description": "This field shall provide the verification key. The verification key represents the key already stored on the server. The verification key provided in this field shall be used by the server to guarantee that a client with manage permissions can only modify entries that contain a Key equal to the verification key. The verification key shall be provided for clients with manage permissions. The verification key SHOULD NOT be provided by clients with administrator permissions for the server cluster. The verification key shall be ignored by the server if it is provided by a client with administrator permissions for the server cluster."
+              "description": "This field shall provide the verification key. The verification key represents the key already stored on the server. The verification key provided in this field shall be used by the server to guarantee that a client with manage permissions can only modify entries that contain a Key equal to the verification key. The verification key shall be provided for clients with manage permissions. The verification key SHOULD NOT be provided by clients with administrator permissions for the server cluster. The verification key shall be ignored by the server if it is provided by a client with administrator permissions for the server cluster.",
+              "secret": true
             },
             {
               "id": 4,
@@ -13388,7 +13396,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": true,
-              "description": "This field shall provide the verification key associated with the CheckInNodeID to remove from storage. The verification key represents the key already stored on the server. The verification key provided in this field shall be used by the server to guarantee that a client with manage permissions can only remove entries that contain a Key equal to the stored key. The verification key shall be provided for clients with manage permissions. The verification key SHOULD NOT be provided by clients with administrator permissions for the server cluster. The verification key shall be ignored by the server if it is provided by a client with administrator permissions for the server cluster."
+              "description": "This field shall provide the verification key associated with the CheckInNodeID to remove from storage. The verification key represents the key already stored on the server. The verification key provided in this field shall be used by the server to guarantee that a client with manage permissions can only remove entries that contain a Key equal to the stored key. The verification key shall be provided for clients with manage permissions. The verification key SHOULD NOT be provided by clients with administrator permissions for the server cluster. The verification key shall be ignored by the server if it is provided by a client with administrator permissions for the server cluster.",
+              "secret": true
             }
           ]
         },
@@ -25026,7 +25035,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": true,
-              "description": "If the RequirePINforRemoteOperation attribute is True then PINCode field shall be provided and the door lock shall NOT grant access if it is not provided.\nIf the PINCode field is provided, the door lock shall verify PINCode before granting access regardless of the value of RequirePINForRemoteOperation attribute.\nWhen the PINCode field is provided an invalid PIN will count towards the WrongCodeEntryLimit and the UserCodeTemporaryDisableTime will be triggered if the WrongCodeEntryLimit is exceeded. The lock shall ignore any attempts to lock/unlock the door until the UserCodeTemporaryDisableTime expires."
+              "description": "If the RequirePINforRemoteOperation attribute is True then PINCode field shall be provided and the door lock shall NOT grant access if it is not provided.\nIf the PINCode field is provided, the door lock shall verify PINCode before granting access regardless of the value of RequirePINForRemoteOperation attribute.\nWhen the PINCode field is provided an invalid PIN will count towards the WrongCodeEntryLimit and the UserCodeTemporaryDisableTime will be triggered if the WrongCodeEntryLimit is exceeded. The lock shall ignore any attempts to lock/unlock the door until the UserCodeTemporaryDisableTime expires.",
+              "secret": true
             }
           ]
         },
@@ -25043,7 +25053,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": true,
-              "description": "See Section 5.2.10.1.1, \"PINCode Field\"."
+              "description": "See Section 5.2.10.1.1, \"PINCode Field\".",
+              "secret": true
             }
           ]
         },
@@ -25069,7 +25080,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": true,
-              "description": "See Section 5.2.10.1.1, \"PINCode Field\"."
+              "description": "See Section 5.2.10.1.1, \"PINCode Field\".",
+              "secret": true
             }
           ]
         },
@@ -25791,7 +25803,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": false,
-              "description": "This field shall indicate the credential data to set for the credential being added or modified. The length of the credential data shall conform to the limits of the CredentialType specified in the Credential structure otherwise an INVALID_COMMAND status shall be returned in the SetCredentialResponse command."
+              "description": "This field shall indicate the credential data to set for the credential being added or modified. The length of the credential data shall conform to the limits of the CredentialType specified in the Credential structure otherwise an INVALID_COMMAND status shall be returned in the SetCredentialResponse command.",
+              "secret": true
             },
             {
               "id": 3,
@@ -25966,7 +25979,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": true,
-              "description": "See Section 5.2.10.1.1, \"PINCode Field\"."
+              "description": "See Section 5.2.10.1.1, \"PINCode Field\".",
+              "secret": true
             }
           ]
         }
@@ -36455,7 +36469,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": false,
-              "description": "This field shall contain the active dataset to set of the Thread network to configure in the Border Router as an octet string containing the raw Thread TLV value of the dataset, as defined in the Thread specification."
+              "description": "This field shall contain the active dataset to set of the Thread network to configure in the Border Router as an octet string containing the raw Thread TLV value of the dataset, as defined in the Thread specification.",
+              "secret": true
             },
             {
               "id": 1,
@@ -36481,7 +36496,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": false,
-              "description": null
+              "description": null,
+              "secret": true
             }
           ]
         }
@@ -36541,7 +36557,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": false,
-              "description": "This field shall represent the Operational Dataset for the network, using the encoding defined in the Thread specification. It shall contain at least the following sub-TLVs: Active Timestamp, Channel, Channel Mask, Extended PAN ID, Network Key, Network Mesh-Local Prefix, Network Name, PAN ID, PSKc, and Security Policy."
+              "description": "This field shall represent the Operational Dataset for the network, using the encoding defined in the Thread specification. It shall contain at least the following sub-TLVs: Active Timestamp, Channel, Channel Mask, Extended PAN ID, Network Key, Network Mesh-Local Prefix, Network Name, PAN ID, PSKc, and Security Policy.",
+              "secret": true
             }
           ]
         },
@@ -40513,7 +40530,8 @@
               "metatype": "string",
               "nullable": false,
               "optional": false,
-              "description": "This field shall provide the Setup PIN as a text string at least 8 characters in length.\n> [!NOTE]\n> NOTE: Newer cluster clients should be aware that AccountLogin cluster revision 1 specified an 11 digit minimum length."
+              "description": "This field shall provide the Setup PIN as a text string at least 8 characters in length.\n> [!NOTE]\n> NOTE: Newer cluster clients should be aware that AccountLogin cluster revision 1 specified an 11 digit minimum length.",
+              "secret": true
             },
             {
               "id": 2,
@@ -40750,7 +40768,8 @@
               "metatype": "string",
               "nullable": false,
               "optional": false,
-              "description": "This field shall specify the original PIN. Once the UpdatePIN command is performed successfully, it shall be invalid."
+              "description": "This field shall specify the original PIN. Once the UpdatePIN command is performed successfully, it shall be invalid.",
+              "secret": true
             },
             {
               "id": 1,
@@ -40759,7 +40778,8 @@
               "metatype": "string",
               "nullable": false,
               "optional": false,
-              "description": "This field shall indicate a new PIN for the Content Control feature."
+              "description": "This field shall indicate a new PIN for the Content Control feature.",
+              "secret": true
             }
           ]
         },
@@ -40815,7 +40835,8 @@
               "metatype": "string",
               "nullable": false,
               "optional": true,
-              "description": "This field shall indicate the PIN.\nThis field shall be optional for clients with Manage or greater privilege but shall be mandatory for clients with Operate privilege. The PIN provided in this field shall be used to guarantee that a client with Operate permission is allowed to invoke this command only if the PIN passed in this command is equal to the current PIN value."
+              "description": "This field shall indicate the PIN.\nThis field shall be optional for clients with Manage or greater privilege but shall be mandatory for clients with Operate privilege. The PIN provided in this field shall be used to guarantee that a client with Operate permission is allowed to invoke this command only if the PIN passed in this command is equal to the current PIN value.",
+              "secret": true
             },
             {
               "id": 1,

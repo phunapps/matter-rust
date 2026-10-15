@@ -12,6 +12,7 @@
 use crate::datatypes::SemanticTagStruct;
 use crate::error::ClusterError;
 use crate::types::Nullable;
+use crate::types::Secret;
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
 /// Cluster ID.
@@ -729,14 +730,16 @@ pub fn decode_test_event_triggers_enabled(tlv: &[u8]) -> Result<bool, ClusterErr
 }
 
 /// Encode the `TestEventTrigger` command request payload.
+///
+/// `enable_key` carries a secret: its `Debug` output shows `"<redacted>"`, but the returned payload carries it in clear, so do not log the payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
-pub fn encode_test_event_trigger(enable_key: &Vec<u8>, event_trigger: u64) -> Vec<u8> {
+pub fn encode_test_event_trigger(enable_key: &Secret<Vec<u8>>, event_trigger: u64) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");
-    w.put_bytes(Tag::Context(0), &enable_key)
+    w.put_bytes(Tag::Context(0), &enable_key.expose())
         .expect("infallible: vec writer");
     w.put_uint(Tag::Context(1), u64::from(event_trigger))
         .expect("infallible: vec writer");
@@ -831,14 +834,16 @@ impl TimeSnapshotResponse {
 }
 
 /// Encode the `PayloadTestRequest` command request payload.
+///
+/// `enable_key` carries a secret: its `Debug` output shows `"<redacted>"`, but the returned payload carries it in clear, so do not log the payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
-pub fn encode_payload_test_request(enable_key: &Vec<u8>, value: u8, count: u16) -> Vec<u8> {
+pub fn encode_payload_test_request(enable_key: &Secret<Vec<u8>>, value: u8, count: u16) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");
-    w.put_bytes(Tag::Context(0), &enable_key)
+    w.put_bytes(Tag::Context(0), &enable_key.expose())
         .expect("infallible: vec writer");
     w.put_uint(Tag::Context(1), u64::from(value))
         .expect("infallible: vec writer");

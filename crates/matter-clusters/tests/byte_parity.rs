@@ -10,7 +10,7 @@
 
 use base64::Engine as _;
 use matter_clusters::clusters;
-use matter_clusters::types::Nullable;
+use matter_clusters::types::{Nullable, Secret};
 use std::fs;
 use std::path::PathBuf;
 
@@ -211,7 +211,7 @@ fn set_temperature_command() {
 
 #[test]
 fn lock_door_optional_field() {
-    let with = clusters::door_lock::encode_lock_door(Some(vec![1, 2, 3, 4]));
+    let with = clusters::door_lock::encode_lock_door(Some(Secret::new(vec![1, 2, 3, 4])));
     assert_eq!(with, cmd("door_lock/cmd_lock_door_with_pin.json"));
     let without = clusters::door_lock::encode_lock_door(None);
     assert_eq!(without, cmd("door_lock/cmd_lock_door_no_pin.json"));

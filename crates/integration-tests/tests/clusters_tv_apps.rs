@@ -50,7 +50,7 @@ use matter_clusters::clusters::{
     account_login as alog, application_basic as ab, application_launcher as al, channel as ch,
     content_control as cc,
 };
-use matter_clusters::types::Nullable;
+use matter_clusters::types::{Nullable, Secret};
 use matter_controller::{CommandPath, ImStatus, InvokeResult, MatterController, Node, ReadPath};
 
 /// tv-app's video-player endpoint.
@@ -767,13 +767,17 @@ async fn account_login_issues_and_checks_a_setup_pin() {
     assert_eq!(
         st(
             c::LOGIN,
-            alog::encode_login(&account, &"00000000".to_string(), None)
+            alog::encode_login(&account, &Secret::new("00000000".to_string()), None)
         )
         .await,
         UNSUPPORTED_ACCESS
     );
     assert_eq!(
-        st(c::LOGIN, alog::encode_login(&account, &pin.setup_pin, None)).await,
+        st(
+            c::LOGIN,
+            alog::encode_login(&account, &Secret::new(pin.setup_pin.clone()), None)
+        )
+        .await,
         ImStatus::Success
     );
     // chip's server answers Success, then fails to log LoggedOut: it builds

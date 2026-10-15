@@ -1605,6 +1605,33 @@ Band60G, Band1G}` (both new in 0.6.0). PowerSource's battery designations
 keep their `_` prefix (`BatCommonDesignationEnum::_4V5`, `_18650`): they are
 catalogue codes that mix sizes and voltages, so no one word fits them all.
 
+### matter-clusters: Changed (breaking) — secret request arguments are `Secret<T>`
+
+New `matter_clusters::types::Secret<T>`: a wrapper whose `Debug` prints the
+quoted placeholder `"<redacted>"` and that has no `Display`; `new`, `expose`,
+`into_inner` and `From<T>`. It guards logs only: the value is not zeroed, and
+the payload an encoder returns carries it in clear.
+
+Every request argument that carries a secret now takes it as `&Secret<T>`
+(required) or `Option<Secret<T>>` (optional), and the encoder's rustdoc warns
+about the payload. Wrap the value you passed before with `Secret::new(..)`;
+the encoded bytes are unchanged. Of these, 0.5.0 already had
+`administrator_commissioning::encode_open_commissioning_window`
+(`pake_passcode_verifier`), `door_lock::{encode_set_credential,
+encode_lock_door, encode_unlock_door, encode_unlock_with_timeout,
+encode_unbolt_door}`, `general_diagnostics::{encode_test_event_trigger,
+encode_payload_test_request}` (`enable_key`),
+`icd_management::{encode_register_client, encode_unregister_client}` (`key`,
+`verification_key`) and `operational_credentials::encode_add_noc`
+(`ipk_value`). The others are new in this release: AccountLogin `Login`,
+ContentControl `UpdatePin` and `AddBonusTime`, NetworkCommissioning
+`AddOrUpdateWiFiNetwork` and `AddOrUpdateThreadNetwork`,
+ThreadBorderRouterManagement `SetActiveDatasetRequest` and
+`SetPendingDatasetRequest`, and ThreadNetworkDirectory `AddNetwork`.
+GroupKeyManagement `encode_key_set_write` keeps its `GroupKeySetStruct`
+argument (that struct's `Debug` already redacts its epoch keys) and gains the
+same warning.
+
 ## matter-transport 0.7.3 + matter-controller 0.18.1
 
 A subscription waiting for its device to come back no longer depends on the

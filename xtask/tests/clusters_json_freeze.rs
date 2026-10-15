@@ -2764,19 +2764,53 @@ fn network_infrastructure_clusters_keep_their_shapes() {
 }
 
 /// The fields the dump marks `secret` (`SECRET_FIELDS`), as `(cluster,
-/// "<Owner>.<Field>")`: their structs keep them out of the generated `Debug`
-/// output. A new one (a widening, a model upgrade) is a review item.
-const SECRET: [(&str, &str); 9] = [
+/// "<Owner>.<Field>")`: a struct or response keeps them out of its generated
+/// `Debug` output, and a request encoder takes them as `Secret<T>`. A new one
+/// (a widening, a model upgrade) is a review item.
+const SECRET: [(&str, &str); 30] = [
     ("AccountLogin", "GetSetupPinResponse.SetupPin"),
+    ("AccountLogin", "Login.SetupPin"),
+    (
+        "AdministratorCommissioning",
+        "OpenCommissioningWindow.PakePasscodeVerifier",
+    ),
     (
         "CommissionerControl",
         "ReverseOpenCommissioningWindow.PakePasscodeVerifier",
     ),
+    ("ContentControl", "AddBonusTime.PinCode"),
     ("ContentControl", "ResetPinResponse.PinCode"),
+    ("ContentControl", "UpdatePin.NewPin"),
+    ("ContentControl", "UpdatePin.OldPin"),
+    ("DoorLock", "LockDoor.PinCode"),
+    ("DoorLock", "SetCredential.CredentialData"),
+    ("DoorLock", "UnboltDoor.PinCode"),
+    ("DoorLock", "UnlockDoor.PinCode"),
+    ("DoorLock", "UnlockWithTimeout.PinCode"),
+    ("GeneralDiagnostics", "PayloadTestRequest.EnableKey"),
+    ("GeneralDiagnostics", "TestEventTrigger.EnableKey"),
     ("GroupKeyManagement", "GroupKeySetStruct.EpochKey0"),
     ("GroupKeyManagement", "GroupKeySetStruct.EpochKey1"),
     ("GroupKeyManagement", "GroupKeySetStruct.EpochKey2"),
+    ("IcdManagement", "RegisterClient.Key"),
+    ("IcdManagement", "RegisterClient.VerificationKey"),
+    ("IcdManagement", "UnregisterClient.VerificationKey"),
+    (
+        "NetworkCommissioning",
+        "AddOrUpdateThreadNetwork.OperationalDataset",
+    ),
+    ("NetworkCommissioning", "AddOrUpdateWiFiNetwork.Credentials"),
+    ("OperationalCredentials", "AddNoc.IpkValue"),
     ("ThreadBorderRouterManagement", "DatasetResponse.Dataset"),
+    (
+        "ThreadBorderRouterManagement",
+        "SetActiveDatasetRequest.ActiveDataset",
+    ),
+    (
+        "ThreadBorderRouterManagement",
+        "SetPendingDatasetRequest.PendingDataset",
+    ),
+    ("ThreadNetworkDirectory", "AddNetwork.OperationalDataset"),
     (
         "ThreadNetworkDirectory",
         "OperationalDatasetResponse.OperationalDataset",
@@ -3195,4 +3229,101 @@ fn content_control_is_provisional_and_keeps_its_shapes() {
         enum_values(datatype(c, "StatusCodeEnum")),
         [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     );
+}
+
+/// The secret-holding structs reachable from `start` through a field's type or
+/// list entry type, at any depth (`start` itself excluded unless a cycle leads
+/// back to it).
+fn secret_holders_below<'a>(
+    dts: &std::collections::HashMap<&'a str, &'a Value>,
+    start: &'a str,
+) -> Vec<&'a str> {
+    let holds_secret = |d: &Value| {
+        d["fields"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|f| f["secret"] == true)
+    };
+    let mut found = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![start];
+    while let Some(name) = stack.pop() {
+        let Some(d) = dts.get(name) else {
+            continue;
+        };
+        for g in d["fields"].as_array().into_iter().flatten() {
+            for t in [g["type"].as_str(), g["entryType"].as_str()]
+                .into_iter()
+                .flatten()
+            {
+                let Some(inner) = dts.get(t) else {
+                    continue;
+                };
+                if seen.insert(t) {
+                    if holds_secret(inner) {
+                        found.push(t);
+                    }
+                    stack.push(t);
+                }
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn a_request_reaches_a_secret_struct_only_as_a_direct_argument() {
+    // An encoder's rustdoc names a direct struct argument whose struct holds a
+    // secret (GroupKeyManagement KeySetWrite's GroupKeySet). A secret behind a
+    // list entry or a nested struct, at any depth, would go unnamed, so none
+    // may exist.
+    let v = load();
+    for c in clusters(&v) {
+        let dts: std::collections::HashMap<&str, &Value> = c["datatypes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| (d["name"].as_str().unwrap(), d))
+            .collect();
+        let holds_secret = |name: &str| {
+            dts.get(name).is_some_and(|d| {
+                d["fields"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|f| f["secret"] == true)
+            })
+        };
+        for cmd in c["commands"].as_array().unwrap() {
+            if cmd["direction"] != "request" {
+                continue;
+            }
+            for f in cmd["fields"].as_array().unwrap() {
+                let at = format!(
+                    "{}.{}.{}",
+                    c["name"].as_str().unwrap(),
+                    cmd["name"].as_str().unwrap(),
+                    f["name"].as_str().unwrap()
+                );
+                if let Some(entry) = f["entryType"].as_str() {
+                    assert!(
+                        !holds_secret(entry),
+                        "{at}: a list of secret-holding {entry}"
+                    );
+                    assert_eq!(
+                        secret_holders_below(&dts, entry),
+                        Vec::<&str>::new(),
+                        "{at}: a list of {entry}, which nests a secret-holding struct"
+                    );
+                }
+                let ty = f["type"].as_str().unwrap();
+                assert_eq!(
+                    secret_holders_below(&dts, ty),
+                    Vec::<&str>::new(),
+                    "{at}: a {ty}, which nests a secret-holding struct"
+                );
+            }
+        }
+    }
 }

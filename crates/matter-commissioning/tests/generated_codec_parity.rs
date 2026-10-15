@@ -31,7 +31,7 @@
 
 use matter_clusters::clusters::{general_commissioning as gen_gc, network_commissioning as gen_nc};
 use matter_clusters::error::ClusterError;
-use matter_clusters::types::Nullable;
+use matter_clusters::types::{Nullable, Secret};
 use matter_codec::{Tag, TlvWriter};
 use matter_commissioning::clusters::{
     general_commissioning as hand_gc, network_commissioning as hand_nc,
@@ -130,12 +130,16 @@ fn network_commissioning_requests_encode_identically() {
     let credentials = b"correct horse".to_vec();
     assert_eq!(
         hand_nc::encode_add_or_update_wifi_network(&ssid, &credentials, 3),
-        gen_nc::encode_add_or_update_wifi_network(&ssid, &credentials, Some(3))
+        gen_nc::encode_add_or_update_wifi_network(
+            &ssid,
+            &Secret::new(credentials.clone()),
+            Some(3)
+        )
     );
     let dataset = vec![0x0e, 0x08, 0, 0, 0, 0, 0, 1, 0, 0];
     assert_eq!(
         hand_nc::encode_add_or_update_thread_network(&dataset, 4),
-        gen_nc::encode_add_or_update_thread_network(&dataset, Some(4))
+        gen_nc::encode_add_or_update_thread_network(&Secret::new(dataset.clone()), Some(4))
     );
     assert_eq!(
         hand_nc::encode_connect_network(&ssid, 5),
@@ -159,7 +163,7 @@ fn network_commissioning_requests_encode_identically_across_the_flows_inputs() {
                 hand_nc::encode_add_or_update_wifi_network(&ssid, &credentials, breadcrumb)
                     == gen_nc::encode_add_or_update_wifi_network(
                         &ssid,
-                        &credentials,
+                        &Secret::new(credentials.clone()),
                         Some(breadcrumb)
                     ),
                 "AddOrUpdateWiFiNetwork, breadcrumb {breadcrumb}, {} credential bytes",
@@ -168,7 +172,10 @@ fn network_commissioning_requests_encode_identically_across_the_flows_inputs() {
         }
         assert!(
             hand_nc::encode_add_or_update_thread_network(&dataset, breadcrumb)
-                == gen_nc::encode_add_or_update_thread_network(&dataset, Some(breadcrumb)),
+                == gen_nc::encode_add_or_update_thread_network(
+                    &Secret::new(dataset.clone()),
+                    Some(breadcrumb)
+                ),
             "AddOrUpdateThreadNetwork, breadcrumb {breadcrumb}"
         );
         for network_id in [&ssid, &ext_pan_id] {
