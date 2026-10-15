@@ -611,7 +611,7 @@ much earlier.)
 ~15-30s with a clear error instead of hanging. **Does not make macOS BLE
 succeed.**
 
-**Options** (see the audit doc): keep Linux-only + file an upstream btleplug
+**Options:** keep Linux-only + file an upstream btleplug
 issue (recommended); or a scoped R&D task to chase `uuidNotAllowed` (compare
 btleplug's write path to chip's `BleConnection.mm`, try WriteWithoutResponse /
 disconnect-reconnect recovery) — open-ended, and a published crate can't carry a

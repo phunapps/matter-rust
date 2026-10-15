@@ -10,8 +10,9 @@ it joins the mesh and answers operational Thread traffic.
 > install + network provisioning all over BLE. For a Thread device, "network
 > provisioning" means `AddOrUpdateThreadNetwork` with the operational
 > dataset bytes, then `ConnectNetwork` keyed by the dataset's Extended
-> PAN ID (the dataset's TLVs carry the Extended PAN ID; see
-> `crates/matter-commissioning/src/thread_dataset.rs`).
+> PAN ID (`ThreadDataset`, in
+> `crates/matter-commissioning/src/thread_dataset.rs`, extracts it from the
+> dataset's Thread TLVs).
 > Everything else (BTP handshake, PASE, attestation, CSR/NOC, the operational
 > CASE handshake once the device is reachable) is identical to the C1
 > Wi-Fi path — see `docs/runbooks/ble-commissioning.md` for that shared
