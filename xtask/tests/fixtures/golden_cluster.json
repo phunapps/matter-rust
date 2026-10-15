@@ -69,6 +69,15 @@
           "fields": [
             { "id": 0, "name": "Nest", "type": "NestStruct", "metatype": "object",
               "nullable": false, "optional": false }
+          ] },
+        { "id": 6, "name": "Unlock", "direction": "request", "responseId": null,
+          "fields": [
+            { "id": 0, "name": "Code", "type": "string", "metatype": "string",
+              "nullable": false, "optional": false, "secret": true },
+            { "id": 1, "name": "Pin", "type": "octstr", "metatype": "bytes",
+              "nullable": false, "optional": true, "secret": true },
+            { "id": 2, "name": "Hint", "type": "string", "metatype": "string",
+              "nullable": false, "optional": false }
           ] }
       ],
       "events": [

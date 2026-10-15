@@ -665,13 +665,71 @@ fn emit_attr_encoder(s: &mut String, a: &Attribute, dts: &DatatypeMap<'_>, note:
     line!(s, "}}\n");
 }
 
-/// For an encoder argument, Copy scalars pass by value; String/Vec by ref.
+/// For an encoder argument, Copy scalars pass by value; String/Vec (and a
+/// `Secret` around one, [`arg_type`]) by ref.
 fn borrowed(ty: &str) -> String {
-    if ty == "String" || ty.starts_with("Vec<") {
+    if ty == "String" || ty.starts_with("Vec<") || ty.starts_with("Secret<") {
         format!("&{ty}")
     } else {
         ty.to_string()
     }
+}
+
+/// The Rust type of request field `f` as an encoder argument (before
+/// [`borrowed`]): [`rust_type`], except that a secret field's value is wrapped
+/// in `Secret<T>` inside any `Nullable` and `Option` (`Option<Secret<Vec<u8>>>`),
+/// so a `{:?}` of the argument prints `"<redacted>"`.
+fn arg_type(f: &FieldDef) -> String {
+    if !f.secret {
+        return rust_type(
+            &f.ty,
+            f.entry_type.as_deref(),
+            f.nullable,
+            f.optional,
+            Position::Field,
+        );
+    }
+    let mut t = format!("Secret<{}>", base_type(&f.ty, f.entry_type.as_deref()));
+    if f.nullable {
+        t = format!("Nullable<{t}>");
+    }
+    if f.optional {
+        t = format!("Option<{t}>");
+    }
+    t
+}
+
+/// The rustdoc paragraph on a request encoder with secret arguments, or
+/// `None`: each secret field (wrapped in `Secret<T>`, [`arg_type`]) and each
+/// struct argument whose struct has a secret field (its own `Debug` redacts
+/// it) is named, and the paragraph says the returned payload carries them in
+/// clear.
+pub(crate) fn secret_request_doc(cmd: &CommandDef, dts: &DatatypeMap<'_>) -> Option<String> {
+    let names: Vec<String> = cmd
+        .fields
+        .iter()
+        .filter(|f| {
+            f.secret
+                || dts
+                    .get(f.ty.as_str())
+                    .is_some_and(|d| d.fields.iter().any(|g| g.secret))
+        })
+        .map(|f| format!("`{}`", field_ident(&f.name)))
+        .collect();
+    let (list, verb, its, it) = match names.as_slice() {
+        [] => return None,
+        [one] => (one.clone(), "carries a secret", "its", "it"),
+        [rest @ .., last] => (
+            format!("{} and {last}", rest.join(", ")),
+            "carry secrets",
+            "their",
+            "them",
+        ),
+    };
+    Some(format!(
+        "{list} {verb}: {its} `Debug` output shows `\"<redacted>\"`, but the returned \
+         payload carries {it} in clear, so do not log the payload."
+    ))
 }
 
 /// `note`: the command's [`element_note`] (supplement or provisional line).
@@ -684,21 +742,16 @@ fn emit_command_encoder(
     let args: Vec<String> = cmd
         .fields
         .iter()
-        .map(|f| {
-            let t = rust_type(
-                &f.ty,
-                f.entry_type.as_deref(),
-                f.nullable,
-                f.optional,
-                Position::Field,
-            );
-            format!("{}: {}", field_ident(&f.name), borrowed(&t))
-        })
+        .map(|f| format!("{}: {}", field_ident(&f.name), borrowed(&arg_type(f))))
         .collect();
     line!(s, "/// Encode the `{}` command request payload.", cmd.name);
     if let Some(note) = note {
         line!(s, "///");
         line!(s, "/// {note}");
+    }
+    if let Some(doc) = secret_request_doc(cmd, dts) {
+        line!(s, "///");
+        line!(s, "/// {doc}");
     }
     for doc in choice_docs(&cmd.fields) {
         line!(s, "///");
@@ -738,8 +791,22 @@ fn emit_field_write(s: &mut String, f: &FieldDef, var: &str, dts: &DatatypeMap<'
         "boolean" | "integer" | "float" | "string" | "bytes" | "enum" | "bitmap"
     );
     if scalar {
-        let inner =
-            |expr: &str| write_scalar(&f.metatype, &f.ty, f.entry_type.as_deref(), &tag, expr, dts);
+        // A secret argument is a `Secret<T>`: write the value it wraps.
+        let inner = |expr: &str| {
+            let value = if f.secret {
+                format!("{expr}.expose()")
+            } else {
+                expr.to_string()
+            };
+            write_scalar(
+                &f.metatype,
+                &f.ty,
+                f.entry_type.as_deref(),
+                &tag,
+                &value,
+                dts,
+            )
+        };
         emit_guarded_write(s, f, var, &tag, &inner);
         return;
     }
@@ -1886,6 +1953,61 @@ mod tests {
         assert!(s.contains(".field(\"passphrase\", &\"<redacted>\")"), "{s}");
         assert!(!s.contains("&self.passphrase"), "{s}");
         assert!(s.contains(&format!("    /// {SECRET_DOC}\n")), "{s}");
+    }
+
+    #[test]
+    fn a_secret_request_argument_is_wrapped_and_written_through_expose() {
+        // AccountLogin `Login.SetupPin` (a required string) and DoorLock
+        // `LockDoor.PINCode` (an optional byte string).
+        let mut pin = field(0, "SetupPin", "string", "string", None);
+        pin.secret = true;
+        let mut code = field(1, "PinCode", "octstr", "bytes", None);
+        code.secret = true;
+        code.optional = true;
+        let plain = field(2, "Hint", "string", "string", None);
+        let cmd = request_cmd("Login", vec![pin, code, plain]);
+        let mut s = String::new();
+        emit_command_encoder(&mut s, &cmd, &HashMap::new(), None);
+        for want in [
+            "pub fn encode_login(setup_pin: &Secret<String>, pin_code: Option<Secret<Vec<u8>>>, hint: &String) -> Vec<u8> {",
+            "    w.put_utf8(Tag::Context(0), &setup_pin.expose())",
+            "    if let Some(pin_code) = pin_code { w.put_bytes(Tag::Context(1), &pin_code.expose())",
+            "    w.put_utf8(Tag::Context(2), &hint)",
+            "/// `setup_pin` and `pin_code` carry secrets: their `Debug` output shows `\"<redacted>\"`, \
+             but the returned payload carries them in clear, so do not log the payload.\n",
+        ] {
+            assert!(s.contains(want), "missing {want:?} in:\n{s}");
+        }
+    }
+
+    #[test]
+    fn a_request_without_secrets_has_no_secret_doc() {
+        let cmd = request_cmd("Toggle", vec![field(0, "Hint", "string", "string", None)]);
+        assert_eq!(secret_request_doc(&cmd, &HashMap::new()), None);
+        let mut s = String::new();
+        emit_command_encoder(&mut s, &cmd, &HashMap::new(), None);
+        assert!(!s.contains("Secret<") && !s.contains(".expose()"), "{s}");
+    }
+
+    #[test]
+    fn a_struct_argument_holding_a_secret_is_named_in_the_doc() {
+        // GroupKeyManagement `KeySetWrite.GroupKeySet`: the struct's own
+        // `Debug` redacts its epoch keys, so the argument is not wrapped.
+        let mut key = field(0, "EpochKey0", "octstr", "bytes", None);
+        key.secret = true;
+        let set = struct_dt("GroupKeySetStruct", vec![key]);
+        let dts: DatatypeMap<'_> = std::iter::once((set.name.as_str(), &set)).collect();
+        let cmd = request_cmd(
+            "KeySetWrite",
+            vec![field(0, "GroupKeySet", "GroupKeySetStruct", "object", None)],
+        );
+        assert_eq!(
+            secret_request_doc(&cmd, &dts).as_deref(),
+            Some(
+                "`group_key_set` carries a secret: its `Debug` output shows `\"<redacted>\"`, \
+                 but the returned payload carries it in clear, so do not log the payload."
+            )
+        );
     }
 
     #[test]

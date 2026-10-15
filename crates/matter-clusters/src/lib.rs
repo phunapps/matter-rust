@@ -7,8 +7,9 @@
 //! structs (a cluster with events has an `event_id` module in its
 //! `clusters::<cluster>` module). The cluster modules live under
 //! [`clusters`]; the hand-written foundation is [`Nullable<T>`](types::Nullable)
-//! (distinct from `Option`), [`ClusterError`](error::ClusterError), and
-//! [`datatypes::SemanticTagStruct`].
+//! (distinct from `Option`), [`Secret<T>`](types::Secret) (a request argument
+//! that carries a PIN, key or credential: its `Debug` prints `"<redacted>"`),
+//! [`ClusterError`](error::ClusterError), and [`datatypes::SemanticTagStruct`].
 //!
 //! # Pipeline
 //!

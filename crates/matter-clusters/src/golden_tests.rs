@@ -281,3 +281,33 @@ fn the_nest_request_carries_the_struct_at_its_context_tag() {
     }
     assert_eq!(bytes, want);
 }
+
+#[test]
+fn a_secret_request_argument_encodes_its_value_and_debug_hides_it() {
+    // `Unlock` (`Code` a secret string, `Pin` an optional secret byte string,
+    // `Hint` plain): the wrapper changes no byte, and `{:?}` of the argument
+    // prints the placeholder.
+    use crate::golden::encode_unlock;
+    use crate::types::Secret;
+    let code = Secret::new("2468".to_string());
+    let pin: Secret<Vec<u8>> = vec![1, 2, 3].into();
+    assert_eq!(format!("{code:?} {pin:?}"), r#""<redacted>" "<redacted>""#);
+    let want = |pin: Option<&[u8]>| {
+        let mut want = Vec::new();
+        let mut w = TlvWriter::new(&mut want);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_utf8(Tag::Context(0), "2468").unwrap();
+        if let Some(pin) = pin {
+            w.put_bytes(Tag::Context(1), pin).unwrap();
+        }
+        w.put_utf8(Tag::Context(2), "front door").unwrap();
+        w.end_container().unwrap();
+        want
+    };
+    let hint = "front door".to_string();
+    assert_eq!(
+        encode_unlock(&code, Some(pin), &hint),
+        want(Some(&[1, 2, 3]))
+    );
+    assert_eq!(encode_unlock(&code, None, &hint), want(None));
+}

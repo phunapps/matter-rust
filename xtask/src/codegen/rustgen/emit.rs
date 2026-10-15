@@ -318,6 +318,14 @@ fn emit_header(s: &mut String, c: &Cluster) {
     }
     line!(s, "use crate::error::ClusterError;");
     line!(s, "use crate::types::Nullable;");
+    // Only a cluster with a secret request argument names `Secret`, so the
+    // other modules' imports are unchanged.
+    if c.commands
+        .iter()
+        .any(|cmd| cmd.direction == "request" && cmd.fields.iter().any(|f| f.secret))
+    {
+        line!(s, "use crate::types::Secret;");
+    }
     line!(
         s,
         "use matter_codec::{{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value}};\n"

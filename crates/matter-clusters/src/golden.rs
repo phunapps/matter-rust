@@ -12,6 +12,7 @@
 use crate::datatypes::SemanticTagStruct;
 use crate::error::ClusterError;
 use crate::types::Nullable;
+use crate::types::Secret;
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
 /// Cluster ID.
@@ -34,6 +35,8 @@ pub mod command_id {
     pub const PICK: u32 = 0x04;
     /// `Nest` (request).
     pub const NEST: u32 = 0x05;
+    /// `Unlock` (request).
+    pub const UNLOCK: u32 = 0x06;
 }
 
 /// Attribute IDs (cluster-specific).
@@ -1210,6 +1213,32 @@ pub fn encode_nest(nest: NestStruct) -> Vec<u8> {
         .expect("infallible: vec writer");
     nest.write_fields(&mut w);
     w.end_container().expect("infallible: vec writer");
+    w.end_container().expect("infallible: vec writer");
+    buf
+}
+
+/// Encode the `Unlock` command request payload.
+///
+/// `code` and `pin` carry secrets: their `Debug` output shows `"<redacted>"`, but the returned payload carries them in clear, so do not log the payload.
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_unlock(
+    code: &Secret<String>,
+    pin: Option<Secret<Vec<u8>>>,
+    hint: &String,
+) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.put_utf8(Tag::Context(0), &code.expose())
+        .expect("infallible: vec writer");
+    if let Some(pin) = pin {
+        w.put_bytes(Tag::Context(1), &pin.expose())
+            .expect("infallible: vec writer");
+    }
+    w.put_utf8(Tag::Context(2), &hint)
+        .expect("infallible: vec writer");
     w.end_container().expect("infallible: vec writer");
     buf
 }

@@ -729,6 +729,8 @@ pub fn decode_max_group_keys_per_fabric(tlv: &[u8]) -> Result<u16, ClusterError>
 }
 
 /// Encode the `KeySetWrite` command request payload.
+///
+/// `group_key_set` carries a secret: its `Debug` output shows `"<redacted>"`, but the returned payload carries it in clear, so do not log the payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_key_set_write(group_key_set: GroupKeySetStruct) -> Vec<u8> {
