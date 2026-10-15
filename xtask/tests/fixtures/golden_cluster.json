@@ -52,7 +52,7 @@
             { "id": 0, "name": "Status", "type": "uint8", "metatype": "integer",
               "nullable": false, "optional": false },
             { "id": 1, "name": "Reached", "type": "uint16", "metatype": "integer",
-              "nullable": false, "optional": true }
+              "nullable": false, "optional": true, "chipProvisional": true }
           ] },
         { "id": 3, "name": "SetPoint", "direction": "request", "responseId": null,
           "fields": [
@@ -86,7 +86,7 @@
         { "id": 1, "name": "LevelChanged", "priority": "info",
           "fields": [
             { "id": 0, "name": "Previous", "type": "uint16", "metatype": "integer",
-              "nullable": false, "optional": false },
+              "nullable": false, "optional": false, "chipProvisional": true },
             { "id": 1, "name": "Count", "type": "uint8", "metatype": "integer",
               "nullable": false, "optional": true }
           ] },

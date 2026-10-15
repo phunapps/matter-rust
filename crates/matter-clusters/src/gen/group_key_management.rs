@@ -16,8 +16,8 @@ use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
 /// Cluster ID.
 pub const CLUSTER_ID: u32 = 0x003F;
-/// The cluster revision this crate was generated against (Matter 1.4.2); a device
-/// reports its own in the `ClusterRevision` attribute.
+/// The cluster's revision in Matter 1.4.2; a device reports its own in the
+/// `ClusterRevision` attribute.
 pub const CLUSTER_REVISION: u16 = 2;
 
 /// Command IDs (requests and responses).
@@ -740,7 +740,7 @@ pub fn decode_max_group_keys_per_fabric(tlv: &[u8]) -> Result<u16, ClusterError>
 
 /// Encode the `KeySetWrite` command request payload.
 ///
-/// `group_key_set` carries a secret: its `Debug` output shows `"<redacted>"`, but the returned payload carries it in clear, so do not log the payload.
+/// `group_key_set` holds secret fields: its `Debug` output shows `"<redacted>"` for each of them, but the returned payload carries them in clear, so do not log the payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_key_set_write(group_key_set: GroupKeySetStruct) -> Vec<u8> {

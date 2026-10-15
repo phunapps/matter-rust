@@ -63,10 +63,7 @@ pub fn stale_modules(
         let path = entry
             .map_err(|e| format!("list {}: {e}", dir.display()))?
             .path();
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        if path.extension().is_some_and(|x| x == "rs") && !expected.contains(name) {
+        if is_stale(&path, expected) {
             stale.push(path);
         }
     }
@@ -74,15 +71,32 @@ pub fn stale_modules(
     Ok(stale)
 }
 
+/// Whether `path` is a `.rs` file whose name is not in `expected`.
+///
+/// A name that is not UTF-8 counts as stale: every name codegen writes is
+/// UTF-8, so such a file can never be one of them, and a drift guard must
+/// report it rather than skip it.
+fn is_stale(path: &std::path::Path, expected: &std::collections::BTreeSet<String>) -> bool {
+    let is_rs = path.extension().is_some_and(|x| x == "rs");
+    let known = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| expected.contains(n));
+    is_rs && !known
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)] // Test code: a failed temp-dir write should fail the test.
-    use super::stale_modules;
+    use super::{is_stale, stale_modules};
     use std::collections::BTreeSet;
 
     #[test]
     fn a_module_codegen_no_longer_writes_is_stale() {
         let dir = std::env::temp_dir().join(format!("xtask-stale-{}", std::process::id()));
+        // A run that panicked before its cleanup may have left files behind
+        // under a pid this process now reuses; start from an empty directory.
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         for f in [
             "mod.rs",
@@ -96,5 +110,19 @@ mod tests {
         let stale = stale_modules(&dir, &expected).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(stale, vec![dir.join("wi_fi_network_diagnostics.rs")]);
+    }
+
+    /// A non-UTF-8 name cannot be created on every file system (APFS refuses
+    /// one), so this checks the predicate on a path built in memory.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_rs_name_is_stale() {
+        use std::os::unix::ffi::OsStrExt;
+        let expected: BTreeSet<String> = ["mod.rs"].map(String::from).into();
+        let name = std::ffi::OsStr::from_bytes(b"gen/\xffbad.rs");
+        assert!(is_stale(std::path::Path::new(name), &expected));
+        let other = std::ffi::OsStr::from_bytes(b"gen/\xffnotes.txt");
+        assert!(!is_stale(std::path::Path::new(other), &expected));
+        assert!(!is_stale(std::path::Path::new("gen/mod.rs"), &expected));
     }
 }

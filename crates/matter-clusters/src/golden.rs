@@ -21,8 +21,8 @@ use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
 /// Cluster ID.
 pub const CLUSTER_ID: u32 = 0xFC00;
-/// The cluster revision this crate was generated against (Matter 1.4.2); a device
-/// reports its own in the `ClusterRevision` attribute.
+/// The cluster's revision in Matter 1.4.2; a device reports its own in the
+/// `ClusterRevision` attribute.
 pub const CLUSTER_REVISION: u16 = 1;
 
 /// Command IDs (requests and responses).
@@ -1125,6 +1125,7 @@ pub struct SetLevelResponse {
     /// Field Status (tag 0).
     pub status: u8,
     /// Field Reached (tag 1).
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     pub reached: Option<u16>,
 }
 
@@ -1272,6 +1273,7 @@ pub fn encode_unlock(
 #[non_exhaustive]
 pub struct LevelChangedEvent {
     /// Field Previous (tag 0).
+    /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
     pub previous: u16,
     /// Field Count (tag 1).
     pub count: Option<u8>,

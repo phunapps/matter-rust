@@ -16,8 +16,8 @@ use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
 /// Cluster ID.
 pub const CLUSTER_ID: u32 = 0x0051;
-/// The cluster revision this crate was generated against (Matter 1.4.2); a device
-/// reports its own in the `ClusterRevision` attribute.
+/// The cluster's revision in Matter 1.4.2; a device reports its own in the
+/// `ClusterRevision` attribute.
 pub const CLUSTER_REVISION: u16 = 3;
 
 /// Command IDs (requests and responses).

@@ -686,8 +686,15 @@ fn borrowed(ty: &str) -> String {
 
 /// The Rust type of request field `f` as an encoder argument (before
 /// [`borrowed`]): [`rust_type`], except that a secret field's value is wrapped
-/// in `Secret<T>` inside any `Nullable` and `Option` (`Option<Secret<Vec<u8>>>`),
-/// so a `{:?}` of the argument prints `"<redacted>"`.
+/// in `Secret<T>` inside any `Option` (`Option<Secret<Vec<u8>>>`), so a `{:?}`
+/// of the argument prints `"<redacted>"`.
+///
+/// # Panics
+///
+/// On a secret field that is not a string or byte string (only those write
+/// through `.expose()` into `put_utf8`/`put_bytes`), or that is nullable (no
+/// model field is, so a `Nullable<Secret<T>>` argument has never been
+/// generated or tested): the emitter refuses a shape it cannot vouch for.
 fn arg_type(f: &FieldDef) -> String {
     if !f.secret {
         return rust_type(
@@ -698,47 +705,78 @@ fn arg_type(f: &FieldDef) -> String {
             Position::Field,
         );
     }
-    let mut t = format!("Secret<{}>", base_type(&f.ty, f.entry_type.as_deref()));
-    if f.nullable {
-        t = format!("Nullable<{t}>");
-    }
+    assert!(
+        matches!(f.metatype.as_str(), "string" | "bytes"),
+        "codegen: secret request field {} has metatype {:?}; Secret<T> is emitted only for string/bytes",
+        f.name,
+        f.metatype
+    );
+    assert!(
+        !f.nullable,
+        "codegen: secret request field {} is nullable; Nullable<Secret<T>> is not emitted until a model field needs it",
+        f.name
+    );
+    let t = format!("Secret<{}>", base_type(&f.ty, f.entry_type.as_deref()));
     if f.optional {
-        t = format!("Option<{t}>");
+        format!("Option<{t}>")
+    } else {
+        t
     }
-    t
 }
 
 /// The rustdoc paragraph on a request encoder with secret arguments, or
 /// `None`: each secret field (wrapped in `Secret<T>`, [`arg_type`]) and each
 /// struct argument whose struct has a secret field (its own `Debug` redacts
-/// it) is named, and the paragraph says the returned payload carries them in
-/// clear.
+/// only those fields) is named, and the paragraph says the returned payload
+/// carries them in clear.
+///
+/// # Panics
+///
+/// When one request has both kinds of argument: no model request does, and
+/// the two need different wording (a whole value redacted versus some fields
+/// of a struct).
 pub(crate) fn secret_request_doc(cmd: &CommandDef, dts: &DatatypeMap<'_>) -> Option<String> {
-    let names: Vec<String> = cmd
+    let ident = |f: &FieldDef| format!("`{}`", field_ident(&f.name));
+    let holds_secret_fields = |f: &FieldDef| {
+        dts.get(f.ty.as_str())
+            .is_some_and(|d| d.fields.iter().any(|g| g.secret))
+    };
+    let secrets: Vec<String> = cmd.fields.iter().filter(|f| f.secret).map(ident).collect();
+    let structs: Vec<String> = cmd
         .fields
         .iter()
-        .filter(|f| {
-            f.secret
-                || dts
-                    .get(f.ty.as_str())
-                    .is_some_and(|d| d.fields.iter().any(|g| g.secret))
-        })
-        .map(|f| format!("`{}`", field_ident(&f.name)))
+        .filter(|f| !f.secret && holds_secret_fields(f))
+        .map(ident)
         .collect();
-    let (list, verb, its, it) = match names.as_slice() {
-        [] => return None,
-        [one] => (one.clone(), "carries a secret", "its", "it"),
-        [rest @ .., last] => (
-            format!("{} and {last}", rest.join(", ")),
-            "carry secrets",
-            "their",
-            "them",
+    // (names, wording for one name, wording for several).
+    let (names, one, several) = match (secrets.is_empty(), structs.is_empty()) {
+        (true, true) => return None,
+        (false, true) => (
+            secrets,
+            "carries a secret: its `Debug` output shows `\"<redacted>\"`, but the returned \
+             payload carries it in clear",
+            "carry secrets: their `Debug` output shows `\"<redacted>\"`, but the returned \
+             payload carries them in clear",
+        ),
+        (true, false) => (
+            structs,
+            "holds secret fields: its `Debug` output shows `\"<redacted>\"` for each of them, \
+             but the returned payload carries them in clear",
+            "hold secret fields: their `Debug` output shows `\"<redacted>\"` for each of them, \
+             but the returned payload carries them in clear",
+        ),
+        (false, false) => panic!(
+            "codegen: request {} has both secret arguments and struct arguments holding \
+             secrets; secret_request_doc has no wording for both",
+            cmd.name
         ),
     };
-    Some(format!(
-        "{list} {verb}: {its} `Debug` output shows `\"<redacted>\"`, but the returned \
-         payload carries {it} in clear, so do not log the payload."
-    ))
+    let (list, clause) = match names.as_slice() {
+        [] => return None,
+        [only] => (only.clone(), one),
+        [rest @ .., last] => (format!("{} and {last}", rest.join(", ")), several),
+    };
+    Some(format!("{list} {clause}, so do not log the payload."))
 }
 
 /// `note`: the command's [`element_note`] (supplement or provisional line).
@@ -2131,10 +2169,49 @@ mod tests {
         assert_eq!(
             secret_request_doc(&cmd, &dts).as_deref(),
             Some(
-                "`group_key_set` carries a secret: its `Debug` output shows `\"<redacted>\"`, \
-                 but the returned payload carries it in clear, so do not log the payload."
+                "`group_key_set` holds secret fields: its `Debug` output shows `\"<redacted>\"` \
+                 for each of them, but the returned payload carries them in clear, so do not log \
+                 the payload."
             )
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "Secret<T> is emitted only for string/bytes")]
+    fn a_secret_request_field_that_is_not_a_string_or_bytes_is_refused() {
+        let mut n = field(0, "Index", "uint16", "integer", None);
+        n.secret = true;
+        let cmd = request_cmd("SetIndex", vec![n]);
+        emit_command_encoder(&mut String::new(), &cmd, &HashMap::new(), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "Nullable<Secret<T>> is not emitted")]
+    fn a_nullable_secret_request_field_is_refused() {
+        let mut pin = field(0, "PinCode", "octstr", "bytes", None);
+        pin.secret = true;
+        pin.nullable = true;
+        let cmd = request_cmd("LockDoor", vec![pin]);
+        emit_command_encoder(&mut String::new(), &cmd, &HashMap::new(), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "secret_request_doc has no wording for both")]
+    fn a_request_mixing_secret_and_secret_holding_struct_arguments_is_refused() {
+        let mut key = field(0, "EpochKey0", "octstr", "bytes", None);
+        key.secret = true;
+        let set = struct_dt("GroupKeySetStruct", vec![key]);
+        let dts: DatatypeMap<'_> = std::iter::once((set.name.as_str(), &set)).collect();
+        let mut pin = field(1, "PinCode", "octstr", "bytes", None);
+        pin.secret = true;
+        let cmd = request_cmd(
+            "Mixed",
+            vec![
+                field(0, "GroupKeySet", "GroupKeySetStruct", "object", None),
+                pin,
+            ],
+        );
+        let _ = secret_request_doc(&cmd, &dts);
     }
 
     #[test]

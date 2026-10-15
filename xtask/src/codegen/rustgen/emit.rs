@@ -382,15 +382,14 @@ fn emit_header(s: &mut String, c: &Cluster) {
     line!(s, "pub const CLUSTER_REVISION: u16 = {};\n", c.revision);
 }
 
-/// The rustdoc lines of `CLUSTER_REVISION`: the Matter 1.4.2 revision this
-/// crate was generated against, and that a device reports its own. When the
+/// The rustdoc lines of `CLUSTER_REVISION`: the cluster's revision in Matter
+/// 1.4.2, and that a device reports its own. When the
 /// codegen model's revision is higher, a last line says the module follows
 /// the model for what changed after 1.4.2.
 pub(crate) fn cluster_revision_doc(c: &Cluster) -> Vec<String> {
     let mut doc = vec![
-        "/// The cluster revision this crate was generated against (Matter 1.4.2); a device"
-            .to_string(),
-        "/// reports its own in the `ClusterRevision` attribute.".to_string(),
+        "/// The cluster's revision in Matter 1.4.2; a device reports its own in the".to_string(),
+        "/// `ClusterRevision` attribute.".to_string(),
     ];
     if let Some(m) = c.model_revision.filter(|m| *m > c.revision) {
         doc.push("///".to_string());
@@ -1036,8 +1035,8 @@ mod tests {
         emit_header(&mut s, &c);
         assert!(
             s.contains(
-                "/// The cluster revision this crate was generated against (Matter 1.4.2); a device\n\
-                 /// reports its own in the `ClusterRevision` attribute.\n///\n\
+                "/// The cluster's revision in Matter 1.4.2; a device reports its own in the\n\
+                 /// `ClusterRevision` attribute.\n///\n\
                  /// The codegen model (Matter 1.5.1) is at revision 7: an element it added or \
                  changed after revision 6 is generated as the model has it.\n\
                  pub const CLUSTER_REVISION: u16 = 6;\n"
