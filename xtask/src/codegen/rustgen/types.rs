@@ -195,6 +195,53 @@ pub fn screaming(name: &str) -> String {
     snake(name).to_ascii_uppercase()
 }
 
+/// Rust names for enum members whose model name starts with a digit, which
+/// cannot start a Rust identifier: `(enum, member, name)`. The quantity's
+/// unit or kind goes first (`12Hr` → `Hr12`, Wi-Fi band `2G4` → `Band2G4`).
+pub const DIGIT_MEMBER_NAMES: [(&str, &str, &str); 8] = [
+    ("HourFormatEnum", "12Hr", "Hr12"),
+    ("HourFormatEnum", "24Hr", "Hr24"),
+    ("WiFiBandEnum", "2G4", "Band2G4"),
+    ("WiFiBandEnum", "3G65", "Band3G65"),
+    ("WiFiBandEnum", "5G", "Band5G"),
+    ("WiFiBandEnum", "6G", "Band6G"),
+    ("WiFiBandEnum", "60G", "Band60G"),
+    ("WiFiBandEnum", "1G", "Band1G"),
+];
+
+/// Enums whose digit-initial members keep the `_` prefix [`ident`] gives
+/// them: `PowerSource`'s battery designations (`4V5`, `18650`, `523`) are
+/// product numbers with no unit or kind to lead with, so `_4V5` reads as the
+/// designation itself.
+pub const UNDERSCORE_DIGIT_ENUMS: [&str; 1] = ["BatCommonDesignationEnum"];
+
+/// The Rust name of member `member` of enum `enum_name`: [`ident`], except a
+/// digit-initial member, named by [`DIGIT_MEMBER_NAMES`] or (in an
+/// [`UNDERSCORE_DIGIT_ENUMS`] enum) `_`-prefixed.
+///
+/// # Panics
+///
+/// At codegen time, if a digit-initial member is in neither table: a new one
+/// needs a deliberate name, not a silent `_` prefix.
+#[must_use]
+pub fn variant_ident(enum_name: &str, member: &str) -> String {
+    if !member.starts_with(|c: char| c.is_ascii_digit()) {
+        return ident(member);
+    }
+    if let Some((_, _, name)) = DIGIT_MEMBER_NAMES
+        .iter()
+        .find(|(e, m, _)| *e == enum_name && *m == member)
+    {
+        return (*name).to_string();
+    }
+    assert!(
+        UNDERSCORE_DIGIT_ENUMS.contains(&enum_name),
+        "codegen: {enum_name}.{member} starts with a digit; give it a name in \
+         DIGIT_MEMBER_NAMES (or list {enum_name} in UNDERSCORE_DIGIT_ENUMS)"
+    );
+    ident(member)
+}
+
 /// Escape a Rust reserved word so it is a valid identifier (`type` →
 /// `r#type`). Names that are not keywords pass through unchanged.
 #[must_use]
@@ -208,11 +255,10 @@ pub fn ident(name: &str) -> String {
         "await", "abstract", "become", "box", "do", "final", "macro", "override", "priv", "try",
         "typeof", "unsized", "virtual", "yield", "gen", "Self",
     ];
-    // A leading digit is not a valid Rust identifier start. Some Matter enum
-    // members are battery designations like `4V5` / `523` (PowerSource's
-    // `BatCommonDesignationEnum`); prefix `_` to make them valid. (The model
-    // already mixed-cases names, so none have the consecutive-uppercase that
-    // would trip `non_camel_case_types`.)
+    // A leading digit is not a valid Rust identifier start: prefix `_`.
+    // Enum members reach this only through `variant_ident`, which names
+    // every digit-initial member except the battery designations
+    // (`UNDERSCORE_DIGIT_ENUMS`).
     if name.chars().next().is_some_and(|c| c.is_ascii_digit()) {
         return format!("_{name}");
     }
@@ -352,6 +398,31 @@ mod tests {
         assert_eq!(snake("LaunchUrl"), "launch_url");
         assert_eq!(snake("DvbiUrl"), "dvbi_url");
         assert_eq!(snake("GroupKeySetID"), "group_key_set_id");
+    }
+
+    #[test]
+    fn digit_initial_enum_members_get_a_name() {
+        assert_eq!(variant_ident("HourFormatEnum", "12Hr"), "Hr12");
+        assert_eq!(variant_ident("HourFormatEnum", "24Hr"), "Hr24");
+        assert_eq!(variant_ident("WiFiBandEnum", "2G4"), "Band2G4");
+        assert_eq!(variant_ident("WiFiBandEnum", "3G65"), "Band3G65");
+        assert_eq!(variant_ident("WiFiBandEnum", "60G"), "Band60G");
+        // Battery designations keep the `_` prefix.
+        assert_eq!(variant_ident("BatCommonDesignationEnum", "4V5"), "_4V5");
+        assert_eq!(variant_ident("BatCommonDesignationEnum", "18650"), "_18650");
+        // Every other member is `ident`'s, the kept names included.
+        assert_eq!(
+            variant_ident("HourFormatEnum", "UseActiveLocale"),
+            "UseActiveLocale"
+        );
+        assert_eq!(variant_ident("PhyRateEnum", "Rate25G"), "Rate25G");
+        assert_eq!(variant_ident("CecKeyCodeEnum", "Numbers1"), "Numbers1");
+    }
+
+    #[test]
+    #[should_panic(expected = "Weird.9Lives starts with a digit")]
+    fn an_unnamed_digit_initial_member_stops_codegen() {
+        let _ = variant_ident("Weird", "9Lives");
     }
 
     #[test]

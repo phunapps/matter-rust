@@ -119,12 +119,11 @@ impl CalendarTypeEnum {
 
 /// `HourFormatEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
 pub enum HourFormatEnum {
     /// 12Hr = 0.
-    _12Hr,
+    Hr12,
     /// 24Hr = 1.
-    _24Hr,
+    Hr24,
     /// UseActiveLocale = 255.
     UseActiveLocale,
     /// A value not known to this codegen revision.
@@ -136,8 +135,8 @@ impl HourFormatEnum {
     #[must_use]
     pub fn from_raw(v: u8) -> Self {
         match v {
-            0 => Self::_12Hr,
-            1 => Self::_24Hr,
+            0 => Self::Hr12,
+            1 => Self::Hr24,
             255 => Self::UseActiveLocale,
             other => Self::Unknown(other),
         }
@@ -146,8 +145,8 @@ impl HourFormatEnum {
     #[must_use]
     pub fn to_raw(self) -> u8 {
         match self {
-            Self::_12Hr => 0,
-            Self::_24Hr => 1,
+            Self::Hr12 => 0,
+            Self::Hr24 => 1,
             Self::UseActiveLocale => 255,
             Self::Unknown(v) => v,
         }

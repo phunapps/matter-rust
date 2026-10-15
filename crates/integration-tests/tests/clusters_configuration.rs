@@ -142,10 +142,10 @@ async fn time_format_localization_writes_hour_format_and_calendar() {
     assert_exact_attribute_ids("TimeFormatLocalization", &attrs, &[0, 1, 2]);
     let tlv = |id| attribute_tlv(&attrs, id);
     let hour = time_format::decode_hour_format(tlv(a::HOUR_FORMAT)).unwrap();
-    let toggled = if hour == HourFormatEnum::_24Hr {
-        HourFormatEnum::_12Hr
+    let toggled = if hour == HourFormatEnum::Hr24 {
+        HourFormatEnum::Hr12
     } else {
-        HourFormatEnum::_24Hr
+        HourFormatEnum::Hr24
     };
     let write_hour = |h| {
         write0(

@@ -4512,13 +4512,13 @@ fn time_format_and_unit_localization_attributes_decode() {
     // The enum values are 12Hr = 0, 24Hr = 1, UseActiveLocale = 0xFF.
     assert_eq!(
         decode_hour_format(&uint_attr(1)).unwrap(),
-        HourFormatEnum::_24Hr
+        HourFormatEnum::Hr24
     );
     assert_eq!(
         decode_hour_format(&uint_attr(0xFF)).unwrap(),
         HourFormatEnum::UseActiveLocale
     );
-    assert_eq!(encode_hour_format(HourFormatEnum::_12Hr), uint_attr(0));
+    assert_eq!(encode_hour_format(HourFormatEnum::Hr12), uint_attr(0));
     assert_eq!(
         decode_supported_calendar_types(&uint_array_attr(&[4, 0xFF, 42])).unwrap(),
         [
@@ -5083,7 +5083,7 @@ fn network_commissioning_attributes_requests_and_responses_decode() {
     );
     assert_eq!(
         decode_supported_wifi_bands(&uint_array_attr(&[0, 2])).unwrap(),
-        [WiFiBandEnum::_2G4, WiFiBandEnum::_5G]
+        [WiFiBandEnum::Band2G4, WiFiBandEnum::Band5G]
     );
     assert_eq!(
         decode_supported_thread_features(&uint_attr(0b1010)).unwrap(),
@@ -5124,7 +5124,7 @@ fn network_commissioning_attributes_requests_and_responses_decode() {
         (
             Some(WiFiSecurityBitmap::WPA2_PERSONAL),
             Some(36),
-            Some(WiFiBandEnum::_5G),
+            Some(WiFiBandEnum::Band5G),
             Some(-40)
         )
     );

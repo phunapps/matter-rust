@@ -207,20 +207,19 @@ pub struct ThreadInterfaceScanResultStruct {
 
 /// `WiFiBandEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
 pub enum WiFiBandEnum {
     /// 2G4 = 0.
-    _2G4,
+    Band2G4,
     /// 3G65 = 1.
-    _3G65,
+    Band3G65,
     /// 5G = 2.
-    _5G,
+    Band5G,
     /// 6G = 3.
-    _6G,
+    Band6G,
     /// 60G = 4.
-    _60G,
+    Band60G,
     /// 1G = 5.
-    _1G,
+    Band1G,
     /// A value not known to this codegen revision.
     Unknown(u8),
 }
@@ -230,12 +229,12 @@ impl WiFiBandEnum {
     #[must_use]
     pub fn from_raw(v: u8) -> Self {
         match v {
-            0 => Self::_2G4,
-            1 => Self::_3G65,
-            2 => Self::_5G,
-            3 => Self::_6G,
-            4 => Self::_60G,
-            5 => Self::_1G,
+            0 => Self::Band2G4,
+            1 => Self::Band3G65,
+            2 => Self::Band5G,
+            3 => Self::Band6G,
+            4 => Self::Band60G,
+            5 => Self::Band1G,
             other => Self::Unknown(other),
         }
     }
@@ -243,12 +242,12 @@ impl WiFiBandEnum {
     #[must_use]
     pub fn to_raw(self) -> u8 {
         match self {
-            Self::_2G4 => 0,
-            Self::_3G65 => 1,
-            Self::_5G => 2,
-            Self::_6G => 3,
-            Self::_60G => 4,
-            Self::_1G => 5,
+            Self::Band2G4 => 0,
+            Self::Band3G65 => 1,
+            Self::Band5G => 2,
+            Self::Band6G => 3,
+            Self::Band60G => 4,
+            Self::Band1G => 5,
             Self::Unknown(v) => v,
         }
     }

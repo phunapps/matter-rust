@@ -6,7 +6,9 @@
 //! whitespace.
 
 use crate::codegen::model::{Choice, Cluster, Datatype, FieldDef, RequiredWhen, Supplemented};
-use crate::codegen::rustgen::types::{base_type, ident, rust_type, screaming, snake, Position};
+use crate::codegen::rustgen::types::{
+    base_type, ident, rust_type, screaming, snake, variant_ident, Position,
+};
 use std::collections::HashSet;
 use std::fmt::Write as _;
 
@@ -497,17 +499,18 @@ fn emit_enum(s: &mut String, d: &Datatype) {
     }
     line!(s, "#[derive(Copy, Clone, Debug, PartialEq, Eq)]");
     // Members like `4V5`/`523` (PowerSource BatCommonDesignationEnum) get an
-    // `_`-prefixed variant name (see `ident`), which is not upper-camel-case.
+    // `_`-prefixed variant name (see `variant_ident`), which is not
+    // upper-camel-case.
     if d.values
         .iter()
-        .any(|v| v.name.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .any(|v| variant_ident(&d.name, &v.name).starts_with('_'))
     {
         line!(s, "#[allow(non_camel_case_types)]");
     }
     line!(s, "pub enum {} {{", d.name);
     for v in &d.values {
         line!(s, "    /// {} = {}.", v.name, v.value);
-        line!(s, "    {},", ident(&v.name));
+        line!(s, "    {},", variant_ident(&d.name, &v.name));
     }
     line!(s, "    /// A value not known to this codegen revision.");
     line!(s, "    {catch_all}({backing}),");
@@ -522,7 +525,12 @@ fn emit_enum(s: &mut String, d: &Datatype) {
     line!(s, "    pub fn from_raw(v: {backing}) -> Self {{");
     line!(s, "        match v {{");
     for v in &d.values {
-        line!(s, "            {} => Self::{},", v.value, ident(&v.name));
+        line!(
+            s,
+            "            {} => Self::{},",
+            v.value,
+            variant_ident(&d.name, &v.name)
+        );
     }
     line!(s, "            other => Self::{catch_all}(other),");
     line!(s, "        }}");
@@ -532,7 +540,12 @@ fn emit_enum(s: &mut String, d: &Datatype) {
     line!(s, "    pub fn to_raw(self) -> {backing} {{");
     line!(s, "        match self {{");
     for v in &d.values {
-        line!(s, "            Self::{} => {},", ident(&v.name), v.value);
+        line!(
+            s,
+            "            Self::{} => {},",
+            variant_ident(&d.name, &v.name),
+            v.value
+        );
     }
     line!(s, "            Self::{catch_all}(v) => v,");
     line!(s, "        }}");

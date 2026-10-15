@@ -1598,6 +1598,13 @@ modules), `network_commissioning::encode_add_or_update_wifi_network`,
 `energy_evse::Feature::V2X`. Type names are the model's own and do not
 change.
 
+Enum members whose model name starts with a digit now get a name instead of
+a `_` prefix: `time_format_localization::HourFormatEnum::{Hr12, Hr24}` and
+`network_commissioning::WiFiBandEnum::{Band2G4, Band3G65, Band5G, Band6G,
+Band60G, Band1G}` (both new in 0.6.0). PowerSource's battery designations
+keep their `_` prefix (`BatCommonDesignationEnum::_4V5`, `_18650`): they are
+product numbers, not quantities.
+
 ## matter-transport 0.7.3 + matter-controller 0.18.1
 
 A subscription waiting for its device to come back no longer depends on the
