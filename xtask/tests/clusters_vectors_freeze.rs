@@ -24,7 +24,7 @@ fn read(rel: &str) -> Value {
 }
 
 /// Every attribute vector this milestone must capture (relative path).
-const ATTR_VECTORS: [&str; 11] = [
+const ATTR_VECTORS: [&str; 15] = [
     "on_off/attr_on_off.json",
     "on_off/attr_on_time.json",
     "on_off/attr_start_up_on_off_present.json",
@@ -36,6 +36,10 @@ const ATTR_VECTORS: [&str; 11] = [
     "descriptor/attr_server_list.json",
     "descriptor/attr_device_type_list.json",
     "color_control/attr_color_capabilities.json",
+    "binding/attr_binding_entry_write.json",
+    "group_key_management/attr_group_key_map_entry_write.json",
+    "ota_software_update_requestor/attr_default_ota_providers_entry_write.json",
+    "access_control/attr_extension_entry_write.json",
 ];
 
 /// Every command vector this milestone must capture (relative path).

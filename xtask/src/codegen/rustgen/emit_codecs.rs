@@ -96,9 +96,10 @@ pub fn emit_codecs(s: &mut String, c: &Cluster) {
     let encode_reachable = command_encode_reachable_structs(c, &dts);
     assert_no_write_guarded_command_structs(c, &dts, &encode_reachable);
     let encoded = encoded_struct_names(c);
+    let write_only = fabric_index_omitted_on_write(c);
     for d in &c.datatypes {
         if d.kind == "struct" {
-            emit_struct_codec(s, d, &dts, &encoded);
+            emit_struct_codec(s, d, &dts, &encoded, &write_only);
         }
     }
     for a in &c.attributes {
@@ -1002,7 +1003,15 @@ fn emit_response_decoder(
     };
     // Response payloads are decode-only (the gate is `!decl`), so the reachable
     // set is never consulted here — pass an empty one.
-    emit_struct_decl_and_codec(s, &st, /*decl=*/ true, dts, &HashSet::new(), note);
+    emit_struct_decl_and_codec(
+        s,
+        &st,
+        /*decl=*/ true,
+        dts,
+        &HashSet::new(),
+        &HashSet::new(),
+        note,
+    );
 }
 
 fn emit_event_decoder(s: &mut String, ev: &EventDef, dts: &DatatypeMap<'_>) {
@@ -1026,7 +1035,15 @@ fn emit_event_decoder(s: &mut String, ev: &EventDef, dts: &DatatypeMap<'_>) {
         kept_for: None,
         copied_from: None,
     };
-    emit_struct_decl_and_codec(s, &st, /*decl=*/ true, dts, &HashSet::new(), None);
+    emit_struct_decl_and_codec(
+        s,
+        &st,
+        /*decl=*/ true,
+        dts,
+        &HashSet::new(),
+        &HashSet::new(),
+        None,
+    );
 }
 
 fn clone_field(f: &FieldDef) -> FieldDef {
@@ -1126,10 +1143,33 @@ pub fn encoded_struct_names(c: &Cluster) -> HashSet<&str> {
         .collect()
 }
 
-fn emit_struct_codec(s: &mut String, d: &Datatype, dts: &DatatypeMap<'_>, encoded: &HashSet<&str>) {
+/// Names of the fabric-scoped structs of `c` (a `FabricIndex` field, id 254)
+/// that get an encoder only because a writable attribute carries them: their
+/// `write_fields` leaves `FabricIndex` out, as chip's `EncodeForWrite` does,
+/// because a server sets it to the accessing fabric on a write
+/// (`AttributeValueDecoder::Decode`). No request command reaches them, so
+/// their encoder serves attribute writes only.
+#[must_use]
+pub fn fabric_index_omitted_on_write(c: &Cluster) -> HashSet<&str> {
+    let dts: DatatypeMap<'_> = c.datatypes.iter().map(|d| (d.name.as_str(), d)).collect();
+    let command_reachable = command_encode_reachable_structs(c, &dts);
+    encoded_struct_names(c)
+        .into_iter()
+        .filter(|name| !command_reachable.contains(name))
+        .filter(|name| dts[name].fields.iter().any(|f| f.id == 254))
+        .collect()
+}
+
+fn emit_struct_codec(
+    s: &mut String,
+    d: &Datatype,
+    dts: &DatatypeMap<'_>,
+    encoded: &HashSet<&str>,
+    write_only: &HashSet<&str>,
+) {
     // Struct *decl* was already emitted by emit.rs::emit_struct; emit only the
     // codec here.
-    emit_struct_decl_and_codec(s, d, /*decl=*/ false, dts, encoded, None);
+    emit_struct_decl_and_codec(s, d, /*decl=*/ false, dts, encoded, write_only, None);
 }
 
 /// Emit the codec for a struct `d`: `decode_from`(positioned reader) +
@@ -1144,6 +1184,7 @@ fn emit_struct_decl_and_codec(
     decl: bool,
     dts: &DatatypeMap<'_>,
     encoded: &HashSet<&str>,
+    write_only: &HashSet<&str>,
     note: Option<&str>,
 ) {
     if decl {
@@ -1283,22 +1324,50 @@ fn emit_struct_decl_and_codec(
     // they may carry composite fields (e.g. list[struct]) that we never
     // re-encode.
     if !decl && encoded.contains(d.name.as_str()) {
+        let omit_fabric_index = write_only.contains(d.name.as_str());
         if struct_has_write_guarded_fields(d) {
-            emit_guarded_struct_write(s, d, dts);
+            emit_guarded_struct_write(s, d, dts, omit_fabric_index);
         } else {
-            emit_infallible_write(s, d, dts);
+            emit_infallible_write(s, d, dts, omit_fabric_index);
         }
     }
 
     line!(s, "}}\n");
 }
 
+/// The rustdoc paragraph on the `write_fields` of a struct whose encoder
+/// leaves `FabricIndex` out ([`fabric_index_omitted_on_write`]).
+const OMITTED_FABRIC_INDEX_DOC: [&str; 3] = [
+    "    /// `fabric_index` is not written: as in chip's write encoding, the server",
+    "    /// sets it to the fabric of the session that writes the attribute, so any",
+    "    /// value works in an entry built to write.",
+];
+
+/// The fields `write_fields` writes: all of `d`'s, less `FabricIndex` (id
+/// 254) when `omit_fabric_index`.
+fn written_fields(d: &Datatype, omit_fabric_index: bool) -> impl Iterator<Item = &FieldDef> {
+    d.fields
+        .iter()
+        .filter(move |f| !(omit_fabric_index && f.id == 254))
+}
+
 /// `write_fields` + `encode` for an ordinary datatype struct: both infallible.
-fn emit_infallible_write(s: &mut String, d: &Datatype, dts: &DatatypeMap<'_>) {
+fn emit_infallible_write(
+    s: &mut String,
+    d: &Datatype,
+    dts: &DatatypeMap<'_>,
+    omit_fabric_index: bool,
+) {
     line!(
         s,
         "    /// Write this struct's fields into an already-open container."
     );
+    if omit_fabric_index {
+        line!(s, "    ///");
+        for doc in OMITTED_FABRIC_INDEX_DOC {
+            line!(s, "{doc}");
+        }
+    }
     line!(
         s,
         "    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible."
@@ -1307,7 +1376,7 @@ fn emit_infallible_write(s: &mut String, d: &Datatype, dts: &DatatypeMap<'_>) {
         s,
         "    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {{"
     );
-    for f in &d.fields {
+    for f in written_fields(d, omit_fabric_index) {
         emit_field_write_self(s, f, dts);
     }
     line!(s, "    }}");
@@ -1339,12 +1408,23 @@ fn emit_infallible_write(s: &mut String, d: &Datatype, dts: &DatatypeMap<'_>) {
 /// `ClusterError::MissingField` when a `mandatory_on_write` field is `None`. Every sensitive field is checked **before** anything is written,
 /// so a refused `write_fields` leaves the caller's writer untouched. The
 /// field writes themselves are the ordinary ones.
-fn emit_guarded_struct_write(s: &mut String, d: &Datatype, dts: &DatatypeMap<'_>) {
+fn emit_guarded_struct_write(
+    s: &mut String,
+    d: &Datatype,
+    dts: &DatatypeMap<'_>,
+    omit_fabric_index: bool,
+) {
     let guarded: Vec<&FieldDef> = d.fields.iter().filter(|f| f.mandatory_on_write).collect();
     line!(
         s,
         "    /// Write this struct's fields into an already-open container."
     );
+    if omit_fabric_index {
+        line!(s, "    ///");
+        for doc in OMITTED_FABRIC_INDEX_DOC {
+            line!(s, "{doc}");
+        }
+    }
     line!(s, "    ///");
     line!(
         s,
@@ -1384,7 +1464,7 @@ fn emit_guarded_struct_write(s: &mut String, d: &Datatype, dts: &DatatypeMap<'_>
             f.name
         );
     }
-    for f in &d.fields {
+    for f in written_fields(d, omit_fabric_index) {
         emit_field_write_self(s, f, dts);
     }
     line!(s, "        Ok(())");
@@ -1797,7 +1877,7 @@ mod tests {
         );
         let dts: DatatypeMap<'_> = HashMap::new();
         let mut s = String::new();
-        emit_struct_codec(&mut s, &d, &dts, &encoded(&d));
+        emit_struct_codec(&mut s, &d, &dts, &encoded(&d), &HashSet::new());
         assert!(s.contains("for el in self.tokens.iter() {"), "{s}");
         assert!(s.contains("w.put_bytes(Tag::Anonymous, el)"), "{s}");
         assert!(!s.contains(".copied()"), "{s}");
@@ -1825,7 +1905,7 @@ mod tests {
             ],
         );
         let mut s = String::new();
-        emit_struct_codec(&mut s, &d, &HashMap::new(), &encoded(&d));
+        emit_struct_codec(&mut s, &d, &HashMap::new(), &encoded(&d), &HashSet::new());
         for want in [
             "        w.start_structure(Tag::Context(0)).expect(\"infallible: vec writer\");\n        self.inner.write_fields(w);\n",
             "        if let Some(size) = &self.size {\n        w.start_structure(Tag::Context(1)).expect(\"infallible: vec writer\");\n        size.write_fields(w);\n",
@@ -1887,7 +1967,7 @@ mod tests {
             .collect();
         let d = struct_dt("PrefsStruct", vec![ids, tracks, chars, nums]);
         let mut s = String::new();
-        emit_struct_codec(&mut s, &d, &dts, &encoded(&d));
+        emit_struct_codec(&mut s, &d, &dts, &encoded(&d), &HashSet::new());
         for want in [
             "        if let Some(external_id_list) = &self.external_id_list {\n        w.start_array(Tag::Context(2))",
             "        for el in external_id_list {\n",
@@ -1918,7 +1998,7 @@ mod tests {
             ],
         );
         let mut s = String::new();
-        emit_struct_codec(&mut s, &d, &dts, &encoded(&d));
+        emit_struct_codec(&mut s, &d, &dts, &encoded(&d), &HashSet::new());
         assert!(s.contains("        for el in &self.points {\n"), "{s}");
         assert!(
             s.contains("        for el in self.ids.iter().copied() {\n"),
@@ -2012,6 +2092,38 @@ mod tests {
     }
 
     #[test]
+    fn a_write_only_fabric_scoped_struct_leaves_fabric_index_out() {
+        // Binding `TargetStruct`: a writable list attribute carries it, no
+        // request does, and it is fabric-scoped (field 254).
+        let mut node = field(1, "Node", "uint64", "integer", None);
+        node.optional = true;
+        let d = struct_dt(
+            "TargetStruct",
+            vec![
+                node,
+                field(254, "FabricIndex", "fabric-idx", "integer", None),
+            ],
+        );
+        let write_only: HashSet<&str> = std::iter::once("TargetStruct").collect();
+        let mut s = String::new();
+        emit_struct_codec(&mut s, &d, &HashMap::new(), &encoded(&d), &write_only);
+        assert!(
+            !s.contains("Tag::Context(254), u64::from(self.fabric_index)"),
+            "{s}"
+        );
+        assert!(s.contains("Tag::Context(1)"), "{s}");
+        assert!(s.contains(OMITTED_FABRIC_INDEX_DOC[0]), "{s}");
+        // A request-reachable one (not in `write_only`) still writes it.
+        let mut s = String::new();
+        emit_struct_codec(&mut s, &d, &HashMap::new(), &encoded(&d), &HashSet::new());
+        assert!(
+            s.contains("w.put_uint(Tag::Context(254), u64::from(self.fabric_index))"),
+            "{s}"
+        );
+        assert!(!s.contains(OMITTED_FABRIC_INDEX_DOC[0]), "{s}");
+    }
+
+    #[test]
     fn optional_list_scalar_command_field_guards_with_if_let() {
         let mut f = field(1, "AttributeRequests", "list", "array", Some("attrib-id"));
         f.optional = true;
@@ -2033,7 +2145,7 @@ mod tests {
         );
         let mut s = String::new();
         let dts: DatatypeMap<'_> = HashMap::new();
-        emit_struct_codec(&mut s, &d, &dts, &encoded(&d));
+        emit_struct_codec(&mut s, &d, &dts, &encoded(&d), &HashSet::new());
         assert!(s.contains("r#type: f_type"), "construction escaped:\n{s}");
         assert!(
             !s.contains("            type: f_type"),
@@ -2301,7 +2413,7 @@ mod tests {
         let d = struct_dt("FloatStruct", vec![f]);
         assert!(struct_is_write_capable(&d));
         let mut s = String::new();
-        emit_struct_codec(&mut s, &d, &HashMap::new(), &encoded(&d));
+        emit_struct_codec(&mut s, &d, &HashMap::new(), &encoded(&d), &HashSet::new());
         assert!(s.contains("w.put_float(Tag::Context(1), *value)"), "{s}");
         assert!(
             s.contains("value: Value::Float(v) }) => f_value = Some(Nullable::Value(v))"),
@@ -2397,7 +2509,7 @@ mod tests {
     fn write_guarded_struct_refuses_none_before_writing_anything() {
         let mut s = String::new();
         let d = sensitive_dt();
-        emit_struct_codec(&mut s, &d, &HashMap::new(), &encoded(&d));
+        emit_struct_codec(&mut s, &d, &HashMap::new(), &encoded(&d), &HashSet::new());
         assert!(
             s.contains(
                 "pub fn write_fields(&self, w: &mut TlvWriter<'_>) -> Result<(), ClusterError> {"
@@ -2442,7 +2554,7 @@ mod tests {
         );
         assert!(!struct_has_write_guarded_fields(&d));
         let mut s = String::new();
-        emit_struct_codec(&mut s, &d, &HashMap::new(), &encoded(&d));
+        emit_struct_codec(&mut s, &d, &HashMap::new(), &encoded(&d), &HashSet::new());
         assert!(
             s.contains("pub fn write_fields(&self, w: &mut TlvWriter<'_>) {"),
             "{s}"
@@ -2468,7 +2580,7 @@ mod tests {
             ],
         );
         let mut s = String::new();
-        emit_struct_codec(&mut s, &d, &HashMap::new(), &encoded(&d));
+        emit_struct_codec(&mut s, &d, &HashMap::new(), &encoded(&d), &HashSet::new());
         assert!(
             s.contains("pub fn write_fields(&self, w: &mut TlvWriter<'_>) {"),
             "{s}"
@@ -2545,7 +2657,15 @@ mod tests {
         let dts: DatatypeMap<'_> = std::iter::once(("HasList", &d)).collect();
         let reachable: HashSet<&str> = std::iter::once("HasList").collect();
         let mut s = String::new();
-        emit_struct_decl_and_codec(&mut s, &d, /*decl=*/ false, &dts, &reachable, None);
+        emit_struct_decl_and_codec(
+            &mut s,
+            &d,
+            /*decl=*/ false,
+            &dts,
+            &reachable,
+            &HashSet::new(),
+            None,
+        );
         assert!(
             s.contains("pub fn write_fields"),
             "reachable list struct writes: {s}"

@@ -1004,8 +1004,12 @@ fn extension_other_fabric_entry_decodes_and_refuses_reencode() {
         ext[1].encode(),
         Err(matter_clusters::error::ClusterError::MissingField("Data"))
     ));
-    // Our own entry still encodes, byte-identical to what was read.
-    assert_eq!(ext[0].encode().unwrap(), struct_of(&own));
+    // Our own entry still encodes, in its write form: what was read, less the
+    // FabricIndex, which the server sets to the writing fabric.
+    assert_eq!(
+        ext[0].encode().unwrap(),
+        struct_of(&|w| w.put_bytes(Tag::Context(1), &[0x17, 0x18]).unwrap())
+    );
 }
 
 #[test]

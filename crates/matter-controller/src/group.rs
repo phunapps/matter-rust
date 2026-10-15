@@ -162,7 +162,7 @@ pub(crate) fn parse_group_status(fields: &Value) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use matter_codec::{TlvReader, TlvWriter};
+    use matter_codec::TlvWriter;
 
     use super::*;
 
@@ -207,23 +207,25 @@ mod tests {
 
     #[test]
     fn group_key_map_entry_matches_generated_encoder() {
-        // `GroupKeyMapStruct` is `#[non_exhaustive]` — can't construct externally.
-        // Verify our builder produces a valid structure with the correct t1/t2 members
-        // by round-tripping through TLV and confirming `group_id` and `key_set_id`.
+        // The generated `GroupKeyMapStruct` encoder writes the entry as a
+        // write sends it, without `fabric_index` (t254): the device assigns
+        // the accessing fabric. Our builder must produce the same bytes.
+        use matter_clusters::clusters::group_key_management::GroupKeyMapStruct;
         let ours = enc(&group_key_map_entry_value(GroupKeyMapEntry::new(7, 42)));
-        // Parse back and check the two shared fields (t1 = group_id, t2 = group_key_set_id).
-        #[allow(clippy::unwrap_used)] // test: known-good bytes
-        let (_tag, val) = TlvReader::new(&ours).read_value().unwrap();
-        let Value::Structure(members) = val else {
-            panic!("expected structure")
-        };
-        let group_id = members.iter().find(|(t, _)| *t == Tag::Context(1));
-        let key_set_id = members.iter().find(|(t, _)| *t == Tag::Context(2));
-        assert_eq!(group_id, Some(&(Tag::Context(1), Value::Uint(7))));
-        assert_eq!(key_set_id, Some(&(Tag::Context(2), Value::Uint(42))));
-        // `fabric_index` (t254) must NOT be present on write.
-        let fabric_index = members.iter().find(|(t, _)| *t == Tag::Context(254));
-        assert!(fabric_index.is_none(), "write must not emit fabric_index");
+        let theirs = GroupKeyMapStruct {
+            group_id: 7,
+            group_key_set_id: 42,
+            fabric_index: 0, // not written
+        }
+        .encode();
+        assert_eq!(
+            ours, theirs,
+            "GroupKeyMap entry must byte-match the generated encoder"
+        );
+        assert!(
+            !ours.windows(2).any(|w| w == [0x24, 0xFE]),
+            "write must not emit fabric_index"
+        );
     }
 
     #[test]

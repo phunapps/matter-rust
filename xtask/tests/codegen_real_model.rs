@@ -271,3 +271,35 @@ fn the_whole_word_list_changes_exactly_these_names() {
         .collect();
     assert_eq!(changed, WHOLE_WORD_NAMES);
 }
+
+/// The fabric-scoped structs whose encoder leaves `FabricIndex` out (they get
+/// an encoder only because a writable attribute carries them; no request
+/// reaches them), as `(cluster, struct)`.
+const FABRIC_INDEX_OMITTED_ON_WRITE: [(&str, &str); 4] = [
+    ("AccessControl", "AccessControlExtensionStruct"),
+    ("Binding", "TargetStruct"),
+    ("GroupKeyManagement", "GroupKeyMapStruct"),
+    ("OtaSoftwareUpdateRequestor", "ProviderLocation"),
+];
+
+#[test]
+fn exactly_these_structs_leave_fabric_index_out_of_a_write() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let model = xtask::codegen::model::load(&root.join("xtask/model/clusters.json"))
+        .expect("real model loads + validates");
+    let mut got = Vec::new();
+    for c in &model.clusters {
+        for name in xtask::codegen::rustgen::emit_codecs::fabric_index_omitted_on_write(c) {
+            got.push((c.name.clone(), name.to_string()));
+        }
+    }
+    got.sort();
+    let want: Vec<(String, String)> = FABRIC_INDEX_OMITTED_ON_WRITE
+        .iter()
+        .map(|(c, s)| ((*c).to_string(), (*s).to_string()))
+        .collect();
+    assert_eq!(got, want);
+}

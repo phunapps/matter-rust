@@ -694,6 +694,10 @@ impl ScopedEntryStruct {
     }
     /// Write this struct's fields into an already-open container.
     ///
+    /// `fabric_index` is not written: as in chip's write encoding, the server
+    /// sets it to the fabric of the session that writes the attribute, so any
+    /// value works in an entry built to write.
+    ///
     /// A device withholds this struct's fabric-sensitive fields for entries of
     /// other fabrics, so a read result can hold entries with them `None`. Filter
     /// a read result to your own `fabric_index` before writing it back.
@@ -730,8 +734,6 @@ impl ScopedEntryStruct {
             w.put_utf8(Tag::Context(4), &*alias)
                 .expect("infallible: vec writer");
         }
-        w.put_uint(Tag::Context(254), u64::from(self.fabric_index))
-            .expect("infallible: vec writer");
         Ok(())
     }
     /// Encode as a standalone anonymous TLV structure.

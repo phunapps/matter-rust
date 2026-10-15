@@ -658,3 +658,59 @@ fn set_block_content_time_window_matches_matter_js() {
         cmd("content_control/cmd_set_block_content_time_window_index.json")
     );
 }
+
+// ---- fabric-scoped list entries: the write form leaves FabricIndex out ----
+//
+// matter.js `forWriteInteraction` encodings of an entry without `fabricIndex`,
+// which is what chip's EncodeForWrite always sends. `fabric_index` is set to a
+// value the server would overwrite, to show it is not written.
+
+#[test]
+fn binding_target_write_form_matches_matter_js() {
+    let t = clusters::binding::TargetStruct {
+        node: Some(0x1122),
+        group: None,
+        endpoint: Some(1),
+        cluster: Some(0x0006),
+        fabric_index: 9,
+    };
+    assert_eq!(t.encode(), attr("binding/attr_binding_entry_write.json"));
+}
+
+#[test]
+fn group_key_map_write_form_matches_matter_js() {
+    let m = clusters::group_key_management::GroupKeyMapStruct {
+        group_id: 0x0101,
+        group_key_set_id: 0x01a1,
+        fabric_index: 9,
+    };
+    assert_eq!(
+        m.encode(),
+        attr("group_key_management/attr_group_key_map_entry_write.json")
+    );
+}
+
+#[test]
+fn provider_location_write_form_matches_matter_js() {
+    let p = clusters::ota_software_update_requestor::ProviderLocation {
+        provider_node_id: 0x0102_0304,
+        endpoint: 0,
+        fabric_index: 9,
+    };
+    assert_eq!(
+        p.encode(),
+        attr("ota_software_update_requestor/attr_default_ota_providers_entry_write.json")
+    );
+}
+
+#[test]
+fn access_control_extension_write_form_matches_matter_js() {
+    let e = clusters::access_control::AccessControlExtensionStruct {
+        data: Some(vec![0x15, 0x18]),
+        fabric_index: 9,
+    };
+    assert_eq!(
+        e.encode().unwrap(),
+        attr("access_control/attr_extension_entry_write.json")
+    );
+}

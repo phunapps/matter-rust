@@ -16,6 +16,24 @@ use crate::golden::{ModeEnum, ScopedEntryStruct};
 use crate::types::Nullable;
 use matter_codec::TlvWriter;
 
+/// What a server stores for an entry it was sent: the written bytes plus the
+/// accessing fabric's `FabricIndex` (tag 254, a one-byte unsigned integer)
+/// before the structure's end. The write form leaves it out, as chip does.
+fn with_fabric_index(written: &[u8], fabric_index: u8) -> Vec<u8> {
+    let (end, body) = written.split_last().unwrap();
+    assert_eq!(
+        *end, 0x18,
+        "an anonymous structure ends with end-of-container"
+    );
+    assert!(
+        !written.windows(2).any(|w| w == [0x24, 0xFE]),
+        "the write form carries no FabricIndex: {written:02x?}"
+    );
+    let mut stored = body.to_vec();
+    stored.extend_from_slice(&[0x24, 0xFE, fabric_index, 0x18]);
+    stored
+}
+
 /// An entry as our own fabric reads it: every sensitive field present.
 fn own_entry() -> ScopedEntryStruct {
     ScopedEntryStruct {
@@ -30,7 +48,10 @@ fn own_entry() -> ScopedEntryStruct {
 #[test]
 fn sensitive_struct_with_every_sensitive_field_encodes_and_roundtrips() {
     let bytes = own_entry().encode().unwrap();
-    assert_eq!(ScopedEntryStruct::decode(&bytes).unwrap(), own_entry());
+    assert_eq!(
+        ScopedEntryStruct::decode(&with_fabric_index(&bytes, 2)).unwrap(),
+        own_entry()
+    );
 }
 
 #[test]
@@ -84,7 +105,10 @@ fn model_optional_sensitive_field_may_be_absent_on_write() {
         ..own_entry()
     };
     let bytes = with_alias.encode().unwrap();
-    assert_eq!(ScopedEntryStruct::decode(&bytes).unwrap(), with_alias);
+    assert_eq!(
+        ScopedEntryStruct::decode(&with_fabric_index(&bytes, 2)).unwrap(),
+        with_alias
+    );
 }
 
 #[test]

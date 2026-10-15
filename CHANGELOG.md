@@ -1644,6 +1644,21 @@ Additive. `AccessControlExtensionStruct`'s encoder still refuses a `None`
 `data` (`ClusterError::MissingField`), so a withheld entry is never written
 back. Structs without a generated encoder stay `#[non_exhaustive]`.
 
+### matter-clusters: Fixed — fabric-scoped list entries are encoded for a write without `FabricIndex`
+
+`binding::TargetStruct`, `group_key_management::GroupKeyMapStruct`,
+`ota_software_update_requestor::ProviderLocation` and
+`access_control::AccessControlExtensionStruct` have an encoder only so their
+writable list attributes (Binding, GroupKeyMap, DefaultOTAProviders, the ACL
+Extension) can be written. Their `encode`/`write_fields` now leave
+`FabricIndex` (tag 254) out, as chip's `EncodeForWrite` does: a server sets
+it to the fabric of the session that writes the list, whatever the client
+sends. Before, the encoder wrote the struct's `fabric_index`. This is a wire
+change for these writes only; the bytes match matter.js 0.16.11's write
+encoding (four new vectors). Decoding is unchanged: a read still carries
+`FabricIndex`, and the field stays in the struct (any value works in an entry
+built to write). No request command carries these structs.
+
 ## matter-transport 0.7.3 + matter-controller 0.18.1
 
 A subscription waiting for its device to come back no longer depends on the

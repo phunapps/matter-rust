@@ -63,6 +63,16 @@ import { Channel } from '@matter/types/clusters/channel';
 // DayOfWeek, a list of TimePeriodStruct) at field 0.
 import { ContentControl } from '@matter/types/clusters/content-control';
 
+// The four fabric-scoped structs a writable list attribute carries, encoded
+// as a write sends them: matter.js's `forWriteInteraction` encoding of an
+// entry without `fabricIndex` (tag 254), which is what chip's EncodeForWrite
+// always sends (the server sets the accessing fabric).
+import { Binding } from '@matter/types/clusters/binding';
+import { GroupKeyManagement } from '@matter/types/clusters/group-key-management';
+import { OtaSoftwareUpdateRequestor } from '@matter/types/clusters/ota-software-update-requestor';
+import { AccessControl } from '@matter/types/clusters/access-control';
+import { TlvAny } from '@matter/types';
+
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -739,5 +749,38 @@ cmd('content_control', 'cmd_set_block_content_time_window_index.json',
       timePeriod: [{ startHour: 6, startMinute: 15, endHour: 7, endMinute: 45 }],
     },
   }));
+
+// ---------------------------------------------------------------------------
+// Fabric-scoped list entries in their write form (no FabricIndex)
+// ---------------------------------------------------------------------------
+
+// `encodeTlv(.., { forWriteInteraction: true })` is how matter.js's Write
+// action encodes attribute data (@matter/protocol action/request/Write.js);
+// TlvAny turns the element stream into bytes as the IM layer does.
+const writeForm = (schema, value) => TlvAny.encode(schema.encodeTlv(value, { forWriteInteraction: true }));
+
+attr('binding', 'attr_binding_entry_write.json',
+  { cluster: 'Binding', cluster_id: 0x1E, attribute: 'Binding', attribute_id: 0x0000,
+    type: 'TargetStruct (list entry, write form)', writable: true,
+    note: 'TargetStruct { Node 0x1122, Endpoint 1, Cluster 0x0006 } with no FabricIndex, as a write sends it (matter.js Binding.TlvTarget, forWriteInteraction)' },
+  writeForm(Binding.TlvTarget, { node: 0x1122n, endpoint: 1, cluster: 6 }));
+
+attr('group_key_management', 'attr_group_key_map_entry_write.json',
+  { cluster: 'GroupKeyManagement', cluster_id: 0x3F, attribute: 'GroupKeyMap', attribute_id: 0x0000,
+    type: 'GroupKeyMapStruct (list entry, write form)', writable: true,
+    note: 'GroupKeyMapStruct { GroupId 0x0101, GroupKeySetId 0x01A1 } with no FabricIndex (matter.js GroupKeyManagement.TlvGroupKeyMap, forWriteInteraction)' },
+  writeForm(GroupKeyManagement.TlvGroupKeyMap, { groupId: 0x0101, groupKeySetId: 0x01a1 }));
+
+attr('ota_software_update_requestor', 'attr_default_ota_providers_entry_write.json',
+  { cluster: 'OtaSoftwareUpdateRequestor', cluster_id: 0x2A, attribute: 'DefaultOtaProviders', attribute_id: 0x0000,
+    type: 'ProviderLocation (list entry, write form)', writable: true,
+    note: 'ProviderLocation { ProviderNodeId 0x01020304, Endpoint 0 } with no FabricIndex (matter.js OtaSoftwareUpdateRequestor.TlvProviderLocation, forWriteInteraction)' },
+  writeForm(OtaSoftwareUpdateRequestor.TlvProviderLocation, { providerNodeId: 0x01020304n, endpoint: 0 }));
+
+attr('access_control', 'attr_extension_entry_write.json',
+  { cluster: 'AccessControl', cluster_id: 0x1F, attribute: 'Extension', attribute_id: 0x0001,
+    type: 'AccessControlExtensionStruct (list entry, write form)', writable: true,
+    note: 'AccessControlExtensionStruct { Data 15 18 } with no FabricIndex (matter.js AccessControl.TlvAccessControlExtension, forWriteInteraction)' },
+  writeForm(AccessControl.TlvAccessControlExtension, { data: Uint8Array.of(0x15, 0x18) }));
 
 console.log('capture-clusters: all vectors written.');
