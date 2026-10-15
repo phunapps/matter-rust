@@ -137,6 +137,9 @@ pub struct ProviderLocation {
     /// Field Endpoint (tag 2).
     pub endpoint: u16,
     /// Field FabricIndex (tag 254).
+    /// Not written by `encode` or `write_fields`: the server sets it to the
+    /// accessing fabric (a read returns it), so decoding `encode`'s own output
+    /// fails with `ClusterError::MissingField("FabricIndex")`.
     pub fabric_index: u8,
 }
 
@@ -282,6 +285,10 @@ impl ProviderLocation {
             .expect("infallible: vec writer");
     }
     /// Encode as a standalone anonymous TLV structure.
+    ///
+    /// `fabric_index` is not written (see [`Self::write_fields`]): the server adds
+    /// the accessing fabric's index, so decoding this output fails with
+    /// `ClusterError::MissingField("FabricIndex")`.
     #[must_use]
     #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
     pub fn encode(&self) -> Vec<u8> {

@@ -30,6 +30,15 @@ pub const PROVISIONAL_DOC: &str =
 pub const WRITABLE_ATTRIBUTE_ENCODER_DOC: &str = "Encodable because a writable attribute carries \
      it: build one and write it with `encode` (or `write_fields`, inside the list that carries it).";
 
+/// The rustdoc lines on the `fabric_index` field of a struct whose encoder
+/// leaves `FabricIndex` out
+/// ([`fabric_index_omitted_on_write`](super::emit_codecs::fabric_index_omitted_on_write)).
+pub const OMITTED_FABRIC_INDEX_FIELD_DOC: [&str; 3] = [
+    "    /// Not written by `encode` or `write_fields`: the server sets it to the",
+    "    /// accessing fabric (a read returns it), so decoding `encode`'s own output",
+    "    /// fails with `ClusterError::MissingField(\"FabricIndex\")`.",
+];
+
 /// The rustdoc line on a field that carries a secret (`FieldDef::secret`,
 /// M9-A3 B6): its struct's `Debug` output shows a placeholder instead.
 pub const SECRET_DOC: &str =
@@ -623,6 +632,8 @@ fn emit_struct(
     }
     line!(s, "pub struct {} {{", d.name);
     let fabric_scoped = super::emit_codecs::struct_is_fabric_scoped(d);
+    let omits_fabric_index =
+        super::emit_codecs::struct_omits_fabric_index_on_write(d, encode_reachable, encoded);
     for f in &d.fields {
         let ty = rust_type(
             &f.ty,
@@ -632,6 +643,11 @@ fn emit_struct(
             Position::Field,
         );
         line!(s, "    /// Field {} (tag {}).", f.name, f.id);
+        if omits_fabric_index && f.id == 254 {
+            for doc in OMITTED_FABRIC_INDEX_FIELD_DOC {
+                line!(s, "{doc}");
+            }
+        }
         if f.provisional {
             line!(s, "    /// {PROVISIONAL_DOC}");
         }
@@ -966,6 +982,45 @@ mod tests {
         );
         assert!(!normal.contains(WRITABLE_ATTRIBUTE_ENCODER_DOC), "{normal}");
     }
+    #[test]
+    fn a_write_only_fabric_scoped_struct_says_its_fabric_index_is_not_written() {
+        use std::collections::HashSet;
+        let fabric_index = FieldDef {
+            id: 254,
+            optional: false,
+            ..note_field("FabricIndex", false, None)
+        };
+        let d = Datatype {
+            name: "TargetStruct".to_string(),
+            base: "struct".to_string(),
+            kind: "struct".to_string(),
+            values: vec![],
+            bits: vec![],
+            fields: vec![note_field("Node", false, None), fabric_index],
+            global_name: None,
+            kept_for: None,
+            copied_from: None,
+        };
+        let this: HashSet<&str> = std::iter::once("TargetStruct").collect();
+        let want = format!(
+            "    /// Field FabricIndex (tag 254).\n{}\n",
+            OMITTED_FABRIC_INDEX_FIELD_DOC.join("\n")
+        );
+        // Encoded only because a writable attribute carries it: the field
+        // says the encoder leaves it out.
+        let mut writable = String::new();
+        emit_struct(&mut writable, &d, &HashSet::new(), &this);
+        assert!(writable.contains(&want), "{writable}");
+        // A request reaches it (its encoder writes the index), or it has no
+        // encoder: no such line.
+        for (reachable, encoded) in [(&this, &this), (&HashSet::new(), &HashSet::new())] {
+            let mut s = String::new();
+            emit_struct(&mut s, &d, reachable, encoded);
+            assert!(s.contains("    /// Field FabricIndex (tag 254).\n"), "{s}");
+            assert!(!s.contains(OMITTED_FABRIC_INDEX_FIELD_DOC[0]), "{s}");
+        }
+    }
+
     // ---- M9-A3 B4: provisional, choice-group and global-origin rustdoc ----
 
     fn note_field(

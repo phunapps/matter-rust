@@ -227,14 +227,19 @@ These are language-idiomatic differences. They do not affect interop.
   `AccessControlExtensionStruct` and `AccessControlTargetStruct`) are
   constructible, as in matter.js, which builds any of them from a plain
   object.
-- **A fabric-scoped list entry is never written with `FabricIndex`**
-  (`matter-clusters` 0.6.0). Binding `TargetStruct`, GroupKeyManagement
-  `GroupKeyMapStruct`, OtaSoftwareUpdateRequestor `ProviderLocation` and
+- **The generated encoders of four fabric-scoped list entries leave
+  `FabricIndex` out** (`matter-clusters` 0.6.0). Binding `TargetStruct`,
+  GroupKeyManagement `GroupKeyMapStruct`, OtaSoftwareUpdateRequestor
+  `ProviderLocation` and
   AccessControl `AccessControlExtensionStruct` leave tag 254 out of their
   encoding, as chip's `EncodeForWrite` does. matter.js's
   `forWriteInteraction` encoding leaves it out only when the caller does not
   set `fabricIndex`; the bytes agree for such an entry (the byte-parity
-  vectors), and either way the server overwrites the index.
+  vectors), and either way the server overwrites the index. Other encoders
+  still write it when given one: GroupKeyManagement `GroupKeySetStruct`'s (a
+  `KeySetWrite` request field, optional `fabric_index`) and
+  `matter-controller`'s hand-written ACL entry encoder (an `AclEntry` whose
+  `fabric_index` is `Some`).
 - **ScenesManagement has no `LogicalSceneTable` type** (M9-A3 B4). The
   specification describes the Logical Scene Table as data a device keeps,
   not a wire type; matter.js 0.16.11 generates `TlvLogicalSceneTable`,

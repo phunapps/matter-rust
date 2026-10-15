@@ -151,3 +151,43 @@ fn a_built_extension_without_its_fabric_sensitive_data_is_refused() {
         Err(ClusterError::MissingField("Data"))
     ));
 }
+
+#[test]
+fn decoding_the_write_form_itself_fails_for_want_of_fabric_index() {
+    // As each one's `encode` rustdoc says: the index is the server's to add.
+    let missing =
+        |r: Result<_, ClusterError>| matches!(r, Err(ClusterError::MissingField("FabricIndex")));
+    let t = binding::TargetStruct {
+        node: Some(0x1122),
+        group: None,
+        endpoint: Some(1),
+        cluster: Some(0x0006),
+        fabric_index: 1,
+    };
+    assert!(missing(
+        binding::TargetStruct::decode(&t.encode()).map(drop)
+    ));
+    let m = group_key_management::GroupKeyMapStruct {
+        group_id: 0x0101,
+        group_key_set_id: 0x01a1,
+        fabric_index: 1,
+    };
+    assert!(missing(
+        group_key_management::GroupKeyMapStruct::decode(&m.encode()).map(drop)
+    ));
+    let p = ota_software_update_requestor::ProviderLocation {
+        provider_node_id: 0x0102_0304,
+        endpoint: 0,
+        fabric_index: 2,
+    };
+    assert!(missing(
+        ota_software_update_requestor::ProviderLocation::decode(&p.encode()).map(drop)
+    ));
+    let ext = access_control::AccessControlExtensionStruct {
+        data: Some(vec![0x15, 0x18]),
+        fabric_index: 1,
+    };
+    assert!(missing(
+        access_control::AccessControlExtensionStruct::decode(&ext.encode().unwrap()).map(drop)
+    ));
+}

@@ -180,6 +180,9 @@ pub struct AccessControlExtensionStruct {
     /// belongs to another fabric (unfiltered read).
     pub data: Option<Vec<u8>>,
     /// Field FabricIndex (tag 254).
+    /// Not written by `encode` or `write_fields`: the server sets it to the
+    /// accessing fabric (a read returns it), so decoding `encode`'s own output
+    /// fails with `ClusterError::MissingField("FabricIndex")`.
     pub fabric_index: u8,
 }
 
@@ -522,6 +525,10 @@ impl AccessControlExtensionStruct {
         Ok(())
     }
     /// Encode as a standalone anonymous TLV structure.
+    ///
+    /// `fabric_index` is not written (see [`Self::write_fields`]): the server adds
+    /// the accessing fabric's index, so decoding this output fails with
+    /// `ClusterError::MissingField("FabricIndex")`.
     ///
     /// # Errors
     /// [`ClusterError::MissingField`] if a fabric-sensitive field required on

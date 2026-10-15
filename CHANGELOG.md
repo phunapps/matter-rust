@@ -1659,6 +1659,12 @@ encoding (four new vectors). Decoding is unchanged: a read still carries
 `FabricIndex`, and the field stays in the struct (any value works in an entry
 built to write). No request command carries these structs.
 
+Migration: decoding an entry's own `encode()` output now fails with
+`ClusterError::MissingField("FabricIndex")`, because the index is the
+server's to add (a read returns it). Code that re-encoded a decoded entry to
+compare or store it, rather than to write it, must keep the decoded value
+instead.
+
 ## matter-transport 0.7.3 + matter-controller 0.18.1
 
 A subscription waiting for its device to come back no longer depends on the

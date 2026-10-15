@@ -1153,11 +1153,26 @@ pub fn encoded_struct_names(c: &Cluster) -> HashSet<&str> {
 pub fn fabric_index_omitted_on_write(c: &Cluster) -> HashSet<&str> {
     let dts: DatatypeMap<'_> = c.datatypes.iter().map(|d| (d.name.as_str(), d)).collect();
     let command_reachable = command_encode_reachable_structs(c, &dts);
-    encoded_struct_names(c)
-        .into_iter()
-        .filter(|name| !command_reachable.contains(name))
-        .filter(|name| dts[name].fields.iter().any(|f| f.id == 254))
+    let encoded = encoded_struct_names(c);
+    c.datatypes
+        .iter()
+        .filter(|d| struct_omits_fabric_index_on_write(d, &command_reachable, &encoded))
+        .map(|d| d.name.as_str())
         .collect()
+}
+
+/// The rule behind [`fabric_index_omitted_on_write`] for one struct `d`,
+/// given the cluster's request-reachable structs (`command_reachable`) and its
+/// encoded ones (`encoded`, [`encoded_struct_names`]): it is encoded, no
+/// request reaches it, and it is fabric-scoped. `emit.rs` uses it for the
+/// `fabric_index` field's rustdoc, from the same rule the encoder follows.
+pub(crate) fn struct_omits_fabric_index_on_write(
+    d: &Datatype,
+    command_reachable: &HashSet<&str>,
+    encoded: &HashSet<&str>,
+) -> bool {
+    let name = d.name.as_str();
+    encoded.contains(name) && !command_reachable.contains(name) && struct_is_fabric_scoped(d)
 }
 
 fn emit_struct_codec(
@@ -1343,6 +1358,14 @@ const OMITTED_FABRIC_INDEX_DOC: [&str; 3] = [
     "    /// value works in an entry built to write.",
 ];
 
+/// The rustdoc paragraph on the `encode` of a struct whose encoder leaves
+/// `FabricIndex` out ([`fabric_index_omitted_on_write`]).
+const OMITTED_FABRIC_INDEX_ENCODE_DOC: [&str; 3] = [
+    "    /// `fabric_index` is not written (see [`Self::write_fields`]): the server adds",
+    "    /// the accessing fabric's index, so decoding this output fails with",
+    "    /// `ClusterError::MissingField(\"FabricIndex\")`.",
+];
+
 /// The fields `write_fields` writes: all of `d`'s, less `FabricIndex` (id
 /// 254) when `omit_fabric_index`.
 fn written_fields(d: &Datatype, omit_fabric_index: bool) -> impl Iterator<Item = &FieldDef> {
@@ -1382,6 +1405,12 @@ fn emit_infallible_write(
     line!(s, "    }}");
 
     line!(s, "    /// Encode as a standalone anonymous TLV structure.");
+    if omit_fabric_index {
+        line!(s, "    ///");
+        for doc in OMITTED_FABRIC_INDEX_ENCODE_DOC {
+            line!(s, "{doc}");
+        }
+    }
     line!(s, "    #[must_use]");
     line!(
         s,
@@ -1471,6 +1500,12 @@ fn emit_guarded_struct_write(
     line!(s, "    }}");
 
     line!(s, "    /// Encode as a standalone anonymous TLV structure.");
+    if omit_fabric_index {
+        line!(s, "    ///");
+        for doc in OMITTED_FABRIC_INDEX_ENCODE_DOC {
+            line!(s, "{doc}");
+        }
+    }
     line!(s, "    ///");
     line!(s, "    /// # Errors");
     line!(
@@ -2113,6 +2148,14 @@ mod tests {
         );
         assert!(s.contains("Tag::Context(1)"), "{s}");
         assert!(s.contains(OMITTED_FABRIC_INDEX_DOC[0]), "{s}");
+        // `encode` says so too, right after its summary line.
+        assert!(
+            s.contains(&format!(
+                "    /// Encode as a standalone anonymous TLV structure.\n    ///\n{}\n",
+                OMITTED_FABRIC_INDEX_ENCODE_DOC.join("\n")
+            )),
+            "{s}"
+        );
         // A request-reachable one (not in `write_only`) still writes it.
         let mut s = String::new();
         emit_struct_codec(&mut s, &d, &HashMap::new(), &encoded(&d), &HashSet::new());
@@ -2121,6 +2164,35 @@ mod tests {
             "{s}"
         );
         assert!(!s.contains(OMITTED_FABRIC_INDEX_DOC[0]), "{s}");
+        assert!(!s.contains(OMITTED_FABRIC_INDEX_ENCODE_DOC[0]), "{s}");
+        // A write-guarded one (AccessControl `AccessControlExtensionStruct`):
+        // the same paragraphs, ahead of its `# Errors` sections.
+        let mut data = field(1, "Data", "octstr", "bytes", None);
+        data.optional = true;
+        data.fabric_sensitive = true;
+        data.mandatory_on_write = true;
+        let d = struct_dt(
+            "TargetStruct",
+            vec![
+                data,
+                field(254, "FabricIndex", "fabric-idx", "integer", None),
+            ],
+        );
+        let mut s = String::new();
+        emit_struct_codec(&mut s, &d, &HashMap::new(), &encoded(&d), &write_only);
+        assert!(s.contains("-> Result<(), ClusterError>"), "{s}");
+        assert!(
+            !s.contains("Tag::Context(254), u64::from(self.fabric_index)"),
+            "{s}"
+        );
+        assert!(s.contains(OMITTED_FABRIC_INDEX_DOC[0]), "{s}");
+        assert!(
+            s.contains(&format!(
+                "    /// Encode as a standalone anonymous TLV structure.\n    ///\n{}\n    ///\n    /// # Errors\n",
+                OMITTED_FABRIC_INDEX_ENCODE_DOC.join("\n")
+            )),
+            "{s}"
+        );
     }
 
     #[test]
