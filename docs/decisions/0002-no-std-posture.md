@@ -28,7 +28,7 @@ Two facts shape the decision:
 ## Decision
 
 **1.0 ships `std`-only across all crates. `no_std` stays
-deferred-until-requested (as the project's post-v1.0 list already states),
+deferred-until-requested (the README lists it as still deferred),
 and we protect the retrofit path rather than pre-building it:**
 
 - `matter-codec` and `matter-bdx` (alloc-only logic, trivial dep trees) are
