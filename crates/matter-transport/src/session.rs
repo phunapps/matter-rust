@@ -2619,7 +2619,7 @@ mod tests {
     // be able to replay that header with any ciphertext and make us emit an
     // encrypted standalone ack + burn an outbound counter.
     #[test]
-    fn tran1_forged_replay_emits_no_ack_and_burns_no_counter() {
+    fn forged_replay_emits_no_ack_and_burns_no_counter() {
         let (mut a, mut b) = paired_sessions();
         let now = Instant::now();
         // a -> b, RELIABLE: b records the counter and owes a reliable ack.
@@ -2669,7 +2669,7 @@ mod tests {
     // still be re-acked — the fix must not break MRP's legitimate duplicate
     // handling.
     #[test]
-    fn tran1_authentic_reliable_duplicate_is_still_reacked() {
+    fn authentic_reliable_duplicate_is_still_reacked() {
         let (mut a, mut b) = paired_sessions();
         let now = Instant::now();
         let out = a
