@@ -194,6 +194,14 @@ const POINTERS: &[Rule] = &[
         except: &[],
     },
     Rule {
+        what: "a private test-gap analysis item id in an identifier",
+        // The same ids written into a name (`fn tran1_forged_replay_…`); name
+        // the test by the behaviour it pins.
+        regex: r"\b(?:tran|mrp|im|att|bdx|codec|setup|case)\d+_",
+        examples: &["    fn tran1_forged_replay_emits_no_ack() {"],
+        except: &[],
+    },
+    Rule {
         what: "a milestone's plan or design",
         // The label must be capitalised ("the M1 plan", "the F design"), so
         // English such as "the corrected design" or "the whole design" passes.
