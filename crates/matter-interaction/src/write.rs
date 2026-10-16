@@ -165,7 +165,7 @@ pub fn parse_write_response(bytes: &[u8]) -> Result<Vec<(AttributePath, ImStatus
 /// Parse one `AttributeStatusIB` body (reader positioned just after the
 /// struct start): `{ 0: Path(list), 1: StatusIB struct { 0: Status } }`.
 ///
-/// Shared with the read path (IM-1): a `ReportData`'s `AttributeStatus [0]` IB
+/// Shared with the read path: a `ReportData`'s `AttributeStatus [0]` IB
 /// has the identical body, so both the write response and the report path
 /// decode per-path status through here.
 pub(crate) fn parse_attribute_status_ib(

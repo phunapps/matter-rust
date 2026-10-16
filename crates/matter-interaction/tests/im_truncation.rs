@@ -1,5 +1,5 @@
-//! IM-2: IM parsers must be panic-safe on truncated input. The audit found
-//! them panic-safe by code read (no `unwrap`/`expect`/indexing on any parse
+//! IM parsers must be panic-safe on truncated input. A code read found
+//! them panic-safe (no `unwrap`/`expect`/indexing on any parse
 //! path); this pins it by EXECUTION — feeding every prefix of a valid message
 //! must return `Err`, never panic (chip feeds truncated TLV → `END_OF_TLV`).
 //!

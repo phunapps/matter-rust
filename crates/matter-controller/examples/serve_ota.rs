@@ -46,7 +46,7 @@ struct Args {
 
     /// BDX max block size in bytes. 960 (the default) fits the Wi-Fi/IP
     /// secured-payload budget; use ~512 for a Thread-routed requestor so each
-    /// block spans fewer 6LoWPAN fragments (BDX-4).
+    /// block spans fewer 6LoWPAN fragments.
     #[arg(long, default_value_t = 960)]
     block_size: u16,
 }

@@ -17,7 +17,7 @@ proptest! {
 
     #[test]
     // Exclude IS1 (0x1F): the codec truncates UTF-8 at the localized-string
-    // separator by design (CODEC-1), so a raw 0x1F is outside the round-trip
+    // separator by design, so a raw 0x1F is outside the round-trip
     // domain — mirrors matter-codec's own proptest regex.
     fn node_label_roundtrip(s in "[^\u{1F}]{0,32}") {
         let bytes = clusters::basic_information::encode_node_label(&s);

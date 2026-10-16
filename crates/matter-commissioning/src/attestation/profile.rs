@@ -221,7 +221,7 @@ mod tests {
     #[test]
     fn dac_with_keycertsign_bit_is_rejected() {
         // A signing key masquerading as a device leaf — the exact case
-        // webpki lets through. This is the headline ATT-1/ATT-6 gap.
+        // webpki lets through. This is the headline case the format check closes.
         assert!(matches!(
             verify_attestation_cert_format(fx!("dac-keycertsign"), CertRole::Dac),
             Err(AttestationError::CertFormatViolation { .. })

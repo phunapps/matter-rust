@@ -785,7 +785,7 @@ mod tests {
 
     #[test]
     fn with_example_device_roots_loads_bundled_roots() {
-        // ATT-3: three roots — synthetic (loopback), chip test authority,
+        // Three roots — synthetic (loopback), chip test authority,
         // CSA production key 001 (verifies the ESP32-C6). All three DERs
         // parse, so none are silently skipped.
         let trust = CdSigningRoots::with_example_device_roots();

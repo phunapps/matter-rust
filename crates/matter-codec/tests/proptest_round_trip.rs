@@ -45,7 +45,7 @@ fn arb_scalar_value() -> impl Strategy<Value = Value> {
             .prop_map(Value::Double),
         Just(Value::Null),
         // Exclude IS1 (0x1F): it is the Matter localized-string separator, so
-        // the reader presents only the text before it (CODEC-1). A value
+        // the reader presents only the text before it. A value
         // containing a raw 0x1F is therefore not in the codec's round-trip
         // domain — `decode(encode("a\u{1F}b")) == "a"`, by design.
         prop::string::string_regex("[^\u{1F}]{0,64}")

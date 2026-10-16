@@ -131,7 +131,7 @@ pub async fn resolve_operational_with_attempts<D: Discovery>(
 /// Like [`resolve_operational`], but also returns the peer's advertised MRP
 /// retransmit config (from its operational mDNS TXT `SII`/`SAI`/`SAT`) so the
 /// caller can size retransmits to the device — critical for not hammering a
-/// sleepy device (MRP-2). Uses the IP-path poll budget.
+/// sleepy device. Uses the IP-path poll budget.
 ///
 /// # Errors
 ///

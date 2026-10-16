@@ -297,7 +297,7 @@ impl MatterController {
         // and IP. For a Thread-routed requestor use
         // [`Self::serve_ota_with_block_size`] with ~512: at 960 a single block
         // spans ~a dozen 802.15.4 fragments that must ALL arrive, so a smaller
-        // block cuts the per-block loss probability on the mesh (BDX-4).
+        // block cuts the per-block loss probability on the mesh.
         self.serve_ota_with_block_size(target_node_id, image, software_version, port, 960)
             .await
     }
@@ -421,7 +421,7 @@ impl MatterController {
         // `max_block_size` must keep each BDX DataBlock (block + 4-byte counter
         // + BDX/IM framing) under the transport's 1024-byte secured-payload
         // budget — 960 is the Wi-Fi/IP default (1024 overflows by 14 bytes once
-        // framed); a Thread caller passes ~512 (BDX-4).
+        // framed); a Thread caller passes ~512.
         let serve_res = server.serve_ota_once(offer, image, max_block_size).await;
 
         let _ = matter_transport::Discovery::unpublish(

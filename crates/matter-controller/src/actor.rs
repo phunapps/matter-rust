@@ -1527,7 +1527,7 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     /// Peer MRP config (from the operational mDNS `SII`/`SAI`/`SAT`) captured
     /// when a connect is spawned, applied to the session at
     /// [`Self::handle_connect_done`] so retransmits are sized to the peer, not
-    /// our defaults (MRP-2). Keyed by node id; removed when the connect
+    /// our defaults. Keyed by node id; removed when the connect
     /// completes or the node is forgotten.
     connect_mrp: HashMap<u64, matter_transport::MrpConfig>,
     /// Operational resolves waiting on mDNS, polled from the timer arm by
@@ -5050,7 +5050,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             }
         };
         // The peer's advertised MRP config now sizes the HANDSHAKE's retransmits
-        // as well as the resulting session's (MRP-2). It is still stashed for
+        // as well as the resulting session's. It is still stashed for
         // the failure paths that clear it, but the value the handshake and the
         // session use travels with the task.
         self.connect_mrp.insert(node_id, peer_mrp);

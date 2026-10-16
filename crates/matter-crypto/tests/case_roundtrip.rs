@@ -806,7 +806,7 @@ fn drive_new_session_handshake() -> (
 }
 
 // ---------------------------------------------------------------------------
-// CASE-1: peer-signature verification (the line that authenticates CASE).
+// Peer-signature verification (the line that authenticates CASE).
 // ---------------------------------------------------------------------------
 //
 // The ECDSA verify over TBSData2 / TBSData3 is what proves the peer holds the

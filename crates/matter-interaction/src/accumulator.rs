@@ -213,7 +213,7 @@ impl ReportAccumulator {
                 },
                 ReportOp::Append => {
                     if let Some(slot) = self.slots.get_mut(&key) {
-                        // IM-3: a strictly-older DataVersion append must not
+                        // A strictly-older DataVersion append must not
                         // land on a newer list; same/unknown versions proceed.
                         if let (Some(old), Some(new)) = (slot.version, item.data_version) {
                             if new < old {
@@ -328,7 +328,7 @@ mod tests {
 
     #[test]
     fn stale_version_append_is_rejected() {
-        // IM-3: a strictly-older DataVersion append must not land on a newer
+        // A strictly-older DataVersion append must not land on a newer
         // list. Two appends at version 5 build the list; a version-3 append is
         // stale and must be dropped (not appended).
         let mut acc = ReportAccumulator::new();

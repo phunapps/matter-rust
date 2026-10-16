@@ -945,11 +945,11 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                 continue;
             }
 
-            // BDX-4: bound progress and iteration SEPARATELY. `max_progress`
+            // Bound progress and iteration SEPARATELY. `max_progress`
             // caps how many transfer-ADVANCING messages (OTA commands + blocks)
             // we serve; a larger `max_iterations` backstop bounds frames that do
             // NOT advance the transfer (stale prior-session retransmits, the
-            // duplicate-reliable ack resends BDX-2 handles, a peer StatusReport).
+            // duplicate-reliable ack resends handled below, a peer StatusReport).
             // Counting every frame against one budget — as the old `steps`
             // did — let a lossy mesh's retransmits exhaust it before the last
             // block arrived, turning a recoverable loss into a spurious failure.
@@ -991,7 +991,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                     ..
                 } = decoded
                 else {
-                    // BDX-2: the requestor retransmitted a reliable message
+                    // The requestor retransmitted a reliable message
                     // (e.g. a BlockQuery) whose ack was lost. decode_inbound has
                     // pre-built the standalone ack to re-send — send it and do
                     // NOT advance BDX state (the block counter already moved).
@@ -1006,7 +1006,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                     continue;
                 };
 
-                // BDX-4: only a message that ADVANCES the transfer (an OTA
+                // Only a message that ADVANCES the transfer (an OTA
                 // invoke or a BDX message) counts against `max_progress`. A
                 // stale/duplicate frame `continue`s above without reaching here,
                 // so it burns only an `iterations` slot, never the progress
@@ -1085,7 +1085,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                     )?;
                     self.send(&out.wire_bytes, peer).await?;
                 } else if protocol_id == ProtocolId::SECURE_CHANNEL && opcode == OP_STATUS_REPORT {
-                    // BDX-3 (receive): the requestor aborted via a Secure-Channel
+                    // The requestor aborted via a Secure-Channel
                     // StatusReport — e.g. a device-side flash-write failure. End
                     // the transfer with a descriptive error naming the peer's
                     // status, instead of ignoring it and spinning to the "step
@@ -1134,7 +1134,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                     };
                     match outcome {
                         SenderOutcome::Send(out) => {
-                            // BDX-1: send every BDX message MRP-reliable so a
+                            // Send every BDX message MRP-reliable so a
                             // lost block/ReceiveAccept is retransmitted (the
                             // recv_secured loop pumps the MRP retransmit timer).
                             // Over a lossy mesh (Thread) the first lost block
@@ -1155,7 +1155,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                         }
                         SenderOutcome::Done => {}
                         SenderOutcome::Abort(code) => {
-                            // BDX-3 (send): notify the peer with a Secure-Channel
+                            // Notify the peer with a Secure-Channel
                             // StatusReport before bailing, so the requestor learns
                             // the transfer failed instead of timing out. Best
                             // effort — the abort error is returned regardless.
@@ -1221,7 +1221,7 @@ mod tests {
     #[cfg(feature = "ota")]
     #[test]
     fn status_report_body_byte_layout_and_roundtrip() {
-        // BDX-3: a BDX abort StatusReport = Failure || BDX proto id (0x00000002)
+        // A BDX abort StatusReport = Failure || BDX proto id (0x00000002)
         // || the 16-bit BDX status. Byte layout is little-endian per field
         // (Matter Core §4.11.6).
         let code = matter_bdx::BdxStatusCode::BadBlockCounter.to_u16(); // 0x0017

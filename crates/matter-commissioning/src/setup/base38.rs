@@ -58,7 +58,7 @@ pub(super) fn decode(s: &str) -> Result<Vec<u8>> {
             1 | 3 => return Err(Error::InvalidBase38Char('?', i + take - 1)),
             _ => unreachable!(),
         };
-        // SETUP-1: reject a chunk whose value does not fit in `byte_count`
+        // Reject a chunk whose value does not fit in `byte_count`
         // bytes (e.g. "S6" -> 256 > 0xFF). The old code silently kept only the
         // low bytes, so distinct QR strings decoded to identical output — the
         // decode was not injective. chip rejects these (Base38Decode.cpp:152).
@@ -169,7 +169,7 @@ mod tests {
 
     #[test]
     fn decode_rejects_out_of_range_chunks() {
-        // SETUP-1 / chip TestQRCode.cpp: a chunk whose value exceeds its
+        // Mirrors chip TestQRCode.cpp: a chunk whose value exceeds its
         // byte width must error, not silently truncate. "S6" -> 256 (>0xFF,
         // 1 byte), "OE71" -> 65536 (>0xFFFF, 2 bytes), "QLS18" -> 0x1000000
         // (>0xFFFFFF, 3 bytes).

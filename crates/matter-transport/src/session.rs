@@ -620,7 +620,7 @@ impl SessionManager {
     /// [`MatterService::peer_mrp_config`](crate::MatterService::peer_mrp_config)).
     ///
     /// Sizing retransmits to the peer's own parameters is what keeps us from
-    /// hammering a sleepy device that polls on a long idle interval (MRP-2).
+    /// hammering a sleepy device that polls on a long idle interval.
     /// The freshly-registered session has no pending MRP state yet, so applying
     /// the config here (right at creation, before any traffic) is safe.
     pub fn register_case_with_mrp(
@@ -1127,8 +1127,8 @@ impl SessionManager {
     /// Decode + verify + replay-check an inbound packet, then dispatch into
     /// MRP for exchange / ack / duplicate-reliable handling.
     ///
-    /// The replay window is consulted only after the packet authenticates
-    /// (TRAN-1). If it rejects the counter as a duplicate (`ReplayedCounter`
+    /// The replay window is consulted only after the packet authenticates.
+    /// If it rejects the counter as a duplicate (`ReplayedCounter`
     /// or `CounterTooOld`, counter 0 included) and the message has R set on
     /// a session that is not `transport_reliable`, the manager builds a
     /// standalone ACK for it on its own exchange with the opposite role (the
@@ -1175,7 +1175,7 @@ impl SessionManager {
             let (cipher, replay_window) = session.inbound_cipher_and_window();
             let plaintext =
                 decrypt_secured_with_header(packet, &peeked, header_len, cipher, nonce_node_id)?;
-            // TRAN-1: only an authenticated message reaches the replay
+            // Only an authenticated message reaches the replay
             // window, and only it can earn a duplicate ACK below.
             (replay_window.check_and_record(peer_counter.0), plaintext)
         };
@@ -2613,7 +2613,7 @@ mod tests {
         );
     }
 
-    // TRAN-1: the duplicate-reliable re-ack decision must be made only AFTER
+    // The duplicate-reliable re-ack decision must be made only AFTER
     // the message authenticates. An attacker who has observed a reliable
     // frame's plaintext header (session id + counter are cleartext) must not
     // be able to replay that header with any ciphertext and make us emit an
@@ -2664,9 +2664,10 @@ mod tests {
         );
     }
 
-    // Regression guard for the TRAN-1 fix: a genuine, AUTHENTICATED reliable
-    // duplicate (a lost-ack retransmit) must still be re-acked — the fix must
-    // not break MRP's legitimate duplicate handling.
+    // Regression guard for the authenticate-before-replay-check fix: a
+    // genuine, AUTHENTICATED reliable duplicate (a lost-ack retransmit) must
+    // still be re-acked — the fix must not break MRP's legitimate duplicate
+    // handling.
     #[test]
     fn tran1_authentic_reliable_duplicate_is_still_reacked() {
         let (mut a, mut b) = paired_sessions();

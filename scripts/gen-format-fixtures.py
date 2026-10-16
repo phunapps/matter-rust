@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Generate single-cert fixtures for the attestation certificate *format*
-check (ATT-1 / ATT-6), mirroring connectedhomeip's
+check, mirroring connectedhomeip's
 `VerifyAttestationCertificateFormat` (CHIPCryptoPALOpenSSL.cpp:1227).
 
 Each fixture is ONE DER-encoded certificate. A `*-valid` cert is a

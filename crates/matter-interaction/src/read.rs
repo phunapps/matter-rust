@@ -123,7 +123,7 @@ pub struct ReportData {
     /// order. Empty for attribute-only reports.
     pub events: Vec<crate::event::EventReport>,
     /// Every `AttributeStatusIB` (a per-path status/error, not attribute data),
-    /// as `(path, status)` in wire order. IM-1: these were previously discarded,
+    /// as `(path, status)` in wire order. These were previously discarded,
     /// so a device reporting e.g. `UnsupportedAttribute` for a requested path was
     /// indistinguishable from the path simply being omitted. Populated by
     /// [`parse_report_data`]; empty for all-data reports and for reports built
@@ -316,7 +316,7 @@ pub fn parse_report_data(bytes: &[u8]) -> Result<ReportData, ImError> {
 }
 
 /// One decoded `AttributeReportIB`: either attribute data, a per-path status
-/// (IM-1), or an empty IB.
+/// (`AttributeStatus`), or an empty IB.
 enum ReportIb {
     Data(AttributeReportItem),
     Status(AttributePath, crate::status::ImStatus),
@@ -326,7 +326,7 @@ enum ReportIb {
 /// Consume the `AttributeReports` array body (reader positioned just after the
 /// array-start at context tag 1), pushing one [`AttributeReportItem`] per IB
 /// that carried `AttributeData`, and one `(path, status)` into `statuses` per
-/// `AttributeStatus` IB (IM-1).
+/// `AttributeStatus` IB.
 fn parse_attribute_reports(
     r: &mut TlvReader<'_>,
     items: &mut Vec<AttributeReportItem>,
@@ -351,7 +351,7 @@ fn parse_attribute_reports(
 }
 
 /// Parse one `AttributeReportIB` body — it carries EITHER `AttributeData [1]`
-/// or `AttributeStatus [0]` (IM-1: the status is surfaced, not skipped).
+/// or `AttributeStatus [0]` (the status is surfaced, not skipped).
 fn parse_attribute_report_ib(r: &mut TlvReader<'_>) -> Result<ReportIb, ImError> {
     let mut path = None;
     let mut value = None;
@@ -370,7 +370,7 @@ fn parse_attribute_report_ib(r: &mut TlvReader<'_>) -> Result<ReportIb, ImError>
                 parse_attribute_data(r, &mut path, &mut value, &mut data_version, &mut append)?;
             }
             // AttributeStatus [0] = struct { 0:Path(list), 1:StatusIB } — parse
-            // the per-path status instead of discarding it (IM-1). Reuses the
+            // the per-path status instead of discarding it. Reuses the
             // write path's identical decoder.
             Some(Element::ContainerStart {
                 tag: Tag::Context(0),
@@ -545,7 +545,7 @@ mod tests {
 
     #[test]
     fn attribute_status_report_is_surfaced() {
-        // IM-1: a per-path AttributeStatus (here UnsupportedAttribute, 0x86)
+        // A per-path AttributeStatus (here UnsupportedAttribute, 0x86)
         // must be surfaced in `statuses`, not silently dropped — a caller must
         // be able to tell "unsupported" from "omitted".
         use matter_codec::{Tag, TlvWriter};

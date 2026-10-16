@@ -1052,7 +1052,7 @@ impl<'a> TlvReader<'a> {
         // chip's `TLVReader::Get(CharSpan&)` and matter.js both return only the
         // text (chip TestTLV.cpp CheckTLVCharSpan). Returning the whole payload
         // surfaced the raw separator+suffix on reads of localized labels
-        // (BasicInformation NodeLabel, UserLabel) — CODEC-1. The raw suffix
+        // (BasicInformation NodeLabel, UserLabel). The raw suffix
         // (LSID) is not yet exposed; that is a separate additive follow-up.
         let s = core::str::from_utf8(bytes)?;
         // IS1 (0x1F) is single-byte ASCII, so the split index is a valid char
@@ -1776,7 +1776,7 @@ mod tests {
 
     #[test]
     fn read_utf8_truncates_at_is1_separator() {
-        // CODEC-1 / chip TestTLV.cpp CheckTLVCharSpan: a Matter char string is
+        // Mirrors chip TestTLV.cpp CheckTLVCharSpan: a Matter char string is
         // presented as only the text before the first IS1 (0x1F) localized-
         // string separator. The writer keeps the raw bytes on the wire.
         fn decode_str(s: &str) -> String {

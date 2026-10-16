@@ -326,7 +326,7 @@ impl ReplayWindow {
     /// Check whether `counter` WOULD be rejected, without recording it or
     /// otherwise mutating the window. Takes `&self` and never writes.
     ///
-    /// **Not used to gate the inbound path** (see TRAN-1 / [`decode_secured`]):
+    /// **Not used to gate the inbound path** (see [`decode_secured`]):
     /// classifying a replay from the *unauthenticated* header — before the
     /// AES-CCM tag is verified — let a forged datagram drive the caller's MRP
     /// duplicate-ack logic. Replay classification on inbound traffic is done
@@ -489,7 +489,7 @@ pub(crate) fn encode_secured_with_cipher(
 /// window *and reporting a replay* before verifying the AES-CCM tag are
 /// unsafe. Advancing early would let a forged far-future counter poison the
 /// window (stranding later genuine traffic — a remote single-packet `DoS`);
-/// reporting a replay early (TRAN-1) would let a forged datagram carrying a
+/// reporting a replay early would let a forged datagram carrying a
 /// previously-seen reliable counter drive the caller's MRP duplicate-ack path
 /// into emitting an encrypted ack and burning a counter. We therefore
 /// authenticate first, then call [`ReplayWindow::check_and_record`] — the sole
@@ -530,7 +530,7 @@ pub fn decode_secured(
         &matter_crypto::aead::SessionAead::new(key),
         nonce_source_node_id,
     )?;
-    // TRAN-1: authenticated, so it is now safe to COMMIT the counter to the
+    // Authenticated, so it is now safe to COMMIT the counter to the
     // replay window. A forged datagram never reaches this point.
     replay_window.check_and_record(header.message_counter.0)?;
     Ok((header, plaintext))
@@ -539,7 +539,7 @@ pub fn decode_secured(
 /// The decrypt-and-authenticate half of [`decode_secured`], with the header
 /// already parsed and the AES-CCM cipher supplied by the caller. It does not
 /// touch a replay window: the caller checks the counter afterwards, and must
-/// never before (TRAN-1), so that only an authenticated message is
+/// never before, so that only an authenticated message is
 /// classified and only an authenticated duplicate can earn an ACK.
 ///
 /// `header` MUST be the result of [`decode_header`] on `bytes`, and
@@ -565,7 +565,7 @@ pub(crate) fn decrypt_secured_with_header(
     cipher: &matter_crypto::aead::SessionAead,
     nonce_source_node_id: u64,
 ) -> Result<Vec<u8>> {
-    // TRAN-1: replay classification happens AFTER authentication, never
+    // Replay classification happens AFTER authentication, never
     // before, and is the caller's step. The header (session id, counter) is
     // unauthenticated cleartext, so there is no pre-decrypt reject here — an
     // attacker who replays a previously-seen reliable counter with any

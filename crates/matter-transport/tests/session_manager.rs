@@ -337,7 +337,7 @@ fn poll_timeout_min_across_sessions() {
 
     let deadline = mgr.poll_timeout().unwrap();
     // Both sessions are fresh with no recorded peer activity, so they classify
-    // as idle (MRP-1) and use the idle base plus the spec's 1.1 margin. s1 was
+    // as idle and use the idle base plus the spec's 1.1 margin. s1 was
     // sent first, so its deadline is the earliest across sessions.
     //
     // A RANGE, not an equality: retransmits carry MRP_BACKOFF_JITTER, and a

@@ -622,7 +622,7 @@ pub struct MrpState {
     /// classify the peer as "active" (within `config.idle_threshold` = the
     /// Session Active Threshold, SAT) vs idle. The retransmit base interval is
     /// selected off THIS, not our own outbound timing — chip
-    /// `SecureSession::IsPeerActive` / `GetMRPBaseTimeout` (MRP-1). `None` until
+    /// `SecureSession::IsPeerActive` / `GetMRPBaseTimeout`. `None` until
     /// the first inbound: a peer we have never heard from is treated as idle,
     /// so we never hammer a sleepy device with active-interval spacing.
     last_peer_activity: Option<Instant>,
@@ -925,8 +925,8 @@ impl MrpState {
     /// The first retransmit deadline uses the active base (`initial_active`,
     /// SAI) when the PEER is active — it has sent us something within SAT
     /// (`is_peer_active`) — and the idle base (`initial_idle`, SII) otherwise.
-    /// Selection is off the peer's activity, NOT our own outbound timing
-    /// (MRP-1); subsequent retransmits re-evaluate it in `handle_timeout`.
+    /// Selection is off the peer's activity, NOT our own outbound timing;
+    /// subsequent retransmits re-evaluate it in `handle_timeout`.
     ///
     /// `exchange_id` names the exchange as [`Self::prepare_outbound`] does:
     /// ours if the table holds an exchange we started with this id, and
@@ -1035,8 +1035,8 @@ impl MrpState {
         // Re-evaluate the peer's active/idle state ONCE for this tick, exactly
         // as chip re-evaluates `IsPeerActive` on every retransmit scheduling:
         // a peer that has gone silent past SAT since the message was queued
-        // switches to the slower idle base for its remaining retransmits (MRP-1;
-        // the CASE-Sigma3-to-a-sleepy-device failure mode). `last_peer_activity`
+        // switches to the slower idle base for its remaining retransmits (the
+        // CASE-Sigma3-to-a-sleepy-device failure mode). `last_peer_activity`
         // does not change during this loop, so one read is exact.
         let peer_active = self.is_peer_active(now);
 
@@ -1145,7 +1145,7 @@ impl MrpState {
         now: Instant,
     ) -> Result<InboundOutcome> {
         // Any inbound is fresh evidence the peer is awake — it feeds the
-        // active/idle classification (MRP-1, `is_peer_active`). Record it before
+        // active/idle classification (`is_peer_active`). Record it before
         // any early return so even an ack-only or duplicate frame counts.
         self.last_peer_activity = Some(now);
         // Decode once and use the tail-slice length to split off app bytes.
@@ -2018,7 +2018,7 @@ mod tests {
         mrp.poll_timeout().expect("retransmit deadline scheduled")
     }
 
-    /// MRP-1: a fresh session (we have never heard from the peer) is IDLE, so
+    /// A fresh session (we have never heard from the peer) is IDLE, so
     /// the first retransmit uses the slow idle base (SII) — we never open with
     /// active-interval spacing at a device that might be a sleepy ICD. Once the
     /// peer sends us something (within SAT), the session is active (SAI).
@@ -2054,7 +2054,7 @@ mod tests {
         );
     }
 
-    /// MRP-1 core: the active/idle base is re-evaluated on EVERY retransmit
+    /// The core rule: the active/idle base is re-evaluated on EVERY retransmit
     /// (chip `GetMRPBaseTimeout`), not fixed at send time. A message queued
     /// while the peer was active must switch to the idle base once the peer
     /// goes silent past SAT — the CASE-Sigma3-to-a-sleepy-device failure mode.
@@ -2167,7 +2167,7 @@ mod tests {
         out
     }
 
-    /// MRP-1: an inbound from the peer marks it active, so a reliable send that
+    /// An inbound from the peer marks it active, so a reliable send that
     /// follows uses the active base — proving `process_inbound` feeds the
     /// classification (it is the real hook, not the test-only field poke).
     #[test]
@@ -2192,7 +2192,7 @@ mod tests {
         );
     }
 
-    /// MRP-2: `MrpConfig::for_peer` maps advertised `SII`/`SAI`/`SAT`, falls
+    /// `MrpConfig::for_peer` maps advertised `SII`/`SAI`/`SAT`, falls
     /// back to the Matter spec defaults for omitted keys, and clamps
     /// out-of-range values to their spec upper bounds.
     #[test]

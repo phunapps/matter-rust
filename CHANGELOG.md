@@ -1431,7 +1431,7 @@ published release, `0.1.0` through `0.18.1`.
   session, still returns `Error::ReplayedCounter` or `Error::CounterTooOld`
   and sends nothing. chip's `AllowsMRP()` is UDP-only. A BTP duplicate
   that was still cached used to get an ACK, which BTP never needs.
-- The replay check still runs only after the AEAD tag verifies (TRAN-1),
+- The replay check still runs only after the AEAD tag verifies,
   so a forged duplicate gets no ACK and spends no counter.
 - Not a breaking change: no signature or type changes.
   `MrpState::check_duplicate_reliable` stays and still answers from its
@@ -4546,23 +4546,23 @@ changes.
 
 ### Security & correctness (all crates)
 
-- **Attestation (ATT-1/ATT-6):** enforce the Matter attestation-certificate
+- **Attestation:** enforce the Matter attestation-certificate
   profile (version, signature algorithm, `KeyUsage` bits, `BasicConstraints`,
   SKID/AKID) in our own code — `rustls-webpki` ignores `KeyUsage`; the docs
   claiming otherwise are now true. New `verify_attestation_cert_format`, run by
   the commissioner before `verify_chain`.
-- **Attestation (ATT-3):** `example_device_roots()` now bundles chip's real test
+- **Attestation:** `example_device_roots()` now bundles chip's real test
   CD authority + CSA production key 001 alongside the synthetic root, so it
   actually verifies real CSA-test / example devices (incl. the ESP32-C6).
-- **Attestation (ATT-2):** enforce the CD `authorized_paa_list` (tag 11) against
+- **Attestation:** enforce the CD `authorized_paa_list` (tag 11) against
   the anchoring PAA's SubjectKeyIdentifier.
-- **Transport (TRAN-1):** decide the MRP duplicate-ack only *after* decrypt, so
+- **Transport:** decide the MRP duplicate-ack only *after* decrypt, so
   an unauthenticated replay can no longer emit an ack or burn a counter.
 - **Transport:** bound the session table (default 256) with **idle-first**
   eviction — a full table drops a session with no in-flight reliable work
   before one mid-exchange (tie-break oldest) — closing the unbounded-`HashMap`
   DoS without tearing down an active handshake.
-- **Transport (MRP-1/MRP-2):** size MRP retransmits to the *peer*, not our own
+- **Transport:** size MRP retransmits to the *peer*, not our own
   transmit timing. The active/idle base is chosen from whether the peer has
   been active within its Session Active Threshold — re-evaluated on every
   retransmit (chip `GetMRPBaseTimeout`) — and the per-session intervals come
@@ -4574,14 +4574,14 @@ changes.
 - **Commissioning:** cap the requested `ArmFailSafe` expiry at the device's
   `BasicCommissioningInfo::MaxCumulativeFailsafeSeconds`, so we never
   round-trip an expiry the device is guaranteed to reject with `BoundsExceeded`.
-- **CASE (CASE-1):** test coverage for peer-signature rejection (the auth line).
-- **Codec (CODEC-1):** truncate char strings at the IS1 (`0x1F`) localized-string
+- **CASE:** test coverage for peer-signature rejection (the auth line).
+- **Codec:** truncate char strings at the IS1 (`0x1F`) localized-string
   separator (matches chip/matter.js).
-- **Commissioning (SETUP-1):** reject out-of-range Base38 QR chunks instead of
+- **Commissioning:** reject out-of-range Base38 QR chunks instead of
   silently truncating.
-- **Interaction (IM-1/IM-3):** surface read-path `AttributeStatus` IBs; apply the
+- **Interaction:** surface read-path `AttributeStatus` IBs; apply the
   `DataVersion` guard to list `Append`.
-- **OTA/BDX (BDX-1..4):** send BDX blocks MRP-reliable, resend the ack on a
+- **OTA/BDX:** send BDX blocks MRP-reliable, resend the ack on a
   duplicate `BlockQuery`, send/receive `StatusReport`, and track a progress vs
   iteration budget + a Thread block-size path.
 

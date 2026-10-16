@@ -62,8 +62,8 @@ fn verifies_esp_matter_c6_cd_against_csa_production_key_001() {
     .expect("the C6's CD must verify against CSA production CD signing key 001");
 }
 
-/// ATT-3: the bundled `with_example_device_roots()` set MUST verify the C6's real
-/// CD. Before ATT-3 it bundled only the synthetic root and rejected the C6 —
+/// The bundled `with_example_device_roots()` set MUST verify the C6's real
+/// CD. It used to bundle only the synthetic root and reject the C6 —
 /// the trap `example_device_roots()`'s "suitable for CSA-test devices" doc papered
 /// over. This is the check that would have caught it.
 #[test]
