@@ -13,7 +13,7 @@
 //! oracle for the on-wire format until we have a real Matter device
 //! to test against.
 
-#![allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#![allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 
 use std::fs;
 use std::path::PathBuf;

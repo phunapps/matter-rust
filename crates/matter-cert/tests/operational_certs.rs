@@ -21,7 +21,7 @@
 //! the real signature-verification path; `TrustAnchor` is still built here
 //! because this test demonstrates the anchor-construction step.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+#![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 
 use matter_cert::operational::{
     icac, noc, rcac, sign_with_ring, IcacParams, NocParams, RcacParams,

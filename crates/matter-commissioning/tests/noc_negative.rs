@@ -2,7 +2,7 @@
 //! way to attack a signature gate, and every gate must reject it.
 
 #![forbid(unsafe_code)]
-#![allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#![allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 
 use std::fs;
 use std::path::PathBuf;

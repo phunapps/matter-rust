@@ -30,7 +30,7 @@ pub fn build_timed_request(timeout_ms: u16) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)] // Test code: CLAUDE.md test-code carve-out.
+    #![allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     use super::*;
     use matter_codec::{Element, TlvReader, Value};
 

@@ -660,7 +660,7 @@ impl BtpSession {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)] // Test code: CLAUDE.md carve-out.
+    #![allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     use super::*;
 
     fn hex(s: &str) -> Vec<u8> {

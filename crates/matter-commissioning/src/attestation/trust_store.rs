@@ -106,7 +106,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn add_grows_the_store() {
         let mut s = PaaTrustStore::empty();
         s.add(Paa::from_der(PAA_FFF1_DER).unwrap());
@@ -115,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn iter_returns_paas_in_insertion_order() {
         let mut s = PaaTrustStore::empty();
         let a = Paa::from_der(PAA_FFF1_DER).unwrap();

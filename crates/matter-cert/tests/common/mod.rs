@@ -8,7 +8,7 @@
 //! need to exercise the real `validate` path.
 
 #![allow(dead_code)] // Not all helpers are consumed by every test file.
-#![allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+#![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 
 use matter_cert::test_support::{build_unsigned, with_signature, TestCertFields};
 use matter_cert::{

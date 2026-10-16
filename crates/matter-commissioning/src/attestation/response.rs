@@ -301,7 +301,7 @@ mod tests {
     /// This helper exists so each test owns its own deterministic
     /// keypair — no shared global state, no per-test signing-key
     /// fixture file.
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn mint_signed(elements: &[u8], challenge: &[u8; 16], seed: u8) -> ([u8; 65], [u8; 64]) {
         // Deterministic 32-byte scalar so test failures repro byte-
         // identically. P-256 scalars are big-endian; placing `seed` at
@@ -332,7 +332,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn verify_attestation_response_accepts_valid_signature() {
         let elements = b"opaque attestation_elements TLV blob".to_vec();
         let challenge = [0x42u8; 16];
@@ -346,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn verify_rejects_flipped_signature_byte() {
         let elements = b"some elements".to_vec();
         let challenge = [0x42u8; 16];
@@ -364,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn verify_rejects_wrong_challenge() {
         let elements = b"some elements".to_vec();
         let challenge_correct = [0x42u8; 16];
@@ -382,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn verify_rejects_tampered_elements() {
         let elements = b"some elements".to_vec();
         let challenge = [0x42u8; 16];
@@ -401,7 +401,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn verify_rejects_wrong_public_key() {
         let elements = b"some elements".to_vec();
         let challenge = [0x42u8; 16];
@@ -420,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn verify_rejects_malformed_public_key() {
         // Build a valid (elements, challenge, sig) tuple, then point
         // verify at a malformed pubkey blob (wrong length). ring must
@@ -440,7 +440,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn extract_attestation_elements_fields_happy_path() {
         // Hand-build attestation_elements per spec §6.2.4:
         //   { 1: octet_string(cd_bytes),
@@ -465,14 +465,14 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn extract_attestation_elements_fields_rejects_malformed() {
         let err = extract_attestation_elements_fields(&[0xFF]).expect_err("malformed");
         assert!(matches!(err, AttestationError::ResponseElementsMalformed));
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn extract_attestation_elements_fields_rejects_short_nonce() {
         // Same shape as happy path but nonce is only 16 bytes — should fail.
         let mut tlv = vec![0x15];
@@ -489,7 +489,7 @@ mod tests {
 
     /// Encode attestation elements: `{1: cd, 2: nonce, 3: ts}` (each
     /// optional), with `decoy` written inside the outer structure first.
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn elements_with_decoy(
         real: Option<(&[u8], &[u8; 32], u64)>,
         decoy: impl FnOnce(&mut matter_codec::TlvWriter<'_>),
@@ -510,7 +510,7 @@ mod tests {
 
     /// A decoy container three levels deep (ctx 6 → ctx 7 → ctx 8) whose
     /// innermost members carry the three required tags.
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn deep_decoy(w: &mut matter_codec::TlvWriter<'_>) {
         use matter_codec::Tag;
         w.start_structure(Tag::Context(6)).unwrap();
@@ -542,7 +542,7 @@ mod tests {
     /// Before the fix the decoy's fake `1` was read first and the real `1`
     /// tripped the duplicate check.
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn extract_attestation_elements_fields_skips_decoy_container() {
         let nonce = [0xAB_u8; 32];
         let tlv = elements_with_decoy(Some((&[0xCD, 0xCD], &nonce, 0x42)), deep_decoy);
@@ -560,7 +560,7 @@ mod tests {
     /// Before the fix it was ignored, so a misshapen field followed by a
     /// well-formed one with the same tag was accepted.
     #[test]
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn extract_attestation_elements_fields_rejects_a_misshapen_known_field() {
         use matter_codec::Tag;
         type Decoy = fn(&mut matter_codec::TlvWriter<'_>);
@@ -609,7 +609,7 @@ mod tests {
     /// the structure). Pins that the container fix did not add a strict
     /// close here.
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn extract_attestation_elements_fields_ignores_trailing_bytes() {
         let nonce = [0xAB_u8; 32];
         let mut tlv = elements_with_decoy(Some((&[0xCD], &nonce, 7)), |_| {});

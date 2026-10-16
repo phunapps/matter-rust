@@ -8,7 +8,7 @@
 //! `commissioning_byte_parity.rs`; this test pins COMPLETION via the same
 //! public surface a production driver uses.
 
-// Test-code carve-out: see CLAUDE.md.
+// Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod e2e_fixture;

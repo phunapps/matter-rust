@@ -29,7 +29,7 @@
 //! unasserted: they carry certificates minted under THIS run's fresh
 //! fabric key pair, which can never equal matter.js's.
 
-// Test-code carve-out: see CLAUDE.md.
+// Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::too_many_lines)]
 #![forbid(unsafe_code)]
 

@@ -3,7 +3,7 @@
 //! These confirm the two functions are inverses of each other; matter.js
 //! byte-parity is verified separately in `framing_byte_parity.rs`.
 
-#![allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#![allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 
 use matter_transport::session::{SessionKeys, SessionRole};
 use matter_transport::{

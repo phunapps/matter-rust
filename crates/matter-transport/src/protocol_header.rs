@@ -283,7 +283,7 @@ pub fn build_standalone_ack_header(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod tests {
     use super::*;
 
@@ -566,7 +566,7 @@ mod tests {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod proptest_module {
     use super::*;
     use proptest::prelude::*;

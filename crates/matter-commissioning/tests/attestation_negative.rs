@@ -27,7 +27,7 @@ use matter_commissioning::{
 /// one requires changing the other AND regenerating the fixtures.
 const AT_UNIX: u64 = 1_800_000_000;
 
-#[allow(clippy::expect_used, clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::expect_used, clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 fn load_fixture(name: &str) -> (Dac, Pai, Paa) {
     let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")

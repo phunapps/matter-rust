@@ -93,7 +93,7 @@ fn alphabet_index(byte: u8, position: usize) -> Result<u8> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod tests {
     use super::{decode, encode};
 

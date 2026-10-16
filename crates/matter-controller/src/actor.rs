@@ -8321,7 +8321,7 @@ fn matter_time_from_unix_secs(secs: u64) -> Result<matter_cert::MatterTime, Erro
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)] // Test code: CLAUDE.md allows unwrap/expect with justification.
+#[allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests with justification (CONTRIBUTING.md).
 mod tests {
     use super::*;
     use crate::fabric::FabricConfig;

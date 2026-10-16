@@ -4,7 +4,7 @@
 //! reassembled bytes match the served image. This is the F2 integration
 //! validation; F4 upgrades the oracle to chip's live `ota-requestor-app`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: CLAUDE.md carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 
 use matter_bdx::{
     BdxMessage, BlockSender, CounterMessage, MessageType, OutgoingMessage, ReceiveAccept,

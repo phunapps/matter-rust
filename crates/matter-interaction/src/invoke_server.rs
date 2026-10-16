@@ -272,7 +272,7 @@ pub fn build_invoke_response_status(path: CommandPath, status: ImStatus) -> Vec<
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: CLAUDE.md carve-out.
+    #![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     use super::*;
     use crate::invoke::{build_invoke_request, parse_invoke_response, InvokeResponse};
 

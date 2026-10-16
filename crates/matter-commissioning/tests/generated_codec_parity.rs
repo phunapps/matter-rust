@@ -26,7 +26,7 @@
 //! `matter-clusters` is a dev-dependency here only (`Cargo.toml`), so this
 //! test adds nothing to the commissioning crate's runtime graph.
 
-// Test-code carve-out: see CLAUDE.md.
+// Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![forbid(unsafe_code)]
 

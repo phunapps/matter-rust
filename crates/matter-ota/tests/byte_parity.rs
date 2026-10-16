@@ -33,7 +33,7 @@
 //! `matter-interaction`, so only the OTA cluster-level fields are frozen here.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-// Test code: CLAUDE.md carve-out.
+// Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 // The field-by-field wire-layout doc comments name spec fields (VendorID,
 // UpdateToken, …) in prose alongside hex; backticking each is noise here.
 #![allow(clippy::doc_markdown)]

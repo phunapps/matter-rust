@@ -1071,7 +1071,7 @@ impl<'a> TlvReader<'a> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test code: CLAUDE.md allows unwrap with a documented justification.
+#[allow(clippy::unwrap_used)] // Test code: unwrap is allowed in tests with a documented justification (CONTRIBUTING.md).
 mod tests {
     use super::*;
 

@@ -41,7 +41,7 @@
 // the `driver` feature is on. Without it the file is empty (CI runs
 // `--all-features`; plain `cargo test` then skips it cleanly).
 #![cfg(feature = "driver")]
-// Test-code carve-out: see CLAUDE.md.
+// Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 // Domain acronyms (VID, PID, PASE, CASE, NOC, RCAC, PBKDF, mDNS) are prose, not
 // code items; and `commission`/`commissioner`/`commissioned` are intentionally
@@ -400,7 +400,7 @@ async fn run_loopback_commission_with_icac() {
         (now(), MatterTime::NO_EXPIRY),
         &SystemNocRng,
     )
-    .expect("issue icac under fabric RCAC"); // Test-code carve-out: see CLAUDE.md.
+    .expect("issue icac under fabric RCAC"); // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     let icac_subject = icac_cert.subject().clone();
 
     fabric.icac_signer = Some(Arc::new(icac_signer));

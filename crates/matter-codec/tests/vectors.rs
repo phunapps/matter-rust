@@ -11,7 +11,7 @@
 //! load time and counted as "skipped". Phase 2 and beyond will widen the
 //! filter.
 
-// CLAUDE.md test-code carve-out: unwrap / expect with documented justification.
+// Test code: unwrap/expect are allowed in tests with documented justification (CONTRIBUTING.md).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::fs;

@@ -22,7 +22,7 @@
 // Uses the `driver`-gated `run_pase_with`. Without the feature the file is
 // empty (CI runs `--all-features`; plain `cargo test` skips it cleanly).
 #![cfg(feature = "driver")]
-// Test-code carve-outs: unwrap/expect per CLAUDE.md; the single end-to-end test
+// Test-code carve-outs: unwrap/expect (CONTRIBUTING.md); the single end-to-end test
 // is deliberately long (full handshake device script inline for readability).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::too_many_lines)]
 

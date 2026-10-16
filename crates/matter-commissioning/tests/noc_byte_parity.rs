@@ -15,7 +15,7 @@
     clippy::redundant_closure_for_method_calls,
     clippy::single_match_else,
     clippy::doc_markdown
-)] // Test-code carve-out: see CLAUDE.md.
+)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 #![allow(unreachable_pub)]
 
 use std::fs;

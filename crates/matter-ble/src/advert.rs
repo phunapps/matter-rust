@@ -52,7 +52,7 @@ impl CommissionableAdvert {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)] // Test code: CLAUDE.md carve-out.
+    #![allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     use super::*;
 
     // Vector: test-vectors/btp/advert.json "pi_default_disc"

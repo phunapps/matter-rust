@@ -873,7 +873,7 @@ fn build_session_keys(ke: [u8; 16], blob_48: &[u8; 48]) -> PaseSessionKeys {
 // =============================================================================
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod tests {
     use super::*;
     use crate::pase::messages::PbkdfParamResponse;

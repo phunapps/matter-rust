@@ -23,7 +23,7 @@
 //! culprits are TLV field ordering, session ID injection, or `responder_random`
 //! mismatch in `PBKDFParamResponse`.
 
-#![allow(clippy::expect_used)] // tests carve-out per CLAUDE.md
+#![allow(clippy::expect_used)] // Test code: expect is allowed in tests (CONTRIBUTING.md).
 #![allow(clippy::doc_markdown)] // test module docs need not link every identifier
 #![allow(clippy::struct_field_names)] // fixture field names must match JSON keys verbatim
 

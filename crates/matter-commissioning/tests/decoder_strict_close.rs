@@ -25,7 +25,7 @@
 //!   decoy message must also be well-formed-strict: truncation inside the
 //!   decoy is rejected too.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: CLAUDE.md carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 
 use matter_codec::{Error as CodecError, Tag, TlvWriter};
 use matter_commissioning::clusters::general_commissioning::{

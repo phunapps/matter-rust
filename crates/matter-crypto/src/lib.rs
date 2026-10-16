@@ -85,7 +85,7 @@ pub fn random_bytes(buf: &mut [u8]) -> Result<()> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod tests {
     #[test]
     fn random_bytes_fills_and_varies() {

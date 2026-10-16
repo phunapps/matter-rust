@@ -305,7 +305,7 @@ pub(crate) fn parse_window_status(reports: &[(AttributePath, Value)]) -> WindowS
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test code: CLAUDE.md test-code carve-out.
+#[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod tests {
     use super::*;
 

@@ -99,7 +99,7 @@ pub(crate) fn parse_bindings(reports: &[(AttributePath, Value)]) -> Vec<BindingT
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: CLAUDE.md carve-out.
+    #![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     use super::*;
 
     #[test]

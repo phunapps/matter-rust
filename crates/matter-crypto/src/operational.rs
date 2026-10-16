@@ -262,7 +262,7 @@ pub fn group_multicast_ipv6(fabric_id: u64, group_id: u16) -> std::net::Ipv6Addr
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod tests {
     use super::*;
 

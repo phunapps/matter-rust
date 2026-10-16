@@ -1255,7 +1255,7 @@ async fn pump_loop(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #![allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     use super::*;
     use crate::advert::CommissionableAdvert;
 

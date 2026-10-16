@@ -25,7 +25,7 @@
 //! unrelated reason, such as `MissingField`, would pass unnoticed.
 
 #![forbid(unsafe_code)]
-#![allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+#![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use matter_codec::Error as CodecError;

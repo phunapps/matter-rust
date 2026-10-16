@@ -951,7 +951,7 @@ fn build_nonce(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod tests {
     use super::*;
     use crate::error::Error;
@@ -1942,7 +1942,7 @@ mod tests {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod replay_proptest {
     use super::*;
     use proptest::prelude::*;

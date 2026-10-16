@@ -506,7 +506,7 @@ pub fn decode_noc_response(tlv: &[u8]) -> Result<NocResponse, NocError> {
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::items_after_statements
-)] // Test-code carve-out: see CLAUDE.md.
+)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod tests {
     use super::*;
     use matter_codec::{Tag, TlvWriter};

@@ -175,7 +175,7 @@ pub(crate) fn attribute_path_from_reader(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)] // Test code: CLAUDE.md carve-out.
+    #![allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     use super::*;
     // `Element` / `TlvReader` / `Tag` arrive via `use super::*` (the module's
     // own matter_codec import); only the writer is extra here.

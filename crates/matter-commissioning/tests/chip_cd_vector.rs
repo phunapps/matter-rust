@@ -17,7 +17,7 @@
 //!   `src/credentials/examples/DeviceAttestationCredsExample.cpp`
 //! * `CSA-CD-Signing-Key-001.der` — `credentials/production/cd-certs/`
 
-#![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: CLAUDE.md allows unwrap/expect with justification.
+#![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests with justification (CONTRIBUTING.md).
 
 use matter_commissioning::attestation::cd::{verify_certification_declaration, CdSigningRoots};
 use matter_commissioning::attestation::{ProductId, VendorId};

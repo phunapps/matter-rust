@@ -73,7 +73,7 @@ const P: [[u8; 10]; 8] = [
 const INV: [u8; 10] = [0, 4, 3, 2, 1, 5, 6, 7, 8, 9];
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod tests {
     use super::{check_digit, verify};
 

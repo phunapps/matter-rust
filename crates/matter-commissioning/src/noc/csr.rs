@@ -257,7 +257,7 @@ fn ct_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
     clippy::cast_possible_truncation,
     clippy::doc_markdown,
     clippy::manual_assert
-)] // Test-code carve-out: see CLAUDE.md.
+)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod tests {
     use super::*;
     use matter_codec::{Tag, TlvWriter};

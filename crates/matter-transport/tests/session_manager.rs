@@ -8,7 +8,7 @@
 //! draining, concurrent-exchange isolation, and the payload-too-large
 //! guard with the protocol header included.
 
-#![allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#![allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 
 use std::time::{Duration, Instant};
 

@@ -762,7 +762,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn verify_accepts_der_encoded_ecdsa_signature() {
         // CMS `SignerInfo.signature` carries ECDSA signatures as a DER
         // `ECDSA-Sig-Value` (SEQUENCE of r, s) — confirmed on a real
@@ -794,7 +794,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn parse_pem_public_key_extracts_65_byte_sec1_point() {
         const PEM: &[u8] = include_bytes!("./csa_cd_signing_roots/csa-test-cd-signing-root.pem");
         let key = parse_pem_public_key(PEM).expect("happy path parses");
@@ -803,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn parse_pem_public_key_rejects_garbage() {
         let err = parse_pem_public_key(b"not a PEM").expect_err("garbage rejected");
         assert!(matches!(
@@ -813,7 +813,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn from_pem_empty_input_yields_empty_trust_store() {
         let trust = CdSigningRoots::from_pem(&[]).unwrap();
         assert!(trust.is_empty());
@@ -821,7 +821,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn from_cert_der_extracts_p256_pubkey_from_x509_cert() {
         // Real-world CD signing roots (CSA DCL / connectedhomeip
         // `credentials/production/cd-certs/`) are X.509 certificates, not bare
@@ -869,7 +869,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn from_cert_der_rejects_non_certificate_bytes() {
         let err = CdSigningRoots::from_cert_der(&[b"not a certificate"])
             .expect_err("garbage DER rejected");
@@ -881,7 +881,7 @@ mod tests {
 
     #[test]
     fn parse_inner_cd_tlv_extracts_vendor_id_and_pid_list() {
-        // Test-code carve-out: see CLAUDE.md.
+        // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
         #![allow(clippy::unwrap_used, clippy::expect_used)]
         use matter_codec::{Tag, TlvWriter};
         let mut buf = Vec::new();
@@ -932,7 +932,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn parse_inner_cd_tlv_extracts_authorized_paa_list() {
         let a = [0xAAu8; 20];
         let b = [0xBBu8; 20];
@@ -973,7 +973,7 @@ mod tests {
 
     #[test]
     fn parse_inner_cd_tlv_ignores_forward_compat_fields() {
-        // Test-code carve-out: see CLAUDE.md.
+        // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
         #![allow(clippy::unwrap_used, clippy::expect_used)]
         use matter_codec::{Tag, TlvWriter};
         // Hand-roll a CD with tag 0 (format_version), tag 1 (vid), tag 2 (pids),
@@ -1004,7 +1004,7 @@ mod tests {
     /// Write a decoy container three levels deep (ctx 12 → ctx 13 →
     /// ctx 14) whose innermost members are both `dac_origin_*` overrides,
     /// preceded by a VID and a PID array when `with_vid_pids` is set.
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn write_deep_cd_decoy(w: &mut matter_codec::TlvWriter<'_>, with_vid_pids: bool) {
         use matter_codec::Tag;
         w.start_structure(Tag::Context(12)).unwrap();
@@ -1029,7 +1029,7 @@ mod tests {
     /// CD's own and its first end-of-container ended the CD, so the real
     /// fields after it were never seen.
     #[test]
-    #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn parse_inner_cd_tlv_skips_decoy_container_before_real_fields() {
         use matter_codec::{Tag, TlvWriter};
         let mut buf = Vec::new();
@@ -1052,7 +1052,7 @@ mod tests {
     /// A decoy after the real fields must not supply the `dac_origin_*`
     /// overrides. Before the fix its inner ctx 9/10 were read as overrides.
     #[test]
-    #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn parse_inner_cd_tlv_decoy_container_does_not_set_dac_origin() {
         use matter_codec::{Tag, TlvWriter};
         let mut buf = Vec::new();
@@ -1073,7 +1073,7 @@ mod tests {
     }
 
     /// Encode a CD `{1: 0xFFF1, 2: [0x8000, <entry>], <extra>}` and parse it.
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn parse_cd_with(
         pid_entry: impl FnOnce(&mut matter_codec::TlvWriter<'_>),
         extra: impl FnOnce(&mut matter_codec::TlvWriter<'_>),
@@ -1105,7 +1105,7 @@ mod tests {
     /// (`CertificationDeclaration.cpp:241/246`), so any other entry
     /// rejects the CD. A container nested three deep is one such entry.
     #[test]
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn parse_inner_cd_tlv_rejects_container_inside_pid_array() {
         use matter_codec::Tag;
         let r = parse_cd_with(
@@ -1125,7 +1125,7 @@ mod tests {
 
     /// A tagged PID entry is rejected (chip: `CHIP_ERROR_UNEXPECTED_TLV_ELEMENT`).
     #[test]
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn parse_inner_cd_tlv_rejects_tagged_pid_entry() {
         use matter_codec::Tag;
         let r = parse_cd_with(|w| w.put_uint(Tag::Context(0), 0x8001).unwrap(), |_| {});
@@ -1134,7 +1134,7 @@ mod tests {
 
     /// A signed-integer PID entry is rejected (chip: `CHIP_ERROR_WRONG_TLV_TYPE`).
     #[test]
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn parse_inner_cd_tlv_rejects_signed_pid_entry() {
         use matter_codec::Tag;
         let r = parse_cd_with(|w| w.put_int(Tag::Anonymous, 0x8001).unwrap(), |_| {});
@@ -1147,7 +1147,7 @@ mod tests {
     /// restriction: before the fix a Structure holding a valid SKID parsed
     /// with no PAA constraint.
     #[test]
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn parse_inner_cd_tlv_rejects_non_array_authorized_paa_list() {
         use matter_codec::Tag;
         for as_list in [false, true] {
@@ -1169,7 +1169,7 @@ mod tests {
 
     /// A scalar `authorized_paa_list` (tag 11) rejects the CD too.
     #[test]
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn parse_inner_cd_tlv_rejects_scalar_authorized_paa_list() {
         use matter_codec::Tag;
         let r = parse_cd_with(
@@ -1184,7 +1184,7 @@ mod tests {
     /// fails on it (`CertificationDeclaration.cpp:273-277`). Before the fix
     /// it was dropped and the DAC bound against the CD's own VID and PIDs.
     #[test]
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn parse_inner_cd_tlv_rejects_non_uint_dac_origin() {
         use matter_codec::Tag;
         let r = parse_cd_with(
@@ -1233,7 +1233,7 @@ mod tests {
 
     #[test]
     fn parse_inner_cd_tlv_rejects_missing_vid() {
-        // Test-code carve-out: see CLAUDE.md.
+        // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
         #![allow(clippy::unwrap_used, clippy::expect_used)]
         use matter_codec::{Tag, TlvWriter};
         let mut buf = Vec::new();
@@ -1254,7 +1254,7 @@ mod tests {
 
     #[test]
     fn parse_inner_cd_tlv_rejects_garbage() {
-        // Test-code carve-out: see CLAUDE.md.
+        // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
         #![allow(clippy::unwrap_used, clippy::expect_used)]
         let err = parse_inner_cd_tlv(&[0xFF]).expect_err("garbage rejected");
         assert!(matches!(
@@ -1265,7 +1265,7 @@ mod tests {
 
     #[test]
     fn parse_inner_cd_tlv_captures_dac_origin_fields() {
-        // Test-code carve-out: see CLAUDE.md.
+        // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
         #![allow(clippy::unwrap_used, clippy::expect_used)]
         let tlv = build_inner_cd_tlv(0xFFF1, 0x8001, Some(0x1234), Some(0x5678), &[0x8001]);
         let parsed = parse_inner_cd_tlv(&tlv).expect("decodes with dac_origin");
@@ -1301,7 +1301,7 @@ mod tests {
     ///
     /// Mirrors `xtask/src/capture_cd.rs::build_inner_cd_tlv` but adds the
     /// optional tags 9/10 so the `dac_origin` override path can be exercised.
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn build_inner_cd_tlv(
         vendor_id: u16,
         product_id: u16,
@@ -1347,7 +1347,7 @@ mod tests {
     /// `ContentInfo` DER blob with the bundled CSA-test key, using the
     /// no-`signedAttrs` shape the verifier expects. Mirrors
     /// `xtask/src/capture_cd.rs::sign_into_cms`.
-    #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn sign_into_cms(content: &[u8]) -> Vec<u8> {
         use cms::cert::IssuerAndSerialNumber;
         use cms::content_info::{CmsVersion, ContentInfo};
@@ -1430,7 +1430,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn dac_origin_present_dac_matches_origin_is_accepted() {
         // CD's own vendor_id/product_id_array are 0xFFF1 / 0x8001, but
         // dac_origin says the DAC is scoped to 0x1234 / 0x5678. A DAC at
@@ -1450,7 +1450,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn dac_origin_present_dac_matches_neither_is_rejected() {
         // dac_origin = 0x1234/0x5678. A DAC at 0xFFF1/0x8001 (the CD's own
         // vendor_id/pid) must be REJECTED, because the override path binds
@@ -1479,7 +1479,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn no_dac_origin_uses_vendor_id_and_pid_array() {
         // Without dac_origin, the standard path compares against the CD's
         // own vendor_id / product_id_array (unchanged behaviour).

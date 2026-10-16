@@ -397,7 +397,7 @@ pub(crate) fn acl_retains_admin(entries: &[AclEntry], our_node_id: u64) -> bool 
 // ── tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test code: CLAUDE.md test-code carve-out.
+#[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod tests {
     use super::*;
     use matter_codec::{TlvReader, TlvWriter};

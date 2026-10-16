@@ -8,7 +8,7 @@
 //! (`mandatoryOnWrite`), `Alias` is fabric-sensitive but optional in the model
 //! itself, and `Note` is an ordinary optional field.
 
-// Test-code carve-out for unwrap (CLAUDE.md): a failure here is a test failure.
+// Test code: unwrap is allowed in tests (CONTRIBUTING.md); a failure here is a test failure.
 #![allow(clippy::unwrap_used)]
 
 use crate::error::ClusterError;

@@ -118,7 +118,7 @@ impl HandshakeResponse {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)] // Test code: CLAUDE.md carve-out.
+    #![allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     use super::*;
 
     // Vector: test-vectors/btp/handshake.json "our_canonical_request"

@@ -343,7 +343,7 @@ mod tests {
     );
 
     #[test]
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn paa_to_trust_anchor_works_on_bundled_csa_root() {
         let store = PaaTrustStore::with_example_device_roots();
         let paa = store.iter().next().unwrap();
@@ -353,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used, clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used, clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn verify_chain_happy_path_on_csa_test_vectors() {
         let dac = Dac::from_der(HAPPY_DAC).unwrap();
         let pai = Pai::from_der(HAPPY_PAI).unwrap();
@@ -412,7 +412,7 @@ mod tests {
     ///
     /// Validity windows bracket `at_unix` exactly as `build_mock_device_pki`
     /// does, so the resulting chain validates at that instant.
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn build_synthetic_chain(
         at_unix: u64,
         paa_vid: Option<u16>,
@@ -502,7 +502,7 @@ mod tests {
     }
 
     /// Build a single-PAA trust store from the synthetic PAA DER.
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn store_with(paa_der: &[u8]) -> PaaTrustStore {
         let mut store = PaaTrustStore::empty();
         store.add(Paa::from_der(paa_der).expect("synthetic PAA parses"));
@@ -512,7 +512,7 @@ mod tests {
     const SYNTH_AT_UNIX: u64 = 1_800_000_000; // ~2027-01-15, inside every window.
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn vid_scoped_paa_matching_device_vid_is_accepted() {
         // VID-scoped PAA (0xFFF1) anchoring a 0xFFF1 device → no mismatch.
         let chain = build_synthetic_chain(SYNTH_AT_UNIX, Some(0xFFF1), 0xFFF1, 0x8001);
@@ -527,7 +527,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn vid_scoped_paa_mismatched_device_vid_is_rejected() {
         // VID-scoped PAA (0xFFF2) anchoring a 0xFFF1 device. webpki accepts
         // the DN-chained path (the VID OID is opaque to it), so the §6.2.2.1
@@ -553,7 +553,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn non_vid_scoped_paa_imposes_no_vid_constraint() {
         // Non-VID-scoped PAA anchoring a 0xFFF1 device → accepted; the
         // overlay short-circuits on subject_vid() == None.

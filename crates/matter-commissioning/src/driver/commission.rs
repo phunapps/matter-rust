@@ -1450,7 +1450,7 @@ where
     clippy::expect_used,
     clippy::items_after_statements, // nested struct/impl in test body
     clippy::too_many_lines          // CASE integration tests are inherently verbose
-)] // Test-code carve-out: see CLAUDE.md.
+)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod tests {
     use super::*;
 

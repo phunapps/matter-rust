@@ -8,8 +8,8 @@
 //! (2) re-serialisation produces byte-for-byte identical output, and
 //! (3) the manifest is non-empty (regression guard against an empty capture).
 
-// CLAUDE.md test-code carve-out: unwrap / expect are allowed in test code
-// provided there is a documented justification. Here they are used to fail
+// Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md), provided
+// there is a documented justification. Here they are used to fail
 // the test with a clear message that names the offending cert ID.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

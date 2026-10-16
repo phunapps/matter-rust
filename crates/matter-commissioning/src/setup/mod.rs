@@ -595,7 +595,7 @@ pub fn parse_manual_code(s: &str) -> Result<SetupPayload> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod error_tests {
     use super::Error;
 
@@ -633,7 +633,7 @@ mod error_tests {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod discriminator_tests {
     use super::{Discriminator, Error};
 
@@ -666,7 +666,7 @@ mod discriminator_tests {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod passcode_tests {
     use super::{Error, Passcode};
 
@@ -754,7 +754,7 @@ mod passcode_tests {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod commissioning_flow_tests {
     use super::{CommissioningFlow, Error};
 
@@ -806,7 +806,7 @@ mod commissioning_flow_tests {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod discovery_capabilities_tests {
     use super::DiscoveryCapabilities;
 
@@ -848,7 +848,7 @@ mod discovery_capabilities_tests {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod setup_payload_tests {
     use super::*;
 
@@ -897,7 +897,7 @@ mod setup_payload_tests {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod qr_api_tests {
     use super::*;
     use crate::setup::setup_payload_tests::spec_example_payload;
@@ -948,7 +948,7 @@ mod qr_api_tests {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod manual_api_tests {
     use super::*;
 

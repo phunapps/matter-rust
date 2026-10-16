@@ -102,7 +102,7 @@ pub fn decode_checkin(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: CLAUDE.md carve-out.
+    #![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     use super::*;
 
     fn unhex(s: &str) -> Vec<u8> {

@@ -10,7 +10,7 @@
 //! matter.js byte-parity is M3.3's job.
 
 // Test-code carve-out: unwrap/expect are acceptable in integration tests.
-// See CLAUDE.md for the policy.
+// See CONTRIBUTING.md for the policy.
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]
 

@@ -9,8 +9,8 @@
 //! No MRP timing assertions — M5.2's simulated-clock tests cover that.
 
 #![cfg(feature = "tokio")]
-#![allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
-#![allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+#![allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
+#![allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};

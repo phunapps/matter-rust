@@ -1024,7 +1024,7 @@ fn encode_extensions_block_into(out: &mut Vec<u8>, ext: &Extensions) {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod tests {
     use super::*;
     use crate::extensions::{BasicConstraints, KeyIdentifier, KeyUsage};

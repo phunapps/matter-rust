@@ -1,7 +1,7 @@
 //! M6.4.3 — `verify_certification_declaration` against synthetic CSA
 //! test fixtures captured by `cargo xtask capture-cd`.
 
-// Test-code carve-out: see CLAUDE.md.
+// Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::PathBuf;

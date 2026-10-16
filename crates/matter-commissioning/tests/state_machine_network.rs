@@ -12,7 +12,7 @@
 //! crypto path is exercised in the in-source glass-box tests in
 //! `src/state_machine/commissioner.rs::tests`.
 
-// Test-code carve-out: see CLAUDE.md.
+// Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::sync::{Arc, OnceLock};

@@ -10,7 +10,7 @@
 //! documented errors are checked: `OtaError::Tlv(TrailingData)` for trailing
 //! bytes, and `OtaError::Tlv(UnclosedContainer)` for the struct one byte short.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: CLAUDE.md carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 
 use matter_clusters::gen::ota_software_update_provider as prov;
 use matter_codec::Error as CodecError;

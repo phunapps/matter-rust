@@ -292,7 +292,7 @@ mod tests {
     );
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn dac_from_der_parses_happy_path() {
         let dac = Dac::from_der(DAC_DER).expect("happy-path DAC parses");
         assert_eq!(dac.subject_vid(), VendorId::new(0xFFF1));
@@ -300,14 +300,14 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn dac_round_trips_der_bytes() {
         let dac = Dac::from_der(DAC_DER).unwrap();
         assert_eq!(dac.der(), DAC_DER);
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn dac_public_key_is_sec1_uncompressed_p256() {
         let dac = Dac::from_der(DAC_DER).unwrap();
         let pk = dac.public_key();
@@ -317,21 +317,21 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn dac_from_der_rejects_empty_input() {
         let err = Dac::from_der(&[]).expect_err("empty bytes must error");
         assert!(matches!(err, AttestationError::Parse(_)));
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn dac_from_der_rejects_truncated_input() {
         let err = Dac::from_der(&DAC_DER[..10]).expect_err("truncated must error");
         assert!(matches!(err, AttestationError::Parse(_)));
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn dac_from_der_rejects_random_bytes() {
         let garbage = vec![0xAA; 256];
         let err = Dac::from_der(&garbage).expect_err("garbage must error");
@@ -343,7 +343,7 @@ mod tests {
     );
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn pai_from_der_parses_happy_path() {
         let pai = Pai::from_der(PAI_DER).expect("happy-path PAI parses");
         assert_eq!(pai.subject_vid(), VendorId::new(0xFFF1));
@@ -352,14 +352,14 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn pai_round_trips_der_bytes() {
         let pai = Pai::from_der(PAI_DER).unwrap();
         assert_eq!(pai.der(), PAI_DER);
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn pai_public_key_is_sec1_uncompressed_p256() {
         let pai = Pai::from_der(PAI_DER).unwrap();
         let pk = pai.public_key();
@@ -368,7 +368,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn pai_from_der_rejects_garbage() {
         let err = Pai::from_der(&vec![0xAA; 256]).expect_err("garbage must error");
         assert!(matches!(err, AttestationError::Parse(_)));
@@ -378,28 +378,28 @@ mod tests {
     const PAA_NOVID_DER: &[u8] = include_bytes!("csa_test_roots/Chip-Test-PAA-NoVID-Cert.der");
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn paa_from_der_parses_vid_scoped_root() {
         let paa = Paa::from_der(PAA_FFF1_DER).expect("VID-scoped PAA parses");
         assert_eq!(paa.subject_vid(), Some(VendorId::new(0xFFF1)));
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn paa_from_der_parses_unscoped_root() {
         let paa = Paa::from_der(PAA_NOVID_DER).expect("non-VID-scoped PAA parses");
         assert_eq!(paa.subject_vid(), None);
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn paa_round_trips_der_bytes() {
         let paa = Paa::from_der(PAA_FFF1_DER).unwrap();
         assert_eq!(paa.der(), PAA_FFF1_DER);
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn paa_public_key_is_sec1_uncompressed_p256() {
         let paa = Paa::from_der(PAA_FFF1_DER).unwrap();
         assert_eq!(paa.public_key().len(), 65);
@@ -407,7 +407,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn paa_from_der_rejects_garbage() {
         let err = Paa::from_der(&vec![0xAA; 256]).expect_err("garbage must error");
         assert!(matches!(err, AttestationError::Parse(_)));

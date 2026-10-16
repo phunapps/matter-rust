@@ -146,7 +146,7 @@ mod tests {
 
     #[test]
     fn happy_path_advances_through_all_stages() {
-        // Test-code carve-out: see CLAUDE.md.
+        // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
         #![allow(clippy::unwrap_used)]
         let expected = [
             Stage::SecurePairing,

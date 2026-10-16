@@ -191,7 +191,7 @@ mod tests {
     );
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn extract_vid_finds_dac_vid() {
         let (_, cert) = X509Certificate::from_der(DAC_DER).expect("happy-path DAC parses");
         let vid = super::extract_vid(cert.subject())
@@ -201,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn extract_pid_finds_dac_pid() {
         let (_, cert) = X509Certificate::from_der(DAC_DER).expect("happy-path DAC parses");
         let pid = super::extract_pid(cert.subject())
@@ -211,7 +211,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn matter_vid_oid_constant_matches_spec_arc() {
         // Round-trip the OID's components to confirm the const
         // assembles the arc we intended (Matter §6.5.6.1).

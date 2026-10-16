@@ -258,7 +258,7 @@ pub enum Sigma1Outcome {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod secret_hygiene_tests {
     use super::*;
     use matter_cert::test_support::{build_unsigned, TestCertFields};

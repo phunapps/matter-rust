@@ -23,7 +23,7 @@
 //!   (non-critical); subject VID 0xFFF1 + PID 0x8001.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-// Test-code carve-out: see CLAUDE.md.
+// Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 // `paa_pkcs8`/`paa_pk` (and pai_/dac_ peers) are intentionally paired
 // names: the PKCS#8 private key and its public-key half. The similarity
 // is meaningful, not accidental.

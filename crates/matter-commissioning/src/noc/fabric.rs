@@ -184,7 +184,7 @@ impl FabricRecord {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod tests {
     use super::*;
     use crate::noc::error::SystemNocRng;
@@ -229,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    #[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     fn rcac_carries_mandatory_authority_key_identifier() {
         // Matter (spec §6.5.11.3) makes authority-key-id MANDATORY on every
         // Matter cert, including the self-signed RCAC (AKI = SKI) — stricter

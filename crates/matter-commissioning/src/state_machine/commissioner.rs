@@ -1383,7 +1383,7 @@ pub struct TestStateSeeds {
 
 #[cfg(test)]
 mod tests {
-    // Test-code carve-out: see CLAUDE.md.
+    // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;

@@ -20,8 +20,9 @@
 //! matter-transport's (`debug_redaction_tests` there); each crate keeps its
 //! own copy so the crates stay independent.
 
-// Test code: CLAUDE.md carve-out. Every `unwrap` here is on a constructor
-// fed known-valid input (the spec's test passcode, a fresh fabric).
+// Test code: unwrap is allowed in tests (CONTRIBUTING.md). Every `unwrap`
+// here is on a constructor fed known-valid input (the spec's test passcode, a
+// fresh fabric).
 #![allow(clippy::unwrap_used)]
 
 use crate::setup::{

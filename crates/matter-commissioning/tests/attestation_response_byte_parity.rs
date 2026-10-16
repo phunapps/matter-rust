@@ -62,7 +62,7 @@ enum Verdict {
 
 const FIXTURE: &str = include_str!("../../../test-vectors/attestation/response/happy-path.json");
 
-#[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 #[allow(clippy::cast_possible_truncation)] // `to_digit(16)` is always 0..=15; truncation to u8 is safe.
 fn hex_to_vec(s: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.len() / 2);
@@ -82,7 +82,7 @@ fn hex_to_vec(s: &str) -> Vec<u8> {
 }
 
 #[test]
-#[allow(clippy::expect_used, clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::expect_used, clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 fn rust_verifier_agrees_with_matter_js_on_happy_path_and_mutations() {
     let fx: Fixture = serde_json::from_str(FIXTURE).expect("fixture JSON parses");
     assert_eq!(fx.scenario, "happy-path");

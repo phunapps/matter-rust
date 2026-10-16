@@ -14,7 +14,7 @@
 //! (the RE-ENC observation). The fixed-point check is NaN-safe (float bit
 //! patterns survive decode→encode) where a `Value` equality would not be.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: CLAUDE.md carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 
 use matter_codec::{TlvReader, TlvWriter, Value};
 

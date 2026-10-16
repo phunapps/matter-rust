@@ -201,7 +201,7 @@ pub(crate) fn deserialize_record(bytes: &[u8]) -> Result<StoredResumption, Error
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)] // Test code: CLAUDE.md carve-out.
+#[allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod tests {
     use super::*;
 

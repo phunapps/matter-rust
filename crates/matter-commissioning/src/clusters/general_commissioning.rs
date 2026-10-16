@@ -292,7 +292,7 @@ pub fn decode_basic_commissioning_info(tlv: &[u8]) -> Option<BasicCommissioningI
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::items_after_statements
-)] // Test-code carve-out: see CLAUDE.md.
+)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 mod tests {
     use super::*;
 
@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn malformed_response_returns_error() {
-        // Test-code carve-out: see CLAUDE.md.
+        // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
         let err = decode_arm_fail_safe_response(&[0xFF]).expect_err("should fail");
         assert!(
             matches!(

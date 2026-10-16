@@ -1,5 +1,5 @@
 // Integration tests are a binary crate; crate-level docs are not required.
-// Test-code carve-out for unwrap/expect: see CLAUDE.md.
+// Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 #![allow(
     missing_docs,
     clippy::expect_used,

@@ -4,7 +4,7 @@
 //! Tier 2: hand-written negative tests, one per failure mode (this file).
 //! Tier 3: proptest properties.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+#![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 
 mod common;
 

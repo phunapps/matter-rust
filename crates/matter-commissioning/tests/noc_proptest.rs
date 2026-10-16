@@ -1,7 +1,7 @@
 //! M6.3.2 property tests.
 
 #![forbid(unsafe_code)]
-#![allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#![allow(clippy::unwrap_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 
 use std::sync::Arc;
 

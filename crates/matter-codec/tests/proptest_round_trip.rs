@@ -8,7 +8,7 @@
 //! Floats exclude NaN because `NaN != NaN` would make the equality
 //! assertion meaningless. Infinity is allowed (`Inf == Inf` is true).
 
-// CLAUDE.md test-code carve-out: unwrap / expect with documented justification.
+// Test code: unwrap/expect are allowed in tests with documented justification (CONTRIBUTING.md).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use matter_codec::{Element, Tag, TlvReader, TlvWriter, Value};

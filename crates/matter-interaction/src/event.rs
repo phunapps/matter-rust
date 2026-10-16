@@ -410,7 +410,7 @@ pub(crate) fn parse_event_reports(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: CLAUDE.md test-code carve-out.
+    #![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
     use super::*;
     use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
 

@@ -16,7 +16,7 @@ const PAI_DER: &[u8] = include_bytes!(
 );
 
 #[test]
-#[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 fn dac_parses_with_expected_identifiers() {
     let dac = Dac::from_der(DAC_DER).expect("happy-path DAC parses");
     assert_eq!(dac.subject_vid(), VendorId::new(0xFFF1));
@@ -27,7 +27,7 @@ fn dac_parses_with_expected_identifiers() {
 }
 
 #[test]
-#[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::expect_used)] // Test code: unwrap/expect are allowed in tests (CONTRIBUTING.md).
 fn pai_parses_with_expected_identifiers() {
     let pai = Pai::from_der(PAI_DER).expect("happy-path PAI parses");
     assert_eq!(pai.subject_vid(), VendorId::new(0xFFF1));

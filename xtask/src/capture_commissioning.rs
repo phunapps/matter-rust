@@ -18,9 +18,9 @@
 //! exit verbatim.
 
 #![forbid(unsafe_code)]
-// xtask is build tooling, not library code; the CLAUDE.md no-unwrap
-// rule is for library code only. The existing capture-* modules apply
-// the same allow.
+// xtask is build tooling, not library code; the no-unwrap rule
+// (CONTRIBUTING.md) is for library code only. The existing capture-*
+// modules apply the same allow.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::PathBuf;
