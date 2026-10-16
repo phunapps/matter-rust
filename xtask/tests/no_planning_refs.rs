@@ -159,12 +159,37 @@ const POINTERS: &[Rule] = &[
         what: "a private audit item or finding number",
         // The audit's dated event ("the 2026-06-12 audit") is history and
         // passes; its item and finding numbers point into the private report.
-        regex: r"(?i:\baudit (?:item|finding)s? #?[A-Z]?\d+)|(?i:\baudit #\d+)|\bfinding [HML]\d{1,2}\b|\b[HML]\d{1,2} (?:fix|regression)\b",
+        // The last alternative leaves out the M severity, because M1-M9 are
+        // public milestones ("the M6 fix"), and it skips a hyphenated label,
+        // so the public harness milestone written in full ("the M9-H6
+        // regression test") passes. A bare "H6" there still fails: write the
+        // milestone in full.
+        regex: r"(?i:\baudit (?:item|finding)s? #?[A-Z]?\d+)|(?i:\baudit #\d+)|\b[Ff]inding [HML]\d{1,2}\b|(?<![-\w])[HL]\d{1,2} (?:fix|regression)\b",
         examples: &[
             "(2026-06-12 audit item #1)",
             "see audit #4",
             "the high finding H1 says",
+            "Finding H1 says",
             "Before the H1 fix the initiator",
+        ],
+        except: &[],
+    },
+    Rule {
+        what: "a private test-gap analysis item id",
+        // A 2026-07-18 comparison against connectedhomeip's tests numbered its
+        // gaps `TRAN-1`, `MRP-2`, `BDX-4` and so on. Name the behaviour
+        // instead. The lookbehind lets a longer hyphenated name that only
+        // ends in one of these (a chip `TC-<area>-<n>` test-plan id) pass.
+        regex: r"(?<![-\w])(?:TRAN|MRP|IM|ATT|BDX|CODEC|SETUP|CASE)-\d+[a-z]?\b",
+        examples: &[
+            "(see TRAN-1 / [`decode_secured`])",
+            "our defaults (MRP-2).",
+            "/// (IM-1), or an empty IB.",
+            "**Attestation (ATT-1/ATT-6):**",
+            "// BDX-4: bound progress",
+            "separator by design (CODEC-1), so",
+            "// SETUP-1: reject a chunk",
+            "// CASE-1: peer-signature verification",
         ],
         except: &[],
     },
