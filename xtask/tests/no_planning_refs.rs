@@ -26,12 +26,22 @@ struct Rule {
 }
 
 /// Searched in every tracked file.
-const EVERYWHERE: &[Rule] = &[Rule {
-    what: "a path into the private planning directories",
-    regex: r"docs/superpowers|\.superpowers/",
-    examples: &["see docs/superpowers/specs/x.md"],
-    except: &[],
-}];
+const EVERYWHERE: &[Rule] = &[
+    Rule {
+        what: "a path into the private planning directories",
+        regex: r"docs/superpowers|\.superpowers/",
+        examples: &["see docs/superpowers/specs/x.md"],
+        except: &[],
+    },
+    Rule {
+        what: "the maintainer's private project-instructions file",
+        // It is git-ignored, so a reader cannot open it. The public rules are
+        // in CONTRIBUTING.md; cite that, or state the policy itself.
+        regex: r"(?i)\bclaude\.md\b",
+        examples: &["// Test-code carve-out: see CLAUDE.md."],
+        except: &[],
+    },
+];
 
 /// Searched in the [`POINTER_SCOPE`] pathspecs.
 const POINTERS: &[Rule] = &[
@@ -146,6 +156,19 @@ const POINTERS: &[Rule] = &[
         except: &[],
     },
     Rule {
+        what: "a private audit item or finding number",
+        // The audit's dated event ("the 2026-06-12 audit") is history and
+        // passes; its item and finding numbers point into the private report.
+        regex: r"(?i:\baudit (?:item|finding)s? #?[A-Z]?\d+)|(?i:\baudit #\d+)|\bfinding [HML]\d{1,2}\b|\b[HML]\d{1,2} (?:fix|regression)\b",
+        examples: &[
+            "(2026-06-12 audit item #1)",
+            "see audit #4",
+            "the high finding H1 says",
+            "Before the H1 fix the initiator",
+        ],
+        except: &[],
+    },
+    Rule {
         what: "a milestone's plan or design",
         // The label must be capitalised ("the M1 plan", "the F design"), so
         // English such as "the corrected design" or "the whole design" passes.
@@ -158,8 +181,9 @@ const POINTERS: &[Rule] = &[
 /// Where [`POINTERS`] are searched: every tracked file.
 const POINTER_SCOPE: &[&str] = &["."];
 
-/// Never searched: `.gitignore` names the private directory in order to
-/// ignore it, this file holds the patterns, and fuzz corpora are binary.
+/// Never searched: `.gitignore` names the private directory and the private
+/// project-instructions file in order to ignore them, this file holds the
+/// patterns, and fuzz corpora are binary.
 const EXCLUDED: &[&str] = &[
     ":!.gitignore",
     ":!xtask/tests/no_planning_refs.rs",
