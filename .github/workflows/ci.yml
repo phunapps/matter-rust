@@ -29,6 +29,8 @@ jobs:
         with:
           tool: just
       - run: just fmt-check
+      # node and python3 ship on ubuntu-latest; no setup step needed.
+      - run: just scripts-check
 
   clippy:
     name: clippy

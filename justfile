@@ -153,7 +153,7 @@ msrv:
 scripts-check:
     #!/usr/bin/env bash
     set -euo pipefail
-    js=$(git ls-files 'xtask/scripts/**/*.js' | grep -v '/node_modules/' || true)
+    js=$(git ls-files ':(glob)xtask/scripts/**/*.js' | grep -v '/node_modules/' || true)
     py=$(git ls-files 'scripts/*.py')
     if [ -z "$js" ] || [ -z "$py" ]; then
         echo "scripts-check: no tracked .js under xtask/scripts or .py under scripts" >&2
