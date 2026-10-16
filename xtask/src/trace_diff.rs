@@ -487,7 +487,8 @@ pub(crate) fn parse_tree(bytes: &[u8]) -> Result<Vec<Node>, String> {
 // ---------------------------------------------------------------------------
 
 /// Variance classes for legitimate cross-run differences. Everything not
-/// covered by a rule must match EXACTLY (CLAUDE.md: wrong by default).
+/// covered by a rule must match EXACTLY (if our output differs from the
+/// reference, we are wrong by default).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum VarianceClass {
     /// Fresh randomness of fixed size: nonces, ephemeral keys, raw
@@ -1730,7 +1731,7 @@ pub(crate) fn run(ours: &Path, theirs: &Path) -> Result<(), String> {
 
     if n_divergent > 0 || n_decode_fail > 0 || n_ours_only_unclassified > 0 {
         return Err(
-            "divergences found — investigate before declaring success (CLAUDE.md: wrong by default)"
+            "divergences found — investigate before declaring success (we are wrong by default)"
                 .to_string(),
         );
     }

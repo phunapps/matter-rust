@@ -95,9 +95,8 @@ pub struct NodeId(pub u64);
 pub enum DestNodeId {
     /// Unicast — `DSIZ = 0b01`.
     Node(NodeId),
-    /// Multicast group — `DSIZ = 0b10`. Group messaging is otherwise
-    /// deferred (per CLAUDE.md M0 plan); we still decode the field so a
-    /// stray group packet produces a structured error instead of garbage.
+    /// Multicast group — `DSIZ = 0b10`: the group id a group message is
+    /// addressed to.
     Group(u16),
 }
 

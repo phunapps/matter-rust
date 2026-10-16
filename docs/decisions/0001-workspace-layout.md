@@ -63,7 +63,8 @@ the publishing independence without the workflow tax.
 ### Devices and controller in one workspace alongside `rs-matter`
 
 Rejected: `rs-matter` is a separate project with different design choices. We
-do not fork it. We may converge later — see CLAUDE.md.
+do not fork it. We may converge later: if `rs-matter`'s controller side
+catches up or wants to absorb this work, that is a good outcome.
 
 ## Consequences
 
@@ -84,5 +85,4 @@ do not fork it. We may converge later — see CLAUDE.md.
 
 ## References
 
-- CLAUDE.md "Workspace structure" section.
 - Cargo book, [Workspaces](https://doc.rust-lang.org/cargo/reference/workspaces.html).

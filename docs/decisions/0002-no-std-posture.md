@@ -28,7 +28,7 @@ Two facts shape the decision:
 ## Decision
 
 **1.0 ships `std`-only across all crates. `no_std` stays
-deferred-until-requested (as CLAUDE.md's post-v1.0 list already states),
+deferred-until-requested (as the project's post-v1.0 list already states),
 and we protect the retrofit path rather than pre-building it:**
 
 - `matter-codec` and `matter-bdx` (alloc-only logic, trivial dep trees) are
@@ -41,8 +41,8 @@ and we protect the retrofit path rather than pre-building it:**
 - `matter-crypto`/`matter-cert` are gated on their crypto backend: `ring`
   has no first-class `no_std` story. A future `no_std` request means a
   backend abstraction (e.g. RustCrypto stacks) — that is a deliberate
-  post-1.0 project, not a feature flag, and per the CLAUDE.md dependency
-  rules it needs an explicit decision anyway.
+  post-1.0 project, not a feature flag, and a new crypto dependency needs an
+  explicit decision anyway.
 - No crate adds a `std` cargo feature today: an untested feature
   combination is CI surface without a consumer, and feature-gating error
   types prematurely bakes in guesses about which `no_std` profile (alloc?

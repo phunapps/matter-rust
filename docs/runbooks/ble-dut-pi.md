@@ -204,7 +204,7 @@ live handshake against this DUT to confirm or correct it.
    fragment size), update `packet_hex` and `expect` to the observed values,
    note the real MTU in the `note` field, and re-run
    `cargo test -p matter-ble` to confirm the vector-driven tests still pass
-   against the corrected bytes. Per CLAUDE.md, "if our output differs from
+   against the corrected bytes. The project rule "if our output differs from
    the reference, we are wrong by default" applies here too — chip's real
    on-wire bytes win over our hand-encoded assumption.
 

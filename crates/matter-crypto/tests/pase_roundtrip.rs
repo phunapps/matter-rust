@@ -199,7 +199,7 @@ proptest! {
     ///
     /// This covers the same state-machine surface that a fuzz target would
     /// exercise, without requiring the `cargo-fuzz` toolchain on every PR
-    /// (fuzzing runs on a weekly schedule per CLAUDE.md).
+    /// (fuzzing runs on a weekly CI schedule).
     #[test]
     fn random_byte_flip_in_pake2_never_panics(
         pin in 1u32..=99_999_998,

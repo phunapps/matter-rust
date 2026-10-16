@@ -36,7 +36,7 @@ Run locally with `just integration`; run on a schedule via the
 **Actor concurrency (M9-G-d).** The controller's long protocol handlers —
 commission and CASE connect — run off the single actor loop on spawned tasks, so
 one session's multi-round-trip handshake does not stall every other session's
-MRP retransmits / subscription liveness (2026-06-12 audit item #1, resolved). A
+MRP retransmits / subscription liveness (found in the 2026-06-12 audit, resolved). A
 CASE connect's handshake I/O still flows through the actor's own socket (no
 second socket, no session migration). This guarantee is proven by hermetic
 concurrency unit tests in `crates/matter-controller/src/actor.rs`

@@ -2342,7 +2342,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// `tokio::spawn`ed task and reports back over a channel the `select!`
     /// drains, so the loop keeps servicing every other session's inbound, MRP
     /// retransmits, and subscription-liveness checks for the whole handshake
-    /// window (audit item #1, resolved). Concretely:
+    /// window (found in the 2026-06-12 audit, resolved). Concretely:
     ///
     /// - **Commission** ([`Self::spawn_commission`]) runs on its own freshly
     ///   bound socket + discovery; on completion the device is persisted and the
@@ -3093,7 +3093,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// Commissioning is the longest protocol handler (PASE + attestation + CSR +
     /// NOC + operational CASE + config — multiple seconds). Running it inline on
     /// the actor loop would pause every other session's MRP retransmits and
-    /// liveness for that whole window (2026-06-12 audit item #1). Instead we
+    /// liveness for that whole window (found in the 2026-06-12 audit). Instead we
     /// snapshot the owned inputs, spawn `run_commission_task` on a fresh socket,
     /// and return to the loop immediately; the result arrives later on the
     /// completions channel ([`Self::handle_commission_completion`]), which

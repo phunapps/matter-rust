@@ -1,6 +1,6 @@
 # Devices tested against `matter-rust`
 
-CLAUDE.md asks us to record which Matter devices we have commissioned/controlled.
+We record here which Matter devices we have commissioned/controlled.
 Fill a row each time you run `docs/runbooks/m6.6-first-commission.md` against a device.
 
 | Device (make/model) | VID:PID | Path (A real / B rs-matter) | Date | matter.js trace diff | Notes |

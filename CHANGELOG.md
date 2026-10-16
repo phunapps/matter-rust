@@ -4688,9 +4688,9 @@ changes.
   device by discriminator, connect, discover the C1/C2 GATT characteristics,
   and pump a `BtpChannel` (continuous `notifications()` drain feeding
   `BtpSession`, strictly-serialized C1 writes, disconnect detection). Needs
-  a Tokio runtime (`Manager::adapters()` panics outside one). Off-CLAUDE.md-list
-  deps `uuid`/`futures` are confined to this optional feature (flagged for
-  review).
+  a Tokio runtime (`Manager::adapters()` panics outside one). Deps
+  `uuid`/`futures`, not on the project's pre-approved list, are confined to
+  this optional feature (flagged for review).
 - **macOS TCC handling** — `BleCentral::new()` explicitly checks
   `adapter_state() == PoweredOn` and returns an error pointing at
   `docs/runbooks/ble-commissioning.md` rather than silently finding no
@@ -6157,7 +6157,7 @@ fixture file; the test assertions remain stable.
 - `xtask check` extended with feature-matrix smoke (no-default-features,
   tokio-only, mdns-sd-only) catching cfg-gating bugs.
 - New deps: `tokio` 1.x (workspace, optional, features `net + rt + io-util`),
-  `mdns-sd` 0.13 (CLAUDE.md approved), `socket2` 0.5 (for the
+  `mdns-sd` 0.13 (pre-approved), `socket2` 0.5 (for the
   `IPV6_V6ONLY` configure-before-bind step).
 - Loopback integration test: two `TokioUdpTransport` instances exchange
   one reliable request + piggyback-acked response across the full M5

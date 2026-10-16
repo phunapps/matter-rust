@@ -685,7 +685,7 @@ impl MrpState {
     ///
     /// A CSPRNG failure falls back to a per-instance counter rather than
     /// panicking or returning `Result`: this constructor is infallible by design
-    /// and CLAUDE.md forbids `unwrap`/`expect` here. The fallback still varies
+    /// and CONTRIBUTING.md forbids `unwrap`/`expect` here. The fallback still varies
     /// between sessions — a single fixed seed would make every session on the
     /// node jitter identically, defeating the one thing jitter is for.
     #[must_use]
@@ -2512,7 +2512,7 @@ mod tests {
 
     #[test]
     fn concurrent_exchanges_each_retain_their_pending_ack() {
-        // H3 regression: a reliable inbound on exchange B must NOT clobber
+        // Regression guard: a reliable inbound on exchange B must NOT clobber
         // the buffered piggyback ack for exchange A. Both exchanges must
         // drain their own ack on the next outbound in that exchange.
         let mut mrp = MrpState::new(cfg());
@@ -2579,7 +2579,7 @@ mod tests {
 
     #[test]
     fn handle_timeout_flushes_all_due_standalone_acks() {
-        // H3 regression: two buffered piggyback acks on different exchanges
+        // Regression guard: two buffered piggyback acks on different exchanges
         // must BOTH flush as standalone acks once their deadline passes.
         let mut mrp = MrpState::new(cfg());
         let now = t0();

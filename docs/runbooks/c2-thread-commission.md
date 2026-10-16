@@ -257,8 +257,8 @@ with the already-verified C1 path):
 - `NetworkConfigResponse` / `ConnectNetworkResponse` status codes on both
   sides should agree (both success, on a clean run).
 
-If matter-rust's bytes disagree with the chip-tool reference here, per
-CLAUDE.md the reference wins by default — investigate and fix rather than
+If matter-rust's bytes disagree with the chip-tool reference here, the
+reference wins by default — investigate and fix rather than
 rationalize the difference.
 
 ## 8. Record the device

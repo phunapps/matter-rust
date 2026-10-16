@@ -1,5 +1,5 @@
 //! Cross-verification of the CD verifier against real connectedhomeip CDs
-//! (CLAUDE.md: chip is the reference; our output must match it).
+//! (chip is the reference implementation; our output must match it).
 //!
 //! These vectors pin down *which key signs what*, a distinction that cost a
 //! live commissioning session to discover: chip's example CDs are not all

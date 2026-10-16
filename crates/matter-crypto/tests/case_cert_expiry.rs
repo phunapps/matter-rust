@@ -1,4 +1,4 @@
-//! CASE certificate temporal-validity tests (audit finding H1).
+//! CASE certificate temporal-validity tests.
 //!
 //! The live SIGMA handshake must enforce the peer operational certificate's
 //! `not_before`/`not_after` window against an injected validation clock — not a
@@ -8,10 +8,11 @@
 //! the peer NOC deliberately placed outside, then inside, a chosen
 //! `validation_time`.
 //!
-//! Before the H1 fix the initiator validated peer chains at a fixed Unix
-//! `2_000_000_000` (≈2033-05-18) stub, so an expired-but-chain-valid NOC was
-//! wrongly accepted — `case_initiator_rejects_expired_peer_noc` fails until the
-//! clock is actually threaded through. The H1 fix is symmetric: the responder's
+//! Before the fix (found in the 2026-06-12 audit) the initiator validated
+//! peer chains at a fixed Unix `2_000_000_000` (≈2033-05-18) stub, so an
+//! expired-but-chain-valid NOC was wrongly accepted —
+//! `case_initiator_rejects_expired_peer_noc` fails until the clock is
+//! actually threaded through. The fix is symmetric: the responder's
 //! `process_sigma3` path is covered by `case_responder_rejects_expired_peer_noc`.
 //!
 //! The boundary tests pin the exact temporal operator. matter-cert's
@@ -320,7 +321,7 @@ fn case_initiator_accepts_in_validity_peer_noc() {
 /// side: drive the full Sigma1→Sigma2→Sigma3 exchange so the responder runs
 /// `process_sigma3`, with the responder's clock set strictly *after* the
 /// initiator NOC's `not_after`. The responder must reject the expired peer NOC
-/// with [`Error::InvalidPeerNocChain`]. Without the H1 fix the responder
+/// with [`Error::InvalidPeerNocChain`]. Without the fix the responder
 /// validated at the fixed `2_000_000_000` stub and this case was unenforced.
 #[test]
 fn case_responder_rejects_expired_peer_noc() {

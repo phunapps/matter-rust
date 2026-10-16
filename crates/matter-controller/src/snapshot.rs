@@ -554,7 +554,7 @@ mod tests {
         assert!(matches!(err, Error::Snapshot(_)));
     }
 
-    // --- property-based round-trip (CLAUDE.md: encoders get a proptest) ---
+    // --- property-based round-trip (every encoder gets a proptest) ---
 
     use proptest::prelude::*;
     use std::sync::OnceLock;

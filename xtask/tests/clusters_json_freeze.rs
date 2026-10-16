@@ -11,7 +11,7 @@ use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 
-/// The M7 target clusters (CLAUDE.md's Milestone 7 list) plus the M9-A2.1
+/// The M7 target clusters (Milestone 7's initial ten) plus the M9-A2.1
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).

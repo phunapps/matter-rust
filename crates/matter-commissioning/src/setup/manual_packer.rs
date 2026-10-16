@@ -70,7 +70,8 @@ pub(super) fn unpack(s: &str) -> Result<SetupPayload> {
     }
 
     // Digit-only verified above; the `map_err` arms are defensive so we
-    // never bypass library policy on `expect`. CLAUDE.md: no expect in lib.
+    // never bypass library policy on `expect` (none in library code:
+    // CONTRIBUTING.md).
     let chunk0: u32 = s[0..1]
         .parse()
         .map_err(|_| Error::ManualCodeNonDigit('?', 0))?;

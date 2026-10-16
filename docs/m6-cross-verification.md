@@ -4,7 +4,7 @@
 MATCH\*, 0 DIVERGENT, 0 DECODE-FAIL** (12 reference-only and 6 allowed
 ours-only messages, all documented below).
 
-Discharges the M6 validation requirement (CLAUDE.md): "Cross-verify the
+Discharges the M6 milestone's validation requirement: "Cross-verify the
 commissioning trace against matter.js performing the same operation on the
 same device."
 

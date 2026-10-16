@@ -152,7 +152,7 @@ in-process loopback wall-clock) — methodology + caveats in
 ### no_std posture
 
 **Status:** DECIDED 2026-07-12 — ADR 0002 (`docs/decisions/0002-no-std-posture.md`):
-1.0 ships std-only; no_std stays deferred-until-requested per CLAUDE.md.
+1.0 ships std-only; no_std stays deferred until a consumer requests it.
 Codec/bdx are the designated first candidates, matter-transport's sans-io
 core is protected by the CI `embedded` job, crypto/cert are gated on a
 ring-replacement decision. No `std` cargo features until a real consumer
@@ -426,7 +426,7 @@ covers both Wi-Fi and Thread network provisioning.
 
 ### Live DCL client
 
-**Status:** open (optional per CLAUDE.md M6).
+**Status:** open (optional in M6, which allowed cached roots instead).
 
 Production PAA roots currently come from a cached connectedhomeip snapshot passed via
 `--paa-dir`. A snapshot can miss recently-approved vendor PAAs. A live Distributed

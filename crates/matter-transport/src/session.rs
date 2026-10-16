@@ -450,7 +450,7 @@ pub struct SessionManager {
 ///
 /// Falls back to a fixed non-zero value if the system CSPRNG is unavailable
 /// rather than panicking: [`SessionManager::new`] is infallible by design and
-/// CLAUDE.md forbids `unwrap`/`expect` in library code. The fallback costs
+/// CONTRIBUTING.md forbids `unwrap`/`expect` in library code. The fallback costs
 /// unpredictability, not correctness — uniqueness is scoped to
 /// `{session, exchange id, role}`, which the monotonic increment preserves
 /// either way.
