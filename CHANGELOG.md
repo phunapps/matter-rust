@@ -22,9 +22,7 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
-## Unreleased — matter-clusters 0.6.0, matter-ota 0.6.0, matter-commissioning 0.10.2, matter-controller 0.18.3
-
-**Not released yet.** Prepared on `main`; publishing is a separate step.
+## Matter 1.4 cluster library — 2026-10-17 (matter-clusters 0.6.0, matter-ota 0.6.0, matter-commissioning 0.10.2, matter-controller 0.18.3)
 
 `matter-clusters` 0.6.0 completes the Matter 1.4 cluster library: 113
 clusters, every Matter 1.4 cluster except the two provisional JointFabric
