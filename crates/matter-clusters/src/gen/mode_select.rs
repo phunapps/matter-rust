@@ -44,6 +44,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `ModeSelect` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// OnOff (DEPONOFF).
         const DEPONOFF = 1 << 0;
@@ -52,6 +54,7 @@ bitflags::bitflags! {
 
 /// `ModeOptionStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ModeOptionStruct {
     /// Field Label (tag 0).
@@ -64,6 +67,7 @@ pub struct ModeOptionStruct {
 
 /// `SemanticTagStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct SemanticTagStruct {
     /// Field MfgCode (tag 0).

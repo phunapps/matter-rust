@@ -75,6 +75,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `NetworkCommissioning` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// WiFiNetworkInterface (WI).
         const WI = 1 << 0;
@@ -87,6 +89,7 @@ bitflags::bitflags! {
 
 /// `NetworkCommissioningStatusEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum NetworkCommissioningStatusEnum {
     /// Success = 0.
     Success,
@@ -163,6 +166,7 @@ impl NetworkCommissioningStatusEnum {
 
 /// `NetworkInfoStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct NetworkInfoStruct {
     /// Field NetworkId (tag 0).
@@ -174,6 +178,8 @@ pub struct NetworkInfoStruct {
 bitflags::bitflags! {
     /// `ThreadCapabilitiesBitmap` (map16).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct ThreadCapabilitiesBitmap: u16 {
         /// IsBorderRouterCapable.
         const IS_BORDER_ROUTER_CAPABLE = 1 << 0;
@@ -190,6 +196,7 @@ bitflags::bitflags! {
 
 /// `ThreadInterfaceScanResultStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ThreadInterfaceScanResultStruct {
     /// Field PanId (tag 0).
@@ -212,6 +219,7 @@ pub struct ThreadInterfaceScanResultStruct {
 
 /// `WiFiBandEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum WiFiBandEnum {
     /// 2G4 = 0.
     Band2G4,
@@ -260,6 +268,7 @@ impl WiFiBandEnum {
 
 /// `WiFiInterfaceScanResultStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct WiFiInterfaceScanResultStruct {
     /// Field Security (tag 0).
@@ -279,6 +288,8 @@ pub struct WiFiInterfaceScanResultStruct {
 bitflags::bitflags! {
     /// `WiFiSecurityBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct WiFiSecurityBitmap: u8 {
         /// Unencrypted.
         const UNENCRYPTED = 1 << 0;

@@ -37,6 +37,7 @@ pub mod attribute_id {
 
 /// `DeviceTypeStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct DeviceTypeStruct {
     /// Field DeviceType (tag 0).
@@ -47,6 +48,7 @@ pub struct DeviceTypeStruct {
 
 /// `EcosystemDeviceStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct EcosystemDeviceStruct {
     /// Field DeviceName (tag 0).
@@ -84,6 +86,7 @@ pub struct EcosystemDeviceStruct {
 
 /// `EcosystemLocationStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct EcosystemLocationStruct {
     /// Field UniqueLocationId (tag 0).
@@ -106,6 +109,7 @@ pub struct EcosystemLocationStruct {
 ///
 /// Generated from the Matter global type `locationdesc`.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct LocationDescriptorStruct {
     /// Field LocationName (tag 0).

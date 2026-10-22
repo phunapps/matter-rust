@@ -111,6 +111,8 @@ pub mod event_id {
 bitflags::bitflags! {
     /// `EnergyEvse` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// ChargingPreferences (PREF).
         const PREF = 1 << 0;
@@ -130,6 +132,7 @@ bitflags::bitflags! {
 
 /// `ChargingTargetScheduleStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ChargingTargetScheduleStruct {
     /// Field DayOfWeekForSequence (tag 0).
     pub day_of_week_for_sequence: TargetDayOfWeekBitmap,
@@ -141,6 +144,7 @@ pub struct ChargingTargetScheduleStruct {
 ///
 /// Choice group `a`: a sender includes at least one of `target_soc`, `added_energy`. Neither encoding nor decoding checks it.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ChargingTargetStruct {
     /// Field TargetTimeMinutesPastMidnight (tag 0).
     pub target_time_minutes_past_midnight: u16,
@@ -152,6 +156,7 @@ pub struct ChargingTargetStruct {
 
 /// `EnergyTransferStoppedReasonEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum EnergyTransferStoppedReasonEnum {
     /// EvStopped = 0.
     EvStopped,
@@ -188,6 +193,7 @@ impl EnergyTransferStoppedReasonEnum {
 
 /// `FaultStateEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FaultStateEnum {
     /// NoError = 0.
     NoError,
@@ -280,6 +286,7 @@ impl FaultStateEnum {
 
 /// `StateEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StateEnum {
     /// NotPluggedIn = 0.
     NotPluggedIn,
@@ -332,6 +339,7 @@ impl StateEnum {
 
 /// `SupplyStateEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SupplyStateEnum {
     /// Disabled = 0.
     Disabled,
@@ -381,6 +389,8 @@ impl SupplyStateEnum {
 bitflags::bitflags! {
     /// `TargetDayOfWeekBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct TargetDayOfWeekBitmap: u8 {
         /// Sunday.
         const SUNDAY = 1 << 0;

@@ -41,6 +41,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `ContentLauncher` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// ContentSearch (CS).
         const CS = 1 << 0;
@@ -57,6 +59,7 @@ bitflags::bitflags! {
 
 /// `AdditionalInfoStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AdditionalInfoStruct {
     /// Field Name (tag 0).
     pub name: String,
@@ -66,6 +69,7 @@ pub struct AdditionalInfoStruct {
 
 /// `BrandingInformationStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BrandingInformationStruct {
     /// Field ProviderName (tag 0).
     pub provider_name: String,
@@ -85,6 +89,7 @@ pub struct BrandingInformationStruct {
 ///
 /// A copy of the `MediaPlayback` cluster's `CharacteristicEnum`, which this cluster's elements reference. The two encode identically but are distinct Rust types.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CharacteristicEnum {
     /// ForcedSubtitles = 0.
     ForcedSubtitles,
@@ -181,6 +186,7 @@ impl CharacteristicEnum {
 
 /// `ContentSearchStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ContentSearchStruct {
     /// Field ParameterList (tag 0).
     pub parameter_list: Vec<ParameterStruct>,
@@ -188,6 +194,7 @@ pub struct ContentSearchStruct {
 
 /// `DimensionStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DimensionStruct {
     /// Field Width (tag 0).
     pub width: f64,
@@ -199,6 +206,7 @@ pub struct DimensionStruct {
 
 /// `MetricTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MetricTypeEnum {
     /// Pixels = 0.
     Pixels,
@@ -231,6 +239,7 @@ impl MetricTypeEnum {
 
 /// `ParameterEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ParameterEnum {
     /// Actor = 0.
     Actor,
@@ -323,6 +332,7 @@ impl ParameterEnum {
 
 /// `ParameterStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ParameterStruct {
     /// Field Type (tag 0).
     pub r#type: ParameterEnum,
@@ -334,6 +344,7 @@ pub struct ParameterStruct {
 
 /// `PlaybackPreferencesStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PlaybackPreferencesStruct {
     /// Field PlaybackPosition (tag 0).
     pub playback_position: Option<Nullable<u64>>,
@@ -345,6 +356,7 @@ pub struct PlaybackPreferencesStruct {
 
 /// `StatusEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StatusEnum {
     /// Success = 0.
     Success,
@@ -389,6 +401,7 @@ impl StatusEnum {
 
 /// `StyleInformationStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StyleInformationStruct {
     /// Field ImageUrl (tag 0).
     pub image_url: Option<String>,
@@ -401,6 +414,8 @@ pub struct StyleInformationStruct {
 bitflags::bitflags! {
     /// `SupportedProtocolsBitmap` (map32).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct SupportedProtocolsBitmap: u32 {
         /// Dash.
         const DASH = 1 << 0;
@@ -411,6 +426,7 @@ bitflags::bitflags! {
 
 /// `TrackPreferenceStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TrackPreferenceStruct {
     /// Field LanguageCode (tag 0).
     pub language_code: String,

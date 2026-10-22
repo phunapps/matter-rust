@@ -36,6 +36,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `TimeFormatLocalization` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// CalendarFormat (CALFMT).
         const CALFMT = 1 << 0;
@@ -44,6 +46,7 @@ bitflags::bitflags! {
 
 /// `CalendarTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CalendarTypeEnum {
     /// Buddhist = 0.
     Buddhist,
@@ -120,6 +123,7 @@ impl CalendarTypeEnum {
 
 /// `HourFormatEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum HourFormatEnum {
     /// 12Hr = 0.
     Hr12,

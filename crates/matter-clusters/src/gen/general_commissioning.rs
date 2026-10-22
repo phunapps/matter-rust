@@ -81,6 +81,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `GeneralCommissioning` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// TermsAndConditions (TC).
         const TC = 1 << 0;
@@ -92,6 +94,7 @@ bitflags::bitflags! {
 
 /// `BasicCommissioningInfo` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct BasicCommissioningInfo {
     /// Field FailSafeExpiryLengthSeconds (tag 0).
@@ -102,6 +105,7 @@ pub struct BasicCommissioningInfo {
 
 /// `CommissioningErrorEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CommissioningErrorEnum {
     /// Ok = 0.
     Ok,
@@ -158,6 +162,7 @@ impl CommissioningErrorEnum {
 
 /// `NetworkRecoveryReasonEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum NetworkRecoveryReasonEnum {
     /// Unspecified = 0.
     Unspecified,
@@ -194,6 +199,7 @@ impl NetworkRecoveryReasonEnum {
 
 /// `RegulatoryLocationTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum RegulatoryLocationTypeEnum {
     /// Indoor = 0.
     Indoor,

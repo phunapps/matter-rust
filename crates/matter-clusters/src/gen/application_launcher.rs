@@ -43,6 +43,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `ApplicationLauncher` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// ApplicationPlatform (AP).
         const AP = 1 << 0;
@@ -51,6 +53,7 @@ bitflags::bitflags! {
 
 /// `ApplicationEPStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ApplicationEPStruct {
     /// Field Application (tag 0).
@@ -61,6 +64,7 @@ pub struct ApplicationEPStruct {
 
 /// `ApplicationStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ApplicationStruct {
     /// Field CatalogVendorId (tag 0).
     pub catalog_vendor_id: u16,
@@ -70,6 +74,7 @@ pub struct ApplicationStruct {
 
 /// `StatusEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StatusEnum {
     /// Success = 0.
     Success,

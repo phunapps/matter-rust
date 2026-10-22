@@ -53,6 +53,8 @@ pub mod event_id {
 bitflags::bitflags! {
     /// `Messages` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// ReceivedConfirmation (CONF).
         const CONF = 1 << 0;
@@ -67,6 +69,7 @@ bitflags::bitflags! {
 
 /// `FutureMessagePreferenceEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FutureMessagePreferenceEnum {
     /// Allowed = 0.
     Allowed,
@@ -112,6 +115,8 @@ impl FutureMessagePreferenceEnum {
 bitflags::bitflags! {
     /// `MessageControlBitmap` (map16).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct MessageControlBitmap: u16 {
         /// ConfirmationRequired.
         const CONFIRMATION_REQUIRED = 1 << 0;
@@ -128,6 +133,7 @@ bitflags::bitflags! {
 
 /// `MessagePriorityEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MessagePriorityEnum {
     /// Low = 0.
     Low,
@@ -168,6 +174,7 @@ impl MessagePriorityEnum {
 
 /// `MessageResponseOptionStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MessageResponseOptionStruct {
     /// Field MessageResponseId (tag 0).
     pub message_response_id: u32,
@@ -177,6 +184,7 @@ pub struct MessageResponseOptionStruct {
 
 /// `MessageStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct MessageStruct {
     /// Field MessageId (tag 0).

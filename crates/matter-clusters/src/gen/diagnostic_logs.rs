@@ -33,6 +33,7 @@ pub mod attribute_id {}
 
 /// `IntentEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum IntentEnum {
     /// EndUserSupport = 0.
     EndUserSupport,
@@ -69,6 +70,7 @@ impl IntentEnum {
 
 /// `StatusEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StatusEnum {
     /// Success = 0.
     Success,
@@ -113,6 +115,7 @@ impl StatusEnum {
 
 /// `TransferProtocolEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TransferProtocolEnum {
     /// ResponsePayload = 0.
     ResponsePayload,

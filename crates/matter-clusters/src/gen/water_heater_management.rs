@@ -59,6 +59,8 @@ pub mod event_id {
 bitflags::bitflags! {
     /// `WaterHeaterManagement` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// EnergyManagement (EM).
         const EM = 1 << 0;
@@ -69,6 +71,7 @@ bitflags::bitflags! {
 
 /// `BoostStateEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BoostStateEnum {
     /// Inactive = 0.
     Inactive,
@@ -103,6 +106,7 @@ impl BoostStateEnum {
 ///
 /// Choice group `a`: a sender includes at most one of `one_shot`, `target_reheat`. Neither encoding nor decoding checks it.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct WaterHeaterBoostInfoStruct {
     /// Field Duration (tag 0).
     pub duration: u32,
@@ -122,6 +126,8 @@ pub struct WaterHeaterBoostInfoStruct {
 bitflags::bitflags! {
     /// `WaterHeaterHeatSourceBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct WaterHeaterHeatSourceBitmap: u8 {
         /// ImmersionElement1.
         const IMMERSION_ELEMENT1 = 1 << 0;
