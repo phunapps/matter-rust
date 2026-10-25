@@ -101,6 +101,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `WindowCovering` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// Lift (LF).
         const LF = 1 << 0;
@@ -119,6 +121,8 @@ bitflags::bitflags! {
 bitflags::bitflags! {
     /// `ConfigStatusBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct ConfigStatusBitmap: u8 {
         /// Operational.
         const OPERATIONAL = 1 << 0;
@@ -139,6 +143,7 @@ bitflags::bitflags! {
 
 /// `EndProductTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum EndProductTypeEnum {
     /// RollerShade = 0.
     RollerShade,
@@ -264,6 +269,8 @@ impl EndProductTypeEnum {
 bitflags::bitflags! {
     /// `ModeBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct ModeBitmap: u8 {
         /// MotorDirectionReversed.
         const MOTOR_DIRECTION_REVERSED = 1 << 0;
@@ -280,6 +287,7 @@ bitflags::bitflags! {
 ///
 /// The value of each two-bit field (Global, Lift, Tilt) of `OperationalStatusBitmap`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MovementStatus {
     /// Stopped = 0.
     Stopped,
@@ -317,6 +325,8 @@ impl MovementStatus {
 bitflags::bitflags! {
     /// `OperationalStatusBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct OperationalStatusBitmap: u8 {
     }
 }
@@ -324,6 +334,8 @@ bitflags::bitflags! {
 bitflags::bitflags! {
     /// `SafetyStatusBitmap` (map16).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct SafetyStatusBitmap: u16 {
         /// RemoteLockout.
         const REMOTE_LOCKOUT = 1 << 0;
@@ -354,6 +366,7 @@ bitflags::bitflags! {
 
 /// `TypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TypeEnum {
     /// Rollershade = 0.
     Rollershade,

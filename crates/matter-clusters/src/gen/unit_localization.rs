@@ -35,6 +35,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `UnitLocalization` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// TemperatureUnit (TEMP).
         const TEMP = 1 << 0;
@@ -43,6 +45,7 @@ bitflags::bitflags! {
 
 /// `TempUnitEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TempUnitEnum {
     /// Fahrenheit = 0.
     Fahrenheit,

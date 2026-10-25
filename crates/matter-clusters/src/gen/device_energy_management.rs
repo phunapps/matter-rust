@@ -79,6 +79,8 @@ pub mod event_id {
 bitflags::bitflags! {
     /// `DeviceEnergyManagement` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// PowerAdjustment (PA).
         const PA = 1 << 0;
@@ -99,6 +101,7 @@ bitflags::bitflags! {
 
 /// `AdjustmentCauseEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AdjustmentCauseEnum {
     /// LocalOptimization = 0.
     LocalOptimization,
@@ -131,6 +134,7 @@ impl AdjustmentCauseEnum {
 
 /// `CauseEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CauseEnum {
     /// NormalCompletion = 0.
     NormalCompletion,
@@ -175,6 +179,7 @@ impl CauseEnum {
 
 /// `ConstraintsStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ConstraintsStruct {
     /// Field StartTime (tag 0).
     pub start_time: u32,
@@ -190,6 +195,7 @@ pub struct ConstraintsStruct {
 
 /// `CostStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct CostStruct {
     /// Field CostType (tag 0).
@@ -204,6 +210,7 @@ pub struct CostStruct {
 
 /// `CostTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CostTypeEnum {
     /// Financial = 0.
     Financial,
@@ -244,6 +251,7 @@ impl CostTypeEnum {
 
 /// `ESAStateEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ESAStateEnum {
     /// Offline = 0.
     Offline,
@@ -288,6 +296,7 @@ impl ESAStateEnum {
 
 /// `ESATypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ESATypeEnum {
     /// Evse = 0.
     Evse,
@@ -372,6 +381,7 @@ impl ESATypeEnum {
 
 /// `ForecastStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ForecastStruct {
     /// Field ForecastId (tag 0).
@@ -396,6 +406,7 @@ pub struct ForecastStruct {
 
 /// `ForecastUpdateReasonEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ForecastUpdateReasonEnum {
     /// InternalOptimization = 0.
     InternalOptimization,
@@ -432,6 +443,7 @@ impl ForecastUpdateReasonEnum {
 
 /// `OptOutStateEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum OptOutStateEnum {
     /// NoOptOut = 0.
     NoOptOut,
@@ -472,6 +484,7 @@ impl OptOutStateEnum {
 
 /// `PowerAdjustCapabilityStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct PowerAdjustCapabilityStruct {
     /// Field PowerAdjustCapability (tag 0).
@@ -482,6 +495,7 @@ pub struct PowerAdjustCapabilityStruct {
 
 /// `PowerAdjustReasonEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PowerAdjustReasonEnum {
     /// NoAdjustment = 0.
     NoAdjustment,
@@ -518,6 +532,7 @@ impl PowerAdjustReasonEnum {
 
 /// `PowerAdjustStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct PowerAdjustStruct {
     /// Field MinPower (tag 0).
@@ -532,6 +547,7 @@ pub struct PowerAdjustStruct {
 
 /// `SlotAdjustmentStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SlotAdjustmentStruct {
     /// Field SlotIndex (tag 0).
     pub slot_index: u8,
@@ -543,6 +559,7 @@ pub struct SlotAdjustmentStruct {
 
 /// `SlotStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct SlotStruct {
     /// Field MinDuration (tag 0).

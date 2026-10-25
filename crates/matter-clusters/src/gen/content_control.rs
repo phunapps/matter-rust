@@ -101,6 +101,8 @@ pub mod event_id {
 bitflags::bitflags! {
     /// `ContentControl` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// ScreenTime (ST).
         const ST = 1 << 0;
@@ -123,6 +125,7 @@ bitflags::bitflags! {
 
 /// `AppInfoStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AppInfoStruct {
     /// Field CatalogVendorId (tag 0).
     pub catalog_vendor_id: u16,
@@ -132,6 +135,7 @@ pub struct AppInfoStruct {
 
 /// `BlockChannelStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BlockChannelStruct {
     /// Field BlockChannelIndex (tag 0).
     pub block_channel_index: Nullable<u16>,
@@ -146,6 +150,8 @@ pub struct BlockChannelStruct {
 bitflags::bitflags! {
     /// `DayOfWeekBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct DayOfWeekBitmap: u8 {
         /// Sunday.
         const SUNDAY = 1 << 0;
@@ -166,6 +172,7 @@ bitflags::bitflags! {
 
 /// `RatingNameStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct RatingNameStruct {
     /// Field RatingName (tag 0).
@@ -176,6 +183,7 @@ pub struct RatingNameStruct {
 
 /// `StatusCodeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StatusCodeEnum {
     /// InvalidPinCode = 2.
     InvalidPinCode,
@@ -240,6 +248,7 @@ impl StatusCodeEnum {
 
 /// `TimePeriodStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TimePeriodStruct {
     /// Field StartHour (tag 0).
     pub start_hour: u8,
@@ -253,6 +262,7 @@ pub struct TimePeriodStruct {
 
 /// `TimeWindowStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TimeWindowStruct {
     /// Field TimeWindowIndex (tag 0).
     pub time_window_index: Nullable<u16>,

@@ -38,6 +38,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `LaundryWasherControls` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// Spin (SPIN).
         const SPIN = 1 << 0;
@@ -48,6 +50,7 @@ bitflags::bitflags! {
 
 /// `NumberOfRinsesEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum NumberOfRinsesEnum {
     /// None = 0.
     None,

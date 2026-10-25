@@ -85,6 +85,8 @@ pub mod event_id {
 bitflags::bitflags! {
     /// `SmokeCoAlarm` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// SmokeAlarm (SMOKE).
         const SMOKE = 1 << 0;
@@ -95,6 +97,7 @@ bitflags::bitflags! {
 
 /// `AlarmStateEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AlarmStateEnum {
     /// Normal = 0.
     Normal,
@@ -131,6 +134,7 @@ impl AlarmStateEnum {
 
 /// `ContaminationStateEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ContaminationStateEnum {
     /// Normal = 0.
     Normal,
@@ -171,6 +175,7 @@ impl ContaminationStateEnum {
 
 /// `EndOfServiceEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum EndOfServiceEnum {
     /// Normal = 0.
     Normal,
@@ -203,6 +208,7 @@ impl EndOfServiceEnum {
 
 /// `ExpressedStateEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ExpressedStateEnum {
     /// Normal = 0.
     Normal,
@@ -263,6 +269,7 @@ impl ExpressedStateEnum {
 
 /// `MuteStateEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MuteStateEnum {
     /// NotMuted = 0.
     NotMuted,
@@ -295,6 +302,7 @@ impl MuteStateEnum {
 
 /// `SensitivityEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SensitivityEnum {
     /// High = 0.
     High,

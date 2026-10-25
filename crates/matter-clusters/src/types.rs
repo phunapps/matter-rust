@@ -7,6 +7,7 @@
 /// element whose TLV value is the null type. A field that is both optional
 /// and nullable is `Option<Nullable<T>>`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Nullable<T> {
     /// The wire carried an explicit TLV null.
     Null,

@@ -34,6 +34,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `PowerTopology` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// NodeTopology (NODE).
         const NODE = 1 << 0;

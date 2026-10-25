@@ -45,6 +45,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `EnergyPreference` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// EnergyBalance (BALA).
         const BALA = 1 << 0;
@@ -55,6 +57,7 @@ bitflags::bitflags! {
 
 /// `BalanceStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct BalanceStruct {
     /// Field Step (tag 0).
@@ -65,6 +68,7 @@ pub struct BalanceStruct {
 
 /// `EnergyPriorityEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum EnergyPriorityEnum {
     /// Comfort = 0.
     Comfort,

@@ -53,6 +53,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `Channel` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// ChannelList (CL).
         const CL = 1 << 0;
@@ -69,6 +71,7 @@ bitflags::bitflags! {
 ///
 /// A copy of the `ContentLauncher` cluster's `AdditionalInfoStruct`, which this cluster's elements reference. The two encode identically but are distinct Rust types.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AdditionalInfoStruct {
     /// Field Name (tag 0).
     pub name: String,
@@ -78,6 +81,7 @@ pub struct AdditionalInfoStruct {
 
 /// `ChannelInfoStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ChannelInfoStruct {
     /// Field MajorNumber (tag 0).
     pub major_number: u16,
@@ -97,6 +101,7 @@ pub struct ChannelInfoStruct {
 
 /// `ChannelPagingStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ChannelPagingStruct {
     /// Field PreviousToken (tag 0).
@@ -107,6 +112,7 @@ pub struct ChannelPagingStruct {
 
 /// `ChannelTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ChannelTypeEnum {
     /// Satellite = 0.
     Satellite,
@@ -147,6 +153,7 @@ impl ChannelTypeEnum {
 
 /// `LineupInfoStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct LineupInfoStruct {
     /// Field OperatorName (tag 0).
@@ -161,6 +168,7 @@ pub struct LineupInfoStruct {
 
 /// `LineupInfoTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LineupInfoTypeEnum {
     /// Mso = 0.
     Mso,
@@ -189,6 +197,7 @@ impl LineupInfoTypeEnum {
 
 /// `PageTokenStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PageTokenStruct {
     /// Field Limit (tag 0).
     pub limit: Option<u16>,
@@ -200,6 +209,7 @@ pub struct PageTokenStruct {
 
 /// `ProgramCastStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ProgramCastStruct {
     /// Field Name (tag 0).
@@ -210,6 +220,7 @@ pub struct ProgramCastStruct {
 
 /// `ProgramCategoryStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ProgramCategoryStruct {
     /// Field Category (tag 0).
@@ -220,6 +231,7 @@ pub struct ProgramCategoryStruct {
 
 /// `ProgramStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ProgramStruct {
     /// Field Identifier (tag 0).
@@ -265,6 +277,8 @@ pub struct ProgramStruct {
 bitflags::bitflags! {
     /// `RecordingFlagBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct RecordingFlagBitmap: u8 {
         /// Scheduled.
         const SCHEDULED = 1 << 0;
@@ -277,6 +291,7 @@ bitflags::bitflags! {
 
 /// `SeriesInfoStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct SeriesInfoStruct {
     /// Field Season (tag 0).
@@ -287,6 +302,7 @@ pub struct SeriesInfoStruct {
 
 /// `StatusEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StatusEnum {
     /// Success = 0.
     Success,
