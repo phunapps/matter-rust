@@ -482,15 +482,16 @@ const ADVERT_REQUERY_MAX: std::time::Duration = std::time::Duration::from_secs(3
 /// ([`Actor::drive_pending_resolves`]).
 ///
 /// A re-query makes mdns-sd replay every PTR it caches for the subtype, about
-/// `2N + 1` events for `N` cached instances, into a 10-slot channel, and the
-/// daemon thread — all of that daemon's mDNS processing — waits whenever
-/// that channel is full until the next drain. At the 1 s watch cadence that stall
-/// would last several seconds on a large fabric; draining every 250 ms keeps
-/// it to well under a second for a 10-device fabric and a few seconds for a
-/// very large one. 15 s spans the restarted query chain's first burst (queries
-/// about 0, 1, 3, 7 and 15 s after the re-query), so the answers it draws are
-/// drained briskly too, and stays shorter than [`ADVERT_REQUERY_FIRST`], so
-/// the watch is back on its 1 s cadence between re-queries.
+/// `2N + 1` events for `N` cached instances, onto the browse's channel. The
+/// daemon does not wait for it to be drained, but the channel holds 1000
+/// events, and mdns-sd closes a browse whose channel fills (the transport
+/// re-opens it, losing events). Draining every 250 ms keeps that backlog
+/// short, and a device answering the restarted chain is acted on within
+/// 250 ms rather than up to a second. 15 s spans the restarted query chain's
+/// first burst (queries about 0, 1, 3, 7 and 15 s after the re-query), so the
+/// answers it draws are drained briskly too, and stays shorter than
+/// [`ADVERT_REQUERY_FIRST`], so the watch is back on its 1 s cadence between
+/// re-queries.
 ///
 /// Not shortened under `cfg(test)`: the unit tests reach past the window with
 /// synthetic instants, and under the shortened re-query cadence the in-crate
@@ -1658,8 +1659,8 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     /// [`Self::drive_pending_resolves`] pass re-arms the drain tick at
     /// [`RESOLVE_POLL_INTERVAL`] instead of [`ADVERT_WATCH_POLL_INTERVAL`].
     /// mdns-sd replays its cache for the
-    /// re-issued browse into a 10-slot channel and its daemon thread waits
-    /// while that is full, so the replay is drained briskly. A deadline rather
+    /// re-issued browse onto a channel that holds 1000 events, so the replay
+    /// is drained briskly ([`REQUERY_FAST_DRAIN`]). A deadline rather
     /// than an earlier `next_resolve_poll`: reconcile runs just before
     /// `drive_pending_resolves`, which re-arms the tick first thing and would
     /// overwrite it in the same pass. Left in place once passed (it is inert
@@ -26712,9 +26713,9 @@ mod tests {
     /// After a re-query, every full drive pass (reconcile, then
     /// `drive_pending_resolves`, which re-arms the tick first thing) inside
     /// [`REQUERY_FAST_DRAIN`] re-arms the drain at `RESOLVE_POLL_INTERVAL`, not
-    /// the watch's 1 s — not just the first one. mdns-sd's cache replay of
-    /// about `2N + 1` events goes through a 10-slot channel, so one early drain
-    /// would leave its daemon thread waiting on the 1 s cadence for the rest.
+    /// the watch's 1 s — not just the first one: the window covers the
+    /// restarted query chain's first burst, whose answers arrive over 15 s,
+    /// not just the cache replay of about `2N + 1` events.
     #[tokio::test]
     async fn a_requery_holds_the_fast_drain_for_its_window() {
         let (discovery, state) = watch_discovery();

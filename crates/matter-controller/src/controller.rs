@@ -830,12 +830,10 @@ impl MatterController {
     /// — about five small multicast queries in the first 15 s, and about nine
     /// per 5-minute step at the cap, where a settled browse sends about one an
     /// hour — and makes the daemon replay the records it holds for the fabric
-    /// (about two events per device) through a 10-event channel. The daemon's
-    /// thread, which does all of its mDNS work, stalls whenever that channel
-    /// is full until the controller drains it, so for 15 s after each
-    /// re-query the controller drains every 250 ms instead of every second:
-    /// the stall is well under a second for a 10-device fabric and a few
-    /// seconds for a very large one.
+    /// (about two events per device) onto the browse's event channel, which
+    /// holds 1000 events. For 15 s after each re-query the controller drains
+    /// it every 250 ms instead of every second, so the backlog stays short
+    /// and a device answering the restarted queries is acted on quickly.
     ///
     /// Returns how many subscriptions it affected: scheduled retries pulled
     /// forward plus in-progress retries whose backoff it reset. `Ok(0)` means

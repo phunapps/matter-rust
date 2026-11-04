@@ -11,7 +11,10 @@
 //! `browse("_matter._tcp.local.")` *replaces* the sender of the first and the
 //! first `Receiver` never sees another event; and `stop_browse` removes that
 //! shared querier — and drops the daemon's cached records for the type —
-//! whoever asks for it.
+//! whoever asks for it. (The cache is dropped only if the querier is still
+//! there when the daemon runs the stop: mdns-sd 0.21.6 removes a querier
+//! whose receiver is gone or full without touching the cache, so a stop that
+//! follows such a removal leaves the records to expire on their own TTLs.)
 //!
 //! [`QueryHandle`]s are therefore **not** independent browses. This adapter
 //! models what the daemon actually provides: it opens at most one browse per
@@ -102,24 +105,33 @@
 //!
 //! Costs per requery, for `N` cached instances of the type:
 //!
-//! - **A blocked daemon thread until the replay is drained.** The replay is
-//!   up to `1 + 2N` events into mdns-sd's 10-slot channel, and the daemon
-//!   thread — all mDNS processing for this daemon, in every browse and every
-//!   registration — waits whenever that channel is full until the caller's
-//!   next [`Discovery::poll_results`] / [`Discovery::poll_found`] drains it.
-//!   How long that takes is up to the caller's polling: drained every
-//!   250 ms (as `matter-controller` does for 15 s after each requery), it is
-//!   well under a second for a 10-device fabric and a few seconds for a very
-//!   large one.
+//! - **A replay to drain.** Up to `1 + 2N` events, queued on the browse's
+//!   channel until the caller's next [`Discovery::poll_results`] /
+//!   [`Discovery::poll_found`]. The daemon never waits on that channel, but
+//!   it holds at most 1000 events: one that fills is closed and must be
+//!   re-opened (see "A browse the daemon closed" below), so a caller with a
+//!   very large fabric should poll briskly for a while after a requery
+//!   (`matter-controller` drains every 250 ms for 15 s after each one).
 //! - **A restarted query chain.** The first query goes out after 10–50 ms,
 //!   then 1, 2, 4, 8, 16 s … apart, doubling up to an hour: about five small
 //!   multicast PTR queries in the first 15 s and about nine in the first
 //!   5 minutes. A caller that requeries every 5 minutes therefore sends about
 //!   nine queries per 5 minutes instead of the one an hour a settled browse
-//!   sends. The old chain stops by itself at its first step after its
-//!   receiver is gone.
-//! - **Up to three ANY queries** for any instance cached but not yet
-//!   resolved.
+//!   sends. The old chain is cancelled when the daemon runs the new browse.
+//! - **Resolve queries at each step of that chain** for every instance cached
+//!   but not yet resolved: SRV and TXT, or A and AAAA when only the host's
+//!   address is missing. mdns-sd keeps re-querying those for as long as the
+//!   browse is active.
+//!
+//! # A browse the daemon closed
+//!
+//! mdns-sd closes a browse whose event channel fills (1000 events): it stops
+//! that service type's querier, keeps its cached records, and drops its end of
+//! the channel, sending no `SearchStopped`. The next drain finds the receiver
+//! closed, opens the browse again with the same string, and logs that at
+//! `warn`, because events were lost. The fresh browse's cache replay rebuilds
+//! what the adapter knows about the type: every instance still cached is
+//! reported found once more, and every cached record is re-delivered.
 //!
 //! # Diagnostics
 //!
@@ -270,10 +282,13 @@ struct BrowseState {
     receiver: EventSource,
     /// The receiver a [`Discovery::requery`] replaced, while the daemon may
     /// still send to it: `daemon.browse` only queues a command, and until the
-    /// daemon thread runs it the querier's listener is still this one (an
-    /// event sent to a receiver nobody reads is lost — mdns-sd only logs the
-    /// failed send). Drained ahead of the new receiver and dropped at the
-    /// switch point, its first event ([`Self::drain`]). `Some` also means a
+    /// daemon thread runs it the querier's listener is still this one.
+    /// Dropping it then would lose whatever the daemon sends it in between:
+    /// mdns-sd removes a querier whose listener is gone, and the queued browse
+    /// then installs the new listener on its own. Drained ahead of the new
+    /// receiver and dropped at the switch point, its first event
+    /// ([`Self::drain`]). The daemon drops its own end in that same step, so
+    /// this receiver reads as closed from then on. `Some` also means a
     /// requery is in progress, and another one is then a no-op.
     retiring: Option<EventSource>,
     /// Handles attached to this browse, each with the records surfaced since
@@ -388,17 +403,14 @@ impl BrowseState {
     /// While a requery is in progress (`retiring` is `Some`), the order is
     /// what makes the swap lossless.
     /// mdns-sd sends `SearchStarted` to a new listener first, in the same
-    /// daemon step that installs it as the querier's listener
-    /// (`exec_command_browse`, mdns-sd 0.21.3 `service_daemon.rs` 3857 then
-    /// 3874), so every record event (found, resolved, removed) the daemon
-    /// sends to the old receiver precedes the new receiver's first event. Only
-    /// the old query chain can still reach the old receiver after that: if its
-    /// next step comes before the old receiver is dropped, it delivers an
-    /// inert `SearchStarted` to that receiver (traced and ignored) and sends
-    /// one more PTR query; its first step after the drop ends it. The steps:
+    /// daemon step that cancels the old query chain and installs the new
+    /// listener in place of the old one (`exec_command_browse`, mdns-sd 0.21.6
+    /// `service_daemon.rs` 4086, then 4093 and 4097), so every event the
+    /// daemon sends to the old receiver precedes the new receiver's first
+    /// event, and nothing reaches the old receiver after it: the daemon has
+    /// dropped every sender to it. The steps:
     ///
-    /// 1. drain `retiring` (this also unblocks a daemon thread waiting on a
-    ///    full old channel);
+    /// 1. drain `retiring`;
     /// 2. if the new receiver is still empty, the daemon has not run the
     ///    browse command and the old receiver is still the live listener:
     ///    keep it and stop;
@@ -440,11 +452,9 @@ impl BrowseState {
             }
             match receiver.try_next() {
                 Next::Event(first) => {
-                    // 3. The switch point. No record event reaches the old
-                    //    receiver after this one was sent, but some may have
-                    //    since step 1; only a stale chain's inert
-                    //    SearchStarted can follow, and it is traced and
-                    //    ignored.
+                    // 3. The switch point. Nothing reaches the old receiver
+                    //    after this one was sent, but events may have since
+                    //    step 1.
                     while let Some(event) = old.try_event() {
                         apply(event);
                     }
@@ -881,10 +891,19 @@ impl Discovery for MdnsSdDiscovery {
     ///
     /// Note that `mdns_sd::ServiceDaemon::stop_browse` also drops the daemon's
     /// cached records for the service type, so releasing the last handle
-    /// discards what the browse had learned; the next `query` for that type
-    /// starts from an empty cache and must wait for fresh announcements.
-    /// That is why stopping is deferred to the last release, and why a caller
-    /// that reconnects repeatedly is better off holding one handle open.
+    /// usually discards what the browse had learned; the next `query` for that
+    /// type then starts from an empty cache and must wait for fresh
+    /// announcements. That is why stopping is deferred to the last release,
+    /// and why a caller that reconnects repeatedly is better off holding one
+    /// handle open.
+    ///
+    /// "Usually": the receiver is dropped here, and `stop_browse` only queues
+    /// a command. If the daemon pushes an event for the type in between, or
+    /// had already closed the browse because its channel filled, mdns-sd
+    /// removes the querier without dropping the cache, and the stop then
+    /// finds nothing to stop. The next `query` for the type is then replayed
+    /// the records still within their TTL: ordinary mDNS caching, reported as
+    /// found once more (the safe direction).
     fn stop_query(&mut self, handle: QueryHandle) {
         // Unknown or already-stopped handle: no-op.
         let Some(service_type) = self.handle_types.remove(&handle) else {
@@ -988,8 +1007,8 @@ impl Discovery for MdnsSdDiscovery {
     /// delivers, until the new one's first event (see the module docs). A
     /// requery while such a switch-over is still pending, or for an unknown or
     /// stopped handle, does nothing; if the daemon refuses the browse, nothing
-    /// changes either (logged at `debug`). The old query chain stops by itself
-    /// at its next retransmission, once its receiver is gone.
+    /// changes either (logged at `debug`). The daemon cancels the old query
+    /// chain when it runs the new browse.
     ///
     /// # What it costs
     ///
@@ -997,16 +1016,15 @@ impl Discovery for MdnsSdDiscovery {
     /// `ServiceResolved`. Found replays of instances already present are not
     /// reported ([`Discovery::poll_found`]); resolved replays are re-delivered
     /// to every handle by [`Discovery::poll_results`] (latest wins). The
-    /// replay is up to `1 + 2N` events into mdns-sd's 10-slot channel, so with
-    /// five or more instances the daemon thread — all of this daemon's mDNS
-    /// processing — stalls whenever that channel is full until the caller
-    /// drains it, about one channel's worth per poll: poll briskly for a while
-    /// after a requery. The restarted query chain sends about five small
-    /// multicast PTR queries in the first 15 s and about nine in the first
-    /// 5 minutes, each carrying known answers (the cached PTRs not past half
-    /// their TTL, so devices whose fresh PTR the daemon holds stay silent),
-    /// and re-arms up to three ANY queries for any instance cached but not yet
-    /// resolved.
+    /// replay is up to `1 + 2N` events, queued until the caller drains them,
+    /// on a channel that holds 1000: one that fills is closed, and the next
+    /// drain re-opens it (see the module docs), so on a very
+    /// large fabric poll briskly for a while after a requery. The restarted
+    /// query chain sends about five small multicast PTR queries in the first
+    /// 15 s and about nine in the first 5 minutes, each carrying known answers
+    /// (the cached PTRs not past half their TTL, so devices whose fresh PTR
+    /// the daemon holds stay silent), and with each one resolve queries (SRV
+    /// and TXT, or A and AAAA) for every instance cached but not yet resolved.
     fn requery(&mut self, handle: QueryHandle) {
         let Some(service_type) = self.handle_types.get(&handle) else {
             return;
@@ -2103,8 +2121,8 @@ mod tests {
     }
 
     /// On a subtype browse mdns-sd reports the PTR's alias, which is the
-    /// BASE-type instance fullname (mdns-sd 0.21.3 `service_daemon.rs`
-    /// L3087-3104); the instance label is everything before the first dot. A
+    /// BASE-type instance fullname (mdns-sd 0.21.6 `service_daemon.rs`
+    /// L3316-3334); the instance label is everything before the first dot. A
     /// fullname with no instance label is ignored, not surfaced as "".
     #[test]
     fn a_subtype_found_event_yields_the_base_type_instance_label() {
