@@ -198,17 +198,61 @@ enum EventSource {
     Scripted(std::sync::mpsc::Receiver<Option<ServiceEvent>>),
 }
 
+/// What one read of an [`EventSource`] found.
+enum Next {
+    /// An event the daemon had queued.
+    Event(ServiceEvent),
+    /// Nothing queued right now; more may arrive.
+    Empty,
+    /// Nothing queued, and nothing ever will be: the daemon dropped its
+    /// sender. It does that when a requery replaces this receiver (the
+    /// expected end of a retiring receiver), when it closes the browse
+    /// because this receiver's channel filled, and when it shuts down.
+    Closed,
+}
+
 impl EventSource {
-    /// The next event already queued, or `None` when nothing is queued right
-    /// now. A closed channel also reads as `None`: the daemon holds the sender
-    /// until its thread exits, after which nothing arrives on any receiver.
-    fn try_next(&self) -> Option<ServiceEvent> {
+    /// Read the next queued event without waiting. A closed channel still
+    /// yields everything queued before it closed (flume and `std::sync::mpsc`
+    /// both drain the queue before reporting the disconnect), so
+    /// [`Next::Closed`] only comes once the queue is empty.
+    fn try_next(&self) -> Next {
         match self {
-            Self::Daemon(receiver) => receiver.try_recv().ok(),
+            Self::Daemon(receiver) => match receiver.try_recv() {
+                Ok(event) => Next::Event(event),
+                Err(mdns_sd::TryRecvError::Empty) => Next::Empty,
+                Err(mdns_sd::TryRecvError::Disconnected) => Next::Closed,
+            },
             #[cfg(test)]
-            Self::Scripted(receiver) => receiver.try_recv().ok().flatten(),
+            Self::Scripted(receiver) => match receiver.try_recv() {
+                Ok(Some(event)) => Next::Event(event),
+                Ok(None) | Err(std::sync::mpsc::TryRecvError::Empty) => Next::Empty,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Next::Closed,
+            },
         }
     }
+
+    /// The next queued event, treating "empty" and "closed" alike: for a
+    /// retiring receiver both mean nothing more to apply.
+    fn try_event(&self) -> Option<ServiceEvent> {
+        match self.try_next() {
+            Next::Event(event) => Some(event),
+            Next::Empty | Next::Closed => None,
+        }
+    }
+}
+
+/// Whether [`BrowseState::drain`] left the browse able to receive more
+/// events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
+enum DrainOutcome {
+    /// The current receiver is open.
+    Open,
+    /// The current receiver is closed: the daemon dropped this browse (its
+    /// channel filled, or the daemon shut down). Nothing more will arrive
+    /// until the browse is opened again.
+    Closed,
 }
 
 /// The single browse we run for one DNS-SD service type, plus the handles
@@ -300,6 +344,10 @@ struct BrowseState {
     /// stopping the browse drops this state with it; and stopping a base-type
     /// browse wipes only base PTRs, never a subtype browse's.
     present: HashSet<String>,
+    /// Whether the last attempt to re-open this browse after the daemon closed
+    /// it failed, so a daemon that keeps refusing is logged at `warn` once and
+    /// at `debug` on every later poll, not at `warn` several times a second.
+    reopen_failed: bool,
     /// Test-only queue of events "sent by the daemon" but not yet drained, so a
     /// test can check that `poll_results` and `poll_found` share one drain. The
     /// real `Receiver`'s sender lives inside the daemon and cannot be written
@@ -318,6 +366,7 @@ impl BrowseState {
             surfaced: HashMap::new(),
             found: HashMap::new(),
             present: HashSet::new(),
+            reopen_failed: false,
             #[cfg(test)]
             injected: Vec::new(),
         }
@@ -361,7 +410,12 @@ impl BrowseState {
     ///
     /// So a stale `ServiceRemoved` on the old receiver is always applied
     /// before a genuine `ServiceFound` on the new one and can never erase it.
-    fn drain(&mut self, service_type: &str) {
+    ///
+    /// Returns [`DrainOutcome::Closed`] when the current receiver turns out to
+    /// be closed, once everything queued on it has been applied. A retiring
+    /// receiver closing is not reported: the daemon drops the old sender when
+    /// it installs the new one, so that is the switch-over itself.
+    fn drain(&mut self, service_type: &str) -> DrainOutcome {
         #[cfg(test)]
         let injected = std::mem::take(&mut self.injected);
         let Self {
@@ -378,44 +432,82 @@ impl BrowseState {
         };
         // Whether `receiver` is (now) the daemon's live listener for the type.
         let mut switched = true;
+        let mut outcome = DrainOutcome::Open;
         if let Some(old) = retiring.as_ref() {
             // 1. Everything the daemon has sent the old listener so far.
-            while let Some(event) = old.try_next() {
+            while let Some(event) = old.try_event() {
                 apply(event);
             }
-            if let Some(first) = receiver.try_next() {
-                // 3. The switch point. No record event reaches the old
-                //    receiver after this one was sent, but some may have
-                //    since step 1; only a stale chain's inert SearchStarted
-                //    can follow, and it is traced and ignored.
-                while let Some(event) = old.try_next() {
-                    apply(event);
+            match receiver.try_next() {
+                Next::Event(first) => {
+                    // 3. The switch point. No record event reaches the old
+                    //    receiver after this one was sent, but some may have
+                    //    since step 1; only a stale chain's inert
+                    //    SearchStarted can follow, and it is traced and
+                    //    ignored.
+                    while let Some(event) = old.try_event() {
+                        apply(event);
+                    }
+                    if !matches!(first, ServiceEvent::SearchStarted(_)) {
+                        tracing::trace!(
+                            target: LOG_TARGET,
+                            browse = service_type,
+                            first = ?first,
+                            "mDNS requery: the new receiver's first event is not SearchStarted; \
+                             switching over on it anyway",
+                        );
+                    }
+                    apply(first);
                 }
-                if !matches!(first, ServiceEvent::SearchStarted(_)) {
-                    tracing::trace!(
-                        target: LOG_TARGET,
-                        browse = service_type,
-                        first = ?first,
-                        "mDNS requery: the new receiver's first event is not SearchStarted; \
-                         switching over on it anyway",
-                    );
-                }
-                apply(first);
-            } else {
                 // 2. The daemon has not run the browse command yet.
-                switched = false;
+                Next::Empty => switched = false,
+                // The new receiver closed before it delivered anything: the
+                // daemon is gone, or dropped the browse. Take what the old
+                // receiver still holds; the read below reports the closure.
+                Next::Closed => {
+                    while let Some(event) = old.try_event() {
+                        apply(event);
+                    }
+                }
             }
         }
         if switched {
             *retiring = None;
-            while let Some(event) = receiver.try_next() {
-                apply(event);
+            loop {
+                match receiver.try_next() {
+                    Next::Event(event) => apply(event),
+                    Next::Empty => break,
+                    Next::Closed => {
+                        outcome = DrainOutcome::Closed;
+                        break;
+                    }
+                }
             }
         }
         #[cfg(test)]
         for event in injected {
             apply(event);
         }
+        outcome
+    }
+
+    /// Install `receiver`, from a fresh `daemon.browse` of this browse's
+    /// string, in place of a receiver the daemon closed
+    /// ([`DrainOutcome::Closed`]).
+    ///
+    /// The closure dropped events, so `present` and `surfaced` may no longer
+    /// match the daemon's cache: an instance may have left, or left and come
+    /// back, unseen. Both are cleared and rebuilt by the fresh browse's
+    /// replay, which mdns-sd sends from the cache it keeps across the
+    /// closure: every cached instance is reported found once more (a spurious
+    /// return costs the controller at most one advert pull, the safe
+    /// direction) and every cached record is re-delivered. Per-handle buffers
+    /// are untouched: what a handle was handed stays handed.
+    fn reopen(&mut self, receiver: EventSource) {
+        self.receiver = receiver;
+        self.retiring = None;
+        self.present.clear();
+        self.surfaced.clear();
     }
 }
 
@@ -645,9 +737,62 @@ impl MdnsSdDiscovery {
     /// calls never matters and neither can starve the other of events. Calling
     /// it from both in one pass is safe mid-requery too: the switch-over state
     /// lives in the browse, not in the call.
+    ///
+    /// # A browse the daemon closed
+    ///
+    /// mdns-sd closes a browse whose event channel fills: it stops the
+    /// querier and drops its sender, and from then on the receiver only
+    /// disconnects. Left alone, the browse would look like a quiet network
+    /// forever. So when the drain finds the current receiver closed, the
+    /// browse is opened again here, with the same string, and the fresh
+    /// browse's cache replay rebuilds its state (`BrowseState::reopen`). That
+    /// is logged at `warn`: it means events were lost, because this browse
+    /// was not polled often enough to keep up.
+    ///
+    /// If the daemon refuses (it has shut down), the closed receiver stays in
+    /// place and the next drain tries again.
     fn drain_events(&mut self, service_type: &str) {
-        if let Some(browse) = self.browses.get_mut(service_type) {
-            browse.drain(service_type);
+        let Some(browse) = self.browses.get_mut(service_type) else {
+            return;
+        };
+        if browse.drain(service_type) == DrainOutcome::Open {
+            return;
+        }
+        match self.daemon.browse(service_type) {
+            Ok(receiver) => {
+                browse.reopen(EventSource::Daemon(receiver));
+                browse.reopen_failed = false;
+                #[cfg(test)]
+                self.browse_calls
+                    .entry(service_type.to_string())
+                    .and_modify(|n| *n += 1)
+                    .or_insert(1);
+                tracing::warn!(
+                    target: LOG_TARGET,
+                    service_type = %service_type,
+                    handles = browse.pending.len(),
+                    "mDNS browse closed by the daemon (events were lost: it was not polled \
+                     often enough to keep up); re-opened",
+                );
+            }
+            Err(e) if browse.reopen_failed => {
+                tracing::debug!(
+                    target: LOG_TARGET,
+                    service_type = %service_type,
+                    error = %e,
+                    "mDNS browse is still closed; re-opening it failed again",
+                );
+            }
+            Err(e) => {
+                browse.reopen_failed = true;
+                tracing::warn!(
+                    target: LOG_TARGET,
+                    service_type = %service_type,
+                    error = %e,
+                    "mDNS browse closed by the daemon, and re-opening it failed; \
+                     retrying on every poll",
+                );
+            }
         }
     }
 }
@@ -2201,7 +2346,7 @@ mod tests {
         to_old
             .send(Some(found_event(TEST_SUBTYPE, fullname)))
             .unwrap();
-        browse.drain(TEST_SUBTYPE);
+        assert_eq!(browse.drain(TEST_SUBTYPE), DrainOutcome::Open);
         assert_eq!(take_found(&mut browse, h), vec!["requery-a".to_string()]);
 
         let to_new = begin_scripted_requery(&mut browse);
@@ -2212,7 +2357,7 @@ mod tests {
         to_new
             .send(Some(found_event(TEST_SUBTYPE, fullname)))
             .unwrap();
-        browse.drain(TEST_SUBTYPE);
+        assert_eq!(browse.drain(TEST_SUBTYPE), DrainOutcome::Open);
         assert_eq!(
             take_found(&mut browse, h),
             vec!["requery-a".to_string()],
@@ -2237,7 +2382,7 @@ mod tests {
         to_old
             .send(Some(found_event(TEST_SUBTYPE, fullname)))
             .unwrap();
-        browse.drain(TEST_SUBTYPE);
+        assert_eq!(browse.drain(TEST_SUBTYPE), DrainOutcome::Open);
         assert_eq!(take_found(&mut browse, h), vec!["requery-race".to_string()]);
 
         let to_new = begin_scripted_requery(&mut browse);
@@ -2251,7 +2396,7 @@ mod tests {
         to_new
             .send(Some(found_event(TEST_SUBTYPE, fullname)))
             .unwrap();
-        browse.drain(TEST_SUBTYPE);
+        assert_eq!(browse.drain(TEST_SUBTYPE), DrainOutcome::Open);
         assert_eq!(
             take_found(&mut browse, h),
             vec!["requery-race".to_string()],
@@ -2271,11 +2416,11 @@ mod tests {
         to_old
             .send(Some(found_event(TEST_SUBTYPE, fullname)))
             .unwrap();
-        browse.drain(TEST_SUBTYPE);
+        assert_eq!(browse.drain(TEST_SUBTYPE), DrainOutcome::Open);
         assert_eq!(take_found(&mut browse, h), vec!["requery-kept".to_string()]);
 
         let to_new = begin_scripted_requery(&mut browse);
-        browse.drain(TEST_SUBTYPE);
+        assert_eq!(browse.drain(TEST_SUBTYPE), DrainOutcome::Open);
         assert!(
             browse.retiring.is_some(),
             "the new receiver is empty: the old one is still the live listener"
@@ -2286,7 +2431,7 @@ mod tests {
         to_old
             .send(Some(removed_event(TEST_SUBTYPE, fullname)))
             .unwrap();
-        browse.drain(TEST_SUBTYPE);
+        assert_eq!(browse.drain(TEST_SUBTYPE), DrainOutcome::Open);
         assert!(
             !browse.present.contains("requery-kept"),
             "the removal is applied, not lost"
@@ -2294,14 +2439,14 @@ mod tests {
         assert!(browse.retiring.is_some());
 
         to_new.send(Some(search_started())).unwrap();
-        browse.drain(TEST_SUBTYPE);
+        assert_eq!(browse.drain(TEST_SUBTYPE), DrainOutcome::Open);
         assert!(browse.retiring.is_none(), "dropped at SearchStarted");
         assert!(to_old.send(None).is_err());
 
         to_new
             .send(Some(found_event(TEST_SUBTYPE, fullname)))
             .unwrap();
-        browse.drain(TEST_SUBTYPE);
+        assert_eq!(browse.drain(TEST_SUBTYPE), DrainOutcome::Open);
         assert_eq!(
             take_found(&mut browse, h),
             vec!["requery-kept".to_string()],
@@ -2323,7 +2468,7 @@ mod tests {
                 "requery-first._matter._tcp.local.",
             )))
             .unwrap();
-        browse.drain(TEST_SUBTYPE);
+        assert_eq!(browse.drain(TEST_SUBTYPE), DrainOutcome::Open);
         assert!(browse.retiring.is_none());
         assert!(to_old.send(None).is_err());
         assert_eq!(
@@ -2344,12 +2489,12 @@ mod tests {
         to_old
             .send(Some(found_event(TEST_SUBTYPE, fullname)))
             .unwrap();
-        browse.drain(TEST_SUBTYPE);
+        assert_eq!(browse.drain(TEST_SUBTYPE), DrainOutcome::Open);
         assert_eq!(take_found(&mut browse, h), vec!["requery-s1".to_string()]);
         to_old
             .send(Some(removed_event(TEST_SUBTYPE, fullname)))
             .unwrap();
-        browse.drain(TEST_SUBTYPE);
+        assert_eq!(browse.drain(TEST_SUBTYPE), DrainOutcome::Open);
         assert_eq!(take_found(&mut browse, h), Vec::<String>::new());
 
         let to_first = begin_scripted_requery(&mut browse);
@@ -2357,7 +2502,7 @@ mod tests {
         to_first
             .send(Some(found_event(TEST_SUBTYPE, fullname)))
             .unwrap();
-        browse.drain(TEST_SUBTYPE);
+        assert_eq!(browse.drain(TEST_SUBTYPE), DrainOutcome::Open);
         assert_eq!(
             take_found(&mut browse, h),
             vec!["requery-s1".to_string()],
@@ -2369,7 +2514,7 @@ mod tests {
         to_second
             .send(Some(found_event(TEST_SUBTYPE, fullname)))
             .unwrap();
-        browse.drain(TEST_SUBTYPE);
+        assert_eq!(browse.drain(TEST_SUBTYPE), DrainOutcome::Open);
         assert_eq!(
             take_found(&mut browse, h),
             Vec::<String>::new(),
@@ -2423,5 +2568,160 @@ mod tests {
             "only the original browse"
         );
         assert_eq!(d.browses.len(), 0);
+    }
+
+    // ---------------------------------------------------------------------
+    // A browse the daemon closed.
+    //
+    // mdns-sd closes a browse whose event channel fills (1000 events): it
+    // removes the querier, and the receiver disconnects once its queue is
+    // drained. These tests stand a scripted receiver in for the daemon's and
+    // drop its sending end to play that closure.
+    // ---------------------------------------------------------------------
+
+    /// Replace `service_type`'s current receiver on `d` with a scripted one;
+    /// returns its script. Dropping the script closes the receiver, as the
+    /// daemon does when it drops a subscription.
+    fn script_current_receiver(d: &mut MdnsSdDiscovery, service_type: &str) -> Script {
+        let (script, receiver) = std::sync::mpsc::channel();
+        d.browses.get_mut(service_type).unwrap().receiver = EventSource::Scripted(receiver);
+        script
+    }
+
+    /// The daemon closed the browse: what was queued is still delivered, and
+    /// the browse is opened again with the daemon, so the handle keeps
+    /// receiving records instead of going quiet for good.
+    #[test]
+    fn a_browse_the_daemon_closed_is_reopened() {
+        let mut d = MdnsSdDiscovery::new().unwrap();
+        let h = d.query_operational_fabric(TEST_CFID).unwrap();
+        let script = script_current_receiver(&mut d, TEST_SUBTYPE);
+        script
+            .send(Some(found_event(
+                TEST_SUBTYPE,
+                "closed-queued._matter._tcp.local.",
+            )))
+            .unwrap();
+        drop(script);
+
+        assert!(
+            names(&d.poll_found(h), "closed-queued"),
+            "the events queued before the closure are delivered"
+        );
+        assert_eq!(
+            d.browse_calls.get(TEST_SUBTYPE),
+            Some(&2),
+            "the closed browse is opened again"
+        );
+        assert!(
+            matches!(d.browses[TEST_SUBTYPE].receiver, EventSource::Daemon(_)),
+            "on a receiver from the daemon"
+        );
+        d.stop_query(h);
+    }
+
+    /// The re-opened browse's cache replay rebuilds which instances are
+    /// present. The closure dropped events, so an instance this browse saw
+    /// before it may have left and come back unseen; its replayed
+    /// `ServiceFound` is reported rather than suppressed as a re-delivery.
+    #[test]
+    fn a_reopened_browse_reports_the_instances_its_replay_finds() {
+        let fullname = "closed-return._matter._tcp.local.";
+        let mut d = MdnsSdDiscovery::new().unwrap();
+        let h = d.query_operational_fabric(TEST_CFID).unwrap();
+        let script = script_current_receiver(&mut d, TEST_SUBTYPE);
+        script
+            .send(Some(found_event(TEST_SUBTYPE, fullname)))
+            .unwrap();
+        assert!(names(&d.poll_found(h), "closed-return"));
+
+        drop(script);
+        assert_eq!(d.poll_found(h), Vec::<String>::new());
+        assert_eq!(d.browse_calls.get(TEST_SUBTYPE), Some(&2), "re-opened");
+
+        d.queue_for_test(TEST_SUBTYPE, found_event(TEST_SUBTYPE, fullname));
+        assert!(
+            names(&d.poll_found(h), "closed-return"),
+            "the replay's ServiceFound is reported"
+        );
+        d.stop_query(h);
+    }
+
+    /// A handle attached after the re-open is not seeded with a record from
+    /// before the closure: that instance may have gone while events were
+    /// being dropped. What the daemon still caches reaches it in the replay.
+    #[test]
+    fn a_reopened_browse_does_not_seed_new_handles_with_stale_records() {
+        let mut d = MdnsSdDiscovery::new().unwrap();
+        let h = d.query_operational_fabric(TEST_CFID).unwrap();
+        let script = script_current_receiver(&mut d, TEST_SUBTYPE);
+        script
+            .send(Some(resolved_event_under_subtype(
+                "closed-stale",
+                TEST_SUBTYPE,
+            )))
+            .unwrap();
+        assert!(contains(&d.poll_results(h), "closed-stale"));
+
+        drop(script);
+        let _ = d.poll_results(h);
+        assert_eq!(d.browse_calls.get(TEST_SUBTYPE), Some(&2), "re-opened");
+
+        let late = d.query_operational_fabric(TEST_CFID).unwrap();
+        assert!(
+            !contains(&d.poll_results(late), "closed-stale"),
+            "a record from before the closure is not replayed to a new handle"
+        );
+        d.stop_query(late);
+        d.stop_query(h);
+    }
+
+    /// The old receiver of a requery disconnecting is the switch-over itself
+    /// (the daemon replaced its sender), not a closed browse: nothing is
+    /// re-opened.
+    #[test]
+    fn a_retiring_receiver_closing_is_not_a_closed_browse() {
+        let mut d = MdnsSdDiscovery::new().unwrap();
+        let h = d.query_operational_fabric(TEST_CFID).unwrap();
+        let to_old = script_current_receiver(&mut d, TEST_SUBTYPE);
+        let (to_new, new_receiver) = std::sync::mpsc::channel();
+        d.browses
+            .get_mut(TEST_SUBTYPE)
+            .unwrap()
+            .begin_requery(EventSource::Scripted(new_receiver));
+        drop(to_old);
+        to_new.send(Some(search_started())).unwrap();
+
+        let _ = d.poll_found(h);
+        assert!(d.browses[TEST_SUBTYPE].retiring.is_none(), "switched over");
+        assert_eq!(
+            d.browse_calls.get(TEST_SUBTYPE),
+            Some(&1),
+            "only the original browse: the new receiver is live"
+        );
+        d.stop_query(h);
+    }
+
+    /// If the daemon refuses to re-open the browse (it has shut down), the
+    /// handle stays usable and polling does not panic; the next poll tries
+    /// again.
+    #[test]
+    fn a_browse_that_cannot_be_reopened_keeps_its_handle_usable() {
+        let daemon = ServiceDaemon::new().unwrap();
+        let mut d = MdnsSdDiscovery::with_daemon(daemon.clone());
+        let h = d.query_operational_fabric(TEST_CFID).unwrap();
+        let script = script_current_receiver(&mut d, TEST_SUBTYPE);
+        let _ = daemon.shutdown().unwrap().recv();
+        drop(script);
+
+        assert_eq!(d.poll_found(h), Vec::<String>::new());
+        assert_eq!(d.poll_results(h), Vec::<MatterService>::new());
+        assert_eq!(
+            d.browse_calls.get(TEST_SUBTYPE),
+            Some(&1),
+            "the re-open was refused"
+        );
+        assert!(d.browses.contains_key(TEST_SUBTYPE), "the browse is kept");
+        d.stop_query(h);
     }
 }
