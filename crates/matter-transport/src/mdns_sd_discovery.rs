@@ -761,12 +761,15 @@ impl MdnsSdDiscovery {
     ///
     /// If the daemon refuses (it has shut down), the closed receiver stays in
     /// place and the next drain tries again.
-    fn drain_events(&mut self, service_type: &str) {
+    ///
+    /// Returns [`DrainOutcome::Closed`] when the drain found the browse
+    /// closed, whether or not the re-open then succeeded.
+    fn drain_events(&mut self, service_type: &str) -> DrainOutcome {
         let Some(browse) = self.browses.get_mut(service_type) else {
-            return;
+            return DrainOutcome::Open;
         };
         if browse.drain(service_type) == DrainOutcome::Open {
-            return;
+            return DrainOutcome::Open;
         }
         match self.daemon.browse(service_type) {
             Ok(receiver) => {
@@ -804,6 +807,7 @@ impl MdnsSdDiscovery {
                 );
             }
         }
+        DrainOutcome::Closed
     }
 }
 
@@ -953,7 +957,7 @@ impl Discovery for MdnsSdDiscovery {
         let Some(service_type) = self.handle_types.get(&handle).cloned() else {
             return Vec::new();
         };
-        self.drain_events(&service_type);
+        let _ = self.drain_events(&service_type);
         // `handle_types` and `pending` are inserted and removed together, so a
         // missing buffer is unreachable; empty is the safe answer either way.
         self.browses
@@ -985,7 +989,7 @@ impl Discovery for MdnsSdDiscovery {
         let Some(service_type) = self.handle_types.get(&handle).cloned() else {
             return Vec::new();
         };
-        self.drain_events(&service_type);
+        let _ = self.drain_events(&service_type);
         self.browses
             .get_mut(&service_type)
             .and_then(|browse| browse.found.get_mut(&handle))
@@ -1008,7 +1012,9 @@ impl Discovery for MdnsSdDiscovery {
     /// requery while such a switch-over is still pending, or for an unknown or
     /// stopped handle, does nothing; if the daemon refuses the browse, nothing
     /// changes either (logged at `debug`). The daemon cancels the old query
-    /// chain when it runs the new browse.
+    /// chain when it runs the new browse. A requery first drains the browse,
+    /// and if the daemon has closed it, re-opens it instead (see
+    /// `drain_events`): that is a fresh browse already.
     ///
     /// # What it costs
     ///
@@ -1026,9 +1032,17 @@ impl Discovery for MdnsSdDiscovery {
     /// the daemon holds stay silent), and with each one resolve queries (SRV
     /// and TXT, or A and AAAA) for every instance cached but not yet resolved.
     fn requery(&mut self, handle: QueryHandle) {
-        let Some(service_type) = self.handle_types.get(&handle) else {
+        let Some(service_type) = self.handle_types.get(&handle).cloned() else {
             return;
         };
+        // Drain first, so a browse the daemon has closed is seen as closed.
+        // Retired, its receiver would read as the old listener of an ordinary
+        // switch-over, and the closure would go unnoticed. A re-open issues a
+        // fresh browse, which is what a requery does, so it is not repeated.
+        if self.drain_events(&service_type) == DrainOutcome::Closed {
+            return;
+        }
+        let service_type = &service_type;
         let Some(browse) = self.browses.get_mut(service_type) else {
             return;
         };
@@ -2691,6 +2705,42 @@ mod tests {
             "a record from before the closure is not replayed to a new handle"
         );
         d.stop_query(late);
+        d.stop_query(h);
+    }
+
+    /// A requery that runs after the daemon closed the browse, before any poll
+    /// saw it, still notices the closure. Retiring the closed receiver would
+    /// otherwise pass for an ordinary switch-over: no `warn`, and the
+    /// instances a lost `ServiceRemoved` should have cleared stay present, so
+    /// the replay's report of their return is suppressed.
+    #[test]
+    fn a_requery_after_the_daemon_closed_the_browse_reopens_it() {
+        let fullname = "closed-requery._matter._tcp.local.";
+        let mut d = MdnsSdDiscovery::new().unwrap();
+        let h = d.query_operational_fabric(TEST_CFID).unwrap();
+        let script = script_current_receiver(&mut d, TEST_SUBTYPE);
+        script
+            .send(Some(found_event(TEST_SUBTYPE, fullname)))
+            .unwrap();
+        assert!(names(&d.poll_found(h), "closed-requery"));
+
+        drop(script);
+        d.requery(h);
+        assert_eq!(
+            d.browse_calls.get(TEST_SUBTYPE),
+            Some(&2),
+            "re-opened once; the requery does not browse again on top"
+        );
+        assert!(
+            d.browses[TEST_SUBTYPE].retiring.is_none(),
+            "the closed receiver is not retired as if it were live"
+        );
+
+        d.queue_for_test(TEST_SUBTYPE, found_event(TEST_SUBTYPE, fullname));
+        assert!(
+            names(&d.poll_found(h), "closed-requery"),
+            "the replay's ServiceFound is reported"
+        );
         d.stop_query(h);
     }
 
