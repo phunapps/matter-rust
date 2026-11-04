@@ -137,7 +137,8 @@
 //! more cached instances fills the channel again at once and can never stay
 //! open. Re-opens therefore back off: one that closes again waits 1, 2, 4, …
 //! drains (at most 256) before the next attempt, logged at `debug`. The
-//! backoff resets once a re-opened browse delivers events and stays open.
+//! backoff resets once a re-opened browse delivers events and then stays open
+//! for 16 drains in a row.
 //!
 //! # Diagnostics
 //!
@@ -196,11 +197,22 @@ const FOUND_BUFFER_CAP: usize = 256;
 /// The most drains of a closed browse skipped between two attempts to re-open
 /// it ([`ReopenBackoff`]).
 ///
-/// About four minutes at `matter-controller`'s 1 s drain, one at its 250 ms
-/// fast drain: long enough that a browse which can never stay open (its cache
+/// A drain is any `poll_results`, `poll_found` or `requery` call on any handle
+/// of the browse, so in time this depends on the caller: a single handle
+/// drained once a second, `matter-controller`'s slowest cadence, skips for at
+/// most about four minutes; more handles, or both polls in one pass, make it
+/// shorter. Long enough that a browse which can never stay open (its cache
 /// replay alone fills the channel) costs a re-open and a `debug` line every
 /// few minutes, short enough that one which recovers is back soon.
 const REOPEN_BACKOFF_MAX_SKIPS: u32 = 256;
+
+/// How many drains in a row a re-opened browse must stay open, starting with
+/// one that delivered an event, before its backoff resets ([`ReopenBackoff`]).
+///
+/// One open drain is not enough: a replay that only just fits the channel is
+/// drained once, and then live answers fill the rest and close it again. A
+/// browse that closes within this many drains carries on with its backoff.
+const REOPEN_HEALTHY_DRAINS: u32 = 16;
 
 /// How soon a closed browse is re-opened again, counted in drains.
 ///
@@ -208,14 +220,18 @@ const REOPEN_BACKOFF_MAX_SKIPS: u32 = 256;
 /// are when a closure is noticed anyway. The first closure of an episode is
 /// re-opened at once; each further one waits twice as many drains as the
 /// last (1, 2, 4, … up to [`REOPEN_BACKOFF_MAX_SKIPS`]). The episode ends,
-/// and the backoff resets, once a drain finds the current receiver still
-/// open after it delivered an event: the daemon ran the browse and it held.
+/// and the backoff resets, once the re-opened browse has stayed open for
+/// [`REOPEN_HEALTHY_DRAINS`] drains in a row, the first of which delivered an
+/// event: the daemon ran the browse, and it held.
 #[derive(Debug, Default)]
 struct ReopenBackoff {
     /// Drains of the closed browse still to skip before the next attempt.
     skip: u32,
     /// The skip set after the last attempt; 0 while no episode is running.
     last: u32,
+    /// Open drains in a row since the re-opened receiver first delivered an
+    /// event; 0 until it has.
+    healthy: u32,
 }
 
 impl ReopenBackoff {
@@ -242,9 +258,23 @@ impl ReopenBackoff {
         first
     }
 
-    /// The browse is healthy again: end the episode.
-    fn reset(&mut self) {
-        *self = Self::default();
+    /// A drain found the browse closed: any healthy run is over.
+    fn closed(&mut self) {
+        self.healthy = 0;
+    }
+
+    /// A drain found the browse open, having taken an event from the current
+    /// receiver if `delivered`. Ends the episode once the browse has stayed
+    /// open for [`REOPEN_HEALTHY_DRAINS`] drains in a row. Outside an episode
+    /// it does nothing.
+    fn open_drain(&mut self, delivered: bool) {
+        if self.last == 0 || (self.healthy == 0 && !delivered) {
+            return;
+        }
+        self.healthy += 1;
+        if self.healthy >= REOPEN_HEALTHY_DRAINS {
+            *self = Self::default();
+        }
     }
 }
 
@@ -565,9 +595,8 @@ impl BrowseState {
         for event in injected {
             apply(event);
         }
-        if outcome == DrainOutcome::Open && delivered {
-            // The daemon ran this receiver's browse and it held.
-            reopen_backoff.reset();
+        if outcome == DrainOutcome::Open {
+            reopen_backoff.open_drain(delivered);
         }
         outcome
     }
@@ -845,6 +874,7 @@ impl MdnsSdDiscovery {
         if browse.drain(service_type) == DrainOutcome::Open {
             return DrainOutcome::Open;
         }
+        browse.reopen_backoff.closed();
         if !browse.reopen_backoff.ready() {
             tracing::debug!(
                 target: LOG_TARGET,
@@ -2878,8 +2908,9 @@ mod tests {
         d.stop_query(h);
     }
 
-    /// Once a re-opened browse has delivered events and is still open, it
-    /// works, and a later closure is a new episode: re-opened at once.
+    /// Once a re-opened browse has delivered events and stayed open for
+    /// `REOPEN_HEALTHY_DRAINS` drains in a row, it works, and a later closure
+    /// is a new episode: re-opened at once.
     #[test]
     fn a_reopened_browse_that_stays_open_resets_the_backoff() {
         let mut d = MdnsSdDiscovery::new().unwrap();
@@ -2890,13 +2921,81 @@ mod tests {
 
         let healthy = script_current_receiver(&mut d, TEST_SUBTYPE);
         healthy.send(Some(search_started())).unwrap();
-        let _ = d.poll_found(h);
+        for _ in 0..REOPEN_HEALTHY_DRAINS {
+            let _ = d.poll_found(h);
+        }
         drop(healthy);
         let _ = d.poll_found(h);
         assert_eq!(
             subtype_browses(&d),
             3,
-            "a closure after a healthy drain is re-opened at once"
+            "a closure after a long healthy run is re-opened at once"
+        );
+        d.stop_query(h);
+    }
+
+    /// A re-opened browse that delivers its replay but closes again a few
+    /// drains later (the replay nearly filled the channel, and live answers
+    /// filled the rest) has not proved itself: the backoff carries on rather
+    /// than restarting, so it is not re-opened at once, with a `warn`, every
+    /// couple of drains.
+    #[test]
+    fn a_reopened_browse_that_closes_soon_after_keeps_the_backoff() {
+        let mut d = MdnsSdDiscovery::new().unwrap();
+        let h = d.query_operational_fabric(TEST_CFID).unwrap();
+        close_after_search_started(&mut d, TEST_SUBTYPE);
+        let _ = d.poll_found(h);
+        assert_eq!(subtype_browses(&d), 2, "re-opened");
+
+        let briefly = script_current_receiver(&mut d, TEST_SUBTYPE);
+        briefly.send(Some(search_started())).unwrap();
+        for _ in 0..3 {
+            let _ = d.poll_found(h);
+        }
+        drop(briefly);
+        let _ = d.poll_found(h);
+        assert_eq!(
+            subtype_browses(&d),
+            2,
+            "still backing off: one drain skipped"
+        );
+        let _ = d.poll_found(h);
+        assert_eq!(subtype_browses(&d), 3, "then re-opened");
+        d.stop_query(h);
+    }
+
+    /// A closure ends a healthy run: the next re-open starts counting from
+    /// zero, so a long run before the closure, topped up by drains of a
+    /// receiver that has delivered nothing yet, does not reset the backoff.
+    #[test]
+    fn a_closure_ends_the_healthy_run() {
+        let mut d = MdnsSdDiscovery::new().unwrap();
+        let h = d.query_operational_fabric(TEST_CFID).unwrap();
+        close_after_search_started(&mut d, TEST_SUBTYPE);
+        let _ = d.poll_found(h);
+        assert_eq!(subtype_browses(&d), 2, "re-opened");
+
+        let run = script_current_receiver(&mut d, TEST_SUBTYPE);
+        run.send(Some(search_started())).unwrap();
+        for _ in 0..REOPEN_HEALTHY_DRAINS - 6 {
+            let _ = d.poll_found(h);
+        }
+        drop(run);
+        let _ = d.poll_found(h);
+        assert_eq!(subtype_browses(&d), 2, "one drain skipped");
+        let _ = d.poll_found(h);
+        assert_eq!(subtype_browses(&d), 3, "re-opened again");
+
+        let silent = script_current_receiver(&mut d, TEST_SUBTYPE);
+        for _ in 0..6 {
+            let _ = d.poll_found(h);
+        }
+        drop(silent);
+        let _ = d.poll_found(h);
+        assert_eq!(
+            subtype_browses(&d),
+            3,
+            "still backing off: the earlier run did not carry over"
         );
         d.stop_query(h);
     }
