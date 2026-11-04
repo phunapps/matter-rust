@@ -2658,6 +2658,12 @@ mod tests {
         d.requery(h);
         assert_eq!(d.browse_calls.get(TEST_SUBTYPE), Some(&2), "re-browsed");
         assert!(d.browses[TEST_SUBTYPE].retiring.is_some());
+        // `requery` drains first, so if the daemon thread had already run the
+        // browse command, its `SearchStarted` would complete the switch and
+        // the second requery would rightly browse again. Stand an empty
+        // scripted receiver in for the new one, so the switch is still
+        // pending however far the daemon has got.
+        let _pending = script_current_receiver(&mut d, TEST_SUBTYPE);
         d.requery(h);
         assert_eq!(
             d.browse_calls.get(TEST_SUBTYPE),
