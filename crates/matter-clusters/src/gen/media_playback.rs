@@ -89,6 +89,8 @@ pub mod event_id {
 bitflags::bitflags! {
     /// `MediaPlayback` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// AdvancedSeek (AS).
         const AS = 1 << 0;
@@ -105,6 +107,7 @@ bitflags::bitflags! {
 
 /// `CharacteristicEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CharacteristicEnum {
     /// ForcedSubtitles = 0.
     ForcedSubtitles,
@@ -201,6 +204,7 @@ impl CharacteristicEnum {
 
 /// `PlaybackPositionStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct PlaybackPositionStruct {
     /// Field UpdatedAt (tag 0).
@@ -211,6 +215,7 @@ pub struct PlaybackPositionStruct {
 
 /// `PlaybackStateEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PlaybackStateEnum {
     /// Playing = 0.
     Playing,
@@ -251,6 +256,7 @@ impl PlaybackStateEnum {
 
 /// `StatusEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StatusEnum {
     /// Success = 0.
     Success,
@@ -299,6 +305,7 @@ impl StatusEnum {
 
 /// `TrackAttributesStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct TrackAttributesStruct {
     /// Field LanguageCode (tag 0).
@@ -311,6 +318,7 @@ pub struct TrackAttributesStruct {
 
 /// `TrackStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct TrackStruct {
     /// Field Id (tag 0).

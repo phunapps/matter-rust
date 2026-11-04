@@ -33,6 +33,7 @@ pub mod attribute_id {
 ///
 /// Encodable because a writable attribute carries it: build one and write it with `encode` (or `write_fields`, inside the list that carries it).
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LabelStruct {
     /// Field Label (tag 0).
     pub label: String,

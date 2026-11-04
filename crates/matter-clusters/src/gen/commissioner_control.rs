@@ -45,6 +45,8 @@ pub mod event_id {
 bitflags::bitflags! {
     /// `SupportedDeviceCategoryBitmap` (map32).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct SupportedDeviceCategoryBitmap: u32 {
         /// FabricSynchronization.
         const FABRIC_SYNCHRONIZATION = 1 << 0;

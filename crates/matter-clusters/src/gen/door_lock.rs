@@ -170,6 +170,8 @@ pub mod event_id {
 bitflags::bitflags! {
     /// `DoorLock` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// PinCredential (PIN).
         const PIN = 1 << 0;
@@ -205,6 +207,7 @@ bitflags::bitflags! {
 
 /// `AlarmCodeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AlarmCodeEnum {
     /// LockJammed = 0.
     LockJammed,
@@ -262,6 +265,8 @@ impl AlarmCodeEnum {
 bitflags::bitflags! {
     /// `ConfigurationRegisterBitmap` (map16).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct ConfigurationRegisterBitmap: u16 {
         /// LocalProgramming.
         const LOCAL_PROGRAMMING = 1 << 0;
@@ -280,6 +285,7 @@ bitflags::bitflags! {
 
 /// `CredentialRuleEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CredentialRuleEnum {
     /// Single = 0.
     Single,
@@ -317,6 +323,8 @@ impl CredentialRuleEnum {
 bitflags::bitflags! {
     /// `CredentialRulesBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct CredentialRulesBitmap: u8 {
         /// Single.
         const SINGLE = 1 << 0;
@@ -329,6 +337,7 @@ bitflags::bitflags! {
 
 /// `CredentialStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CredentialStruct {
     /// Field CredentialType (tag 0).
     pub credential_type: CredentialTypeEnum,
@@ -338,6 +347,7 @@ pub struct CredentialStruct {
 
 /// `CredentialTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CredentialTypeEnum {
     /// ProgrammingPin = 0.
     ProgrammingPin,
@@ -398,6 +408,7 @@ impl CredentialTypeEnum {
 
 /// `DataOperationTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DataOperationTypeEnum {
     /// Add = 0.
     Add,
@@ -435,6 +446,8 @@ impl DataOperationTypeEnum {
 bitflags::bitflags! {
     /// `DaysMaskBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct DaysMaskBitmap: u8 {
         /// Sunday.
         const SUNDAY = 1 << 0;
@@ -455,6 +468,7 @@ bitflags::bitflags! {
 
 /// `DoorStateEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DoorStateEnum {
     /// DoorOpen = 0.
     DoorOpen,
@@ -503,6 +517,7 @@ impl DoorStateEnum {
 
 /// `LEDSettingEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LEDSettingEnum {
     /// NoLedSignal = 0.
     NoLedSignal,
@@ -540,6 +555,8 @@ impl LEDSettingEnum {
 bitflags::bitflags! {
     /// `LocalProgrammingFeaturesBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct LocalProgrammingFeaturesBitmap: u8 {
         /// AddUsersCredentialsSchedules.
         const ADD_USERS_CREDENTIALS_SCHEDULES = 1 << 0;
@@ -554,6 +571,7 @@ bitflags::bitflags! {
 
 /// `LockDataTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LockDataTypeEnum {
     /// Unspecified = 0.
     Unspecified,
@@ -634,6 +652,7 @@ impl LockDataTypeEnum {
 
 /// `LockOperationTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LockOperationTypeEnum {
     /// Lock = 0.
     Lock,
@@ -678,6 +697,7 @@ impl LockOperationTypeEnum {
 
 /// `LockStateEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LockStateEnum {
     /// NotFullyLocked = 0.
     NotFullyLocked,
@@ -718,6 +738,7 @@ impl LockStateEnum {
 
 /// `LockTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LockTypeEnum {
     /// DeadBolt = 0.
     DeadBolt,
@@ -790,6 +811,7 @@ impl LockTypeEnum {
 
 /// `OperatingModeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum OperatingModeEnum {
     /// Normal = 0.
     Normal,
@@ -835,6 +857,8 @@ impl OperatingModeEnum {
 bitflags::bitflags! {
     /// `OperatingModesBitmap` (map16).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct OperatingModesBitmap: u16 {
         /// Normal.
         const NORMAL = 1 << 0;
@@ -851,6 +875,7 @@ bitflags::bitflags! {
 
 /// `OperationErrorEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum OperationErrorEnum {
     /// Unspecified = 0.
     Unspecified,
@@ -895,6 +920,7 @@ impl OperationErrorEnum {
 
 /// `OperationSourceEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum OperationSourceEnum {
     /// Unspecified = 0.
     Unspecified,
@@ -963,6 +989,7 @@ impl OperationSourceEnum {
 
 /// `SoundVolumeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SoundVolumeEnum {
     /// Silent = 0.
     Silent,
@@ -1003,6 +1030,7 @@ impl SoundVolumeEnum {
 
 /// `StatusCodeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StatusCodeEnum {
     /// Duplicate = 2.
     Duplicate,
@@ -1035,6 +1063,7 @@ impl StatusCodeEnum {
 
 /// `UserStatusEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum UserStatusEnum {
     /// Available = 0.
     Available,
@@ -1071,6 +1100,7 @@ impl UserStatusEnum {
 
 /// `UserTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum UserTypeEnum {
     /// UnrestrictedUser = 0.
     UnrestrictedUser,

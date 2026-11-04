@@ -31,6 +31,7 @@ pub mod attribute_id {
 
 /// `LabelStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct LabelStruct {
     /// Field Label (tag 0).

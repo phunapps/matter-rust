@@ -69,6 +69,8 @@ pub mod event_id {
 bitflags::bitflags! {
     /// `WiFiNetworkDiagnostics` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// PacketCounts (PKTCNT).
         const PKTCNT = 1 << 0;
@@ -79,6 +81,7 @@ bitflags::bitflags! {
 
 /// `AssociationFailureCauseEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AssociationFailureCauseEnum {
     /// Unknown = 0.
     Unknown,
@@ -119,6 +122,7 @@ impl AssociationFailureCauseEnum {
 
 /// `ConnectionStatusEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ConnectionStatusEnum {
     /// Connected = 0.
     Connected,
@@ -151,6 +155,7 @@ impl ConnectionStatusEnum {
 
 /// `SecurityTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SecurityTypeEnum {
     /// Unspecified = 0.
     Unspecified,
@@ -199,6 +204,7 @@ impl SecurityTypeEnum {
 
 /// `WiFiVersionEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum WiFiVersionEnum {
     /// A = 0.
     A,

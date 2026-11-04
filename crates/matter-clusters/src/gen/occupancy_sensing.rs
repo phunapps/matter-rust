@@ -66,6 +66,8 @@ pub mod event_id {
 bitflags::bitflags! {
     /// `OccupancySensing` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// Other (OTHER).
         const OTHER = 1 << 0;
@@ -88,6 +90,7 @@ bitflags::bitflags! {
 
 /// `HoldTimeLimitsStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct HoldTimeLimitsStruct {
     /// Field HoldTimeMin (tag 0).
@@ -101,6 +104,8 @@ pub struct HoldTimeLimitsStruct {
 bitflags::bitflags! {
     /// `OccupancyBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct OccupancyBitmap: u8 {
         /// Occupied.
         const OCCUPIED = 1 << 0;
@@ -110,6 +115,8 @@ bitflags::bitflags! {
 bitflags::bitflags! {
     /// `OccupancySensorTypeBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct OccupancySensorTypeBitmap: u8 {
         /// Pir.
         const PIR = 1 << 0;
@@ -122,6 +129,7 @@ bitflags::bitflags! {
 
 /// `OccupancySensorTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum OccupancySensorTypeEnum {
     /// Pir = 0.
     Pir,

@@ -51,6 +51,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `EthernetNetworkDiagnostics` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// PacketCounts (PKTCNT).
         const PKTCNT = 1 << 0;
@@ -61,6 +63,7 @@ bitflags::bitflags! {
 
 /// `PHYRateEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PHYRateEnum {
     /// Rate10M = 0.
     Rate10M,

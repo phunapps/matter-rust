@@ -68,6 +68,7 @@ pub mod event_id {
 
 /// `ActionErrorEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ActionErrorEnum {
     /// Unknown = 0.
     Unknown,
@@ -100,6 +101,7 @@ impl ActionErrorEnum {
 
 /// `ActionStateEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ActionStateEnum {
     /// Inactive = 0.
     Inactive,
@@ -140,6 +142,7 @@ impl ActionStateEnum {
 
 /// `ActionStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ActionStruct {
     /// Field ActionId (tag 0).
@@ -158,6 +161,7 @@ pub struct ActionStruct {
 
 /// `ActionTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ActionTypeEnum {
     /// Other = 0.
     Other,
@@ -211,6 +215,8 @@ impl ActionTypeEnum {
 bitflags::bitflags! {
     /// `CommandBits` (map16).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct CommandBits: u16 {
         /// InstantAction.
         const INSTANT_ACTION = 1 << 0;
@@ -241,6 +247,7 @@ bitflags::bitflags! {
 
 /// `EndpointListStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct EndpointListStruct {
     /// Field EndpointListId (tag 0).
@@ -255,6 +262,7 @@ pub struct EndpointListStruct {
 
 /// `EndpointListTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum EndpointListTypeEnum {
     /// Other = 0.
     Other,

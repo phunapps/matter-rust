@@ -34,6 +34,8 @@ pub mod attribute_id {}
 bitflags::bitflags! {
     /// `KeypadInput` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// NavigationKeyCodes (NV).
         const NV = 1 << 0;
@@ -46,6 +48,7 @@ bitflags::bitflags! {
 
 /// `CecKeyCodeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CecKeyCodeEnum {
     /// Select = 0.
     Select,
@@ -410,6 +413,7 @@ impl CecKeyCodeEnum {
 
 /// `StatusEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StatusEnum {
     /// Success = 0.
     Success,

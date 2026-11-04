@@ -56,6 +56,7 @@ pub mod event_id {
 
 /// `ErrorStateEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ErrorStateEnum {
     /// NoError = 0.
     NoError,
@@ -96,6 +97,7 @@ impl ErrorStateEnum {
 
 /// `ErrorStateStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ErrorStateStruct {
     /// Field ErrorStateId (tag 0).
@@ -108,6 +110,7 @@ pub struct ErrorStateStruct {
 
 /// `OperationalStateEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum OperationalStateEnum {
     /// Stopped = 0.
     Stopped,
@@ -148,6 +151,7 @@ impl OperationalStateEnum {
 
 /// `OperationalStateStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct OperationalStateStruct {
     /// Field OperationalStateId (tag 0).

@@ -44,6 +44,7 @@ pub mod event_id {
 
 /// `StatusEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StatusEnum {
     /// Success = 0.
     Success,
@@ -80,6 +81,7 @@ impl StatusEnum {
 
 /// `TargetInfoStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct TargetInfoStruct {
     /// Field Identifier (tag 0).

@@ -51,6 +51,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `ServiceArea` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// SelectWhileRunning (SELRUN).
         const SELRUN = 1 << 0;
@@ -63,6 +65,7 @@ bitflags::bitflags! {
 
 /// `AreaInfoStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct AreaInfoStruct {
     /// Field LocationInfo (tag 0).
@@ -73,6 +76,7 @@ pub struct AreaInfoStruct {
 
 /// `AreaStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct AreaStruct {
     /// Field AreaId (tag 0).
@@ -85,6 +89,7 @@ pub struct AreaStruct {
 
 /// `LandmarkInfoStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct LandmarkInfoStruct {
     /// Field LandmarkTag (tag 0).
@@ -97,6 +102,7 @@ pub struct LandmarkInfoStruct {
 ///
 /// Generated from the Matter global type `locationdesc`.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct LocationDescriptorStruct {
     /// Field LocationName (tag 0).
@@ -109,6 +115,7 @@ pub struct LocationDescriptorStruct {
 
 /// `MapStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct MapStruct {
     /// Field MapId (tag 0).
@@ -119,6 +126,7 @@ pub struct MapStruct {
 
 /// `OperationalStatusEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum OperationalStatusEnum {
     /// Pending = 0.
     Pending,
@@ -159,6 +167,7 @@ impl OperationalStatusEnum {
 
 /// `ProgressStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ProgressStruct {
     /// Field AreaId (tag 0).
@@ -173,6 +182,7 @@ pub struct ProgressStruct {
 
 /// `SelectAreasStatus` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SelectAreasStatus {
     /// Success = 0.
     Success,
@@ -213,6 +223,7 @@ impl SelectAreasStatus {
 
 /// `SkipAreaStatus` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SkipAreaStatus {
     /// Success = 0.
     Success,

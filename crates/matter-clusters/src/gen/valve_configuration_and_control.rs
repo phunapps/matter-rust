@@ -65,6 +65,8 @@ pub mod event_id {
 bitflags::bitflags! {
     /// `ValveConfigurationAndControl` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// TimeSync (TS).
         const TS = 1 << 0;
@@ -75,6 +77,7 @@ bitflags::bitflags! {
 
 /// `StatusCodeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StatusCodeEnum {
     /// FailureDueToFault = 2.
     FailureDueToFault,
@@ -104,6 +107,8 @@ impl StatusCodeEnum {
 bitflags::bitflags! {
     /// `ValveFaultBitmap` (map16).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct ValveFaultBitmap: u16 {
         /// GeneralFault.
         const GENERAL_FAULT = 1 << 0;
@@ -122,6 +127,7 @@ bitflags::bitflags! {
 
 /// `ValveStateEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ValveStateEnum {
     /// Closed = 0.
     Closed,

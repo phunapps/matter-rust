@@ -92,6 +92,8 @@ pub mod event_id {
 bitflags::bitflags! {
     /// `GoldenFixture` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// FeatureA (FA).
         /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.
@@ -104,6 +106,7 @@ bitflags::bitflags! {
 
 /// `ModeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ModeEnum {
     /// Auto = 0.
     Auto,
@@ -138,6 +141,8 @@ impl ModeEnum {
 bitflags::bitflags! {
     /// `FlagsBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct FlagsBitmap: u8 {
         /// Alpha.
         const ALPHA = 1 << 0;
@@ -150,6 +155,8 @@ bitflags::bitflags! {
 bitflags::bitflags! {
     /// `WideFlags` (map16).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct WideFlags: u16 {
         /// First.
         const FIRST = 1 << 0;
@@ -198,6 +205,7 @@ pub struct NestStruct {
 
 /// `PointStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PointStruct {
     /// Field X (tag 0).
     /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.

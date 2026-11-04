@@ -41,6 +41,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `RvcCleanMode` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// DirectModeChange (DIRECTMODECH).
         const DIRECTMODECH = 1 << 20;
@@ -49,6 +51,7 @@ bitflags::bitflags! {
 
 /// `ModeChangeStatus` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ModeChangeStatus {
     /// CleaningInProgress = 64.
     CleaningInProgress,
@@ -93,6 +96,7 @@ impl ModeChangeStatus {
 
 /// `ModeOptionStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ModeOptionStruct {
     /// Field Label (tag 0).
@@ -105,6 +109,7 @@ pub struct ModeOptionStruct {
 
 /// `ModeTag` (enum16).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ModeTag {
     /// Auto = 0.
     Auto,
@@ -185,6 +190,7 @@ impl ModeTag {
 
 /// `ModeTagStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ModeTagStruct {
     /// Field MfgCode (tag 0).

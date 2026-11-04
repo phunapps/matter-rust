@@ -50,6 +50,7 @@ pub mod event_id {
 
 /// `AnnouncementReasonEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AnnouncementReasonEnum {
     /// SimpleAnnouncement = 0.
     SimpleAnnouncement,
@@ -86,6 +87,7 @@ impl AnnouncementReasonEnum {
 
 /// `ChangeReasonEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ChangeReasonEnum {
     /// Unknown = 0.
     Unknown,
@@ -132,6 +134,7 @@ impl ChangeReasonEnum {
 ///
 /// Encodable because a writable attribute carries it: build one and write it with `encode` (or `write_fields`, inside the list that carries it).
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ProviderLocation {
     /// Field ProviderNodeId (tag 1).
     pub provider_node_id: u64,
@@ -146,6 +149,7 @@ pub struct ProviderLocation {
 
 /// `UpdateStateEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum UpdateStateEnum {
     /// Unknown = 0.
     Unknown,

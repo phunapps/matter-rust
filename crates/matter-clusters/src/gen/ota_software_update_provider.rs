@@ -39,6 +39,7 @@ pub mod attribute_id {}
 
 /// `ApplyUpdateActionEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ApplyUpdateActionEnum {
     /// Proceed = 0.
     Proceed,
@@ -75,6 +76,7 @@ impl ApplyUpdateActionEnum {
 
 /// `DownloadProtocolEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DownloadProtocolEnum {
     /// BdxSynchronous = 0.
     BdxSynchronous,
@@ -115,6 +117,7 @@ impl DownloadProtocolEnum {
 
 /// `StatusEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StatusEnum {
     /// UpdateAvailable = 0.
     UpdateAvailable,

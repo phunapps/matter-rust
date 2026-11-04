@@ -38,6 +38,7 @@ pub mod attribute_id {
 
 /// `ModeChangeStatus` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ModeChangeStatus {
     /// Success = 0.
     Success,
@@ -78,6 +79,7 @@ impl ModeChangeStatus {
 
 /// `ModeOptionStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ModeOptionStruct {
     /// Field Label (tag 0).
@@ -90,6 +92,7 @@ pub struct ModeOptionStruct {
 
 /// `ModeTag` (enum16).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ModeTag {
     /// Auto = 0.
     Auto,
@@ -162,6 +165,7 @@ impl ModeTag {
 
 /// `ModeTagStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ModeTagStruct {
     /// Field MfgCode (tag 0).

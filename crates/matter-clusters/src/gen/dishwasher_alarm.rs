@@ -49,6 +49,8 @@ pub mod event_id {
 bitflags::bitflags! {
     /// `DishwasherAlarm` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// Reset (RESET).
         const RESET = 1 << 0;
@@ -58,6 +60,8 @@ bitflags::bitflags! {
 bitflags::bitflags! {
     /// `AlarmBitmap` (map32).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct AlarmBitmap: u32 {
         /// InflowError.
         /// Provisional in chip's Matter 1.4.2 data, though not in the codegen model: a later revision may change or remove it.

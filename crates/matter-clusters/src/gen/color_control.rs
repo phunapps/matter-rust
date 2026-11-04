@@ -175,6 +175,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `ColorControl` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// HueSaturation (HS).
         const HS = 1 << 0;
@@ -192,6 +194,8 @@ bitflags::bitflags! {
 bitflags::bitflags! {
     /// `ColorCapabilitiesBitmap` (map16).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct ColorCapabilitiesBitmap: u16 {
         /// HueSaturation.
         const HUE_SATURATION = 1 << 0;
@@ -208,6 +212,7 @@ bitflags::bitflags! {
 
 /// `ColorLoopActionEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ColorLoopActionEnum {
     /// Deactivate = 0.
     Deactivate,
@@ -244,6 +249,7 @@ impl ColorLoopActionEnum {
 
 /// `ColorLoopDirectionEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ColorLoopDirectionEnum {
     /// Decrement = 0.
     Decrement,
@@ -276,6 +282,7 @@ impl ColorLoopDirectionEnum {
 
 /// `ColorModeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ColorModeEnum {
     /// CurrentHueAndCurrentSaturation = 0.
     CurrentHueAndCurrentSaturation,
@@ -312,6 +319,7 @@ impl ColorModeEnum {
 
 /// `DirectionEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DirectionEnum {
     /// Shortest = 0.
     Shortest,
@@ -352,6 +360,7 @@ impl DirectionEnum {
 
 /// `DriftCompensationEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DriftCompensationEnum {
     /// None = 0.
     None,
@@ -396,6 +405,7 @@ impl DriftCompensationEnum {
 
 /// `EnhancedColorModeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum EnhancedColorModeEnum {
     /// CurrentHueAndCurrentSaturation = 0.
     CurrentHueAndCurrentSaturation,
@@ -436,6 +446,7 @@ impl EnhancedColorModeEnum {
 
 /// `MoveModeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MoveModeEnum {
     /// Stop = 0.
     Stop,
@@ -473,6 +484,8 @@ impl MoveModeEnum {
 bitflags::bitflags! {
     /// `OptionsBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct OptionsBitmap: u8 {
         /// ExecuteIfOff.
         const EXECUTE_IF_OFF = 1 << 0;
@@ -481,6 +494,7 @@ bitflags::bitflags! {
 
 /// `StepModeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StepModeEnum {
     /// Up = 1.
     Up,
@@ -514,6 +528,8 @@ impl StepModeEnum {
 bitflags::bitflags! {
     /// `UpdateFlagsBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct UpdateFlagsBitmap: u8 {
         /// UpdateAction.
         const UPDATE_ACTION = 1 << 0;

@@ -45,6 +45,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `WaterTankLevelMonitoring` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// Condition (CON).
         const CON = 1 << 0;
@@ -57,6 +59,7 @@ bitflags::bitflags! {
 
 /// `ChangeIndicationEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ChangeIndicationEnum {
     /// Ok = 0.
     Ok,
@@ -93,6 +96,7 @@ impl ChangeIndicationEnum {
 
 /// `DegradationDirectionEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DegradationDirectionEnum {
     /// Up = 0.
     Up,
@@ -125,6 +129,7 @@ impl DegradationDirectionEnum {
 
 /// `ProductIdentifierTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ProductIdentifierTypeEnum {
     /// Upc = 0.
     Upc,
@@ -169,6 +174,7 @@ impl ProductIdentifierTypeEnum {
 
 /// `ReplacementProductStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ReplacementProductStruct {
     /// Field ProductIdentifierType (tag 0).

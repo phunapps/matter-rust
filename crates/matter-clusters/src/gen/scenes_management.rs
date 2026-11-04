@@ -69,6 +69,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `ScenesManagement` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// SceneNames (SN).
         const SN = 1 << 0;
@@ -79,6 +81,7 @@ bitflags::bitflags! {
 ///
 /// Choice group `a`: a sender includes exactly one of `value_unsigned8`, `value_signed8`, `value_unsigned16`, `value_signed16`, `value_unsigned32`, `value_signed32`, `value_unsigned64`, `value_signed64`. Neither encoding nor decoding checks it.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AttributeValuePairStruct {
     /// Field AttributeId (tag 0).
     pub attribute_id: u32,
@@ -103,6 +106,8 @@ pub struct AttributeValuePairStruct {
 bitflags::bitflags! {
     /// `CopyModeBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct CopyModeBitmap: u8 {
         /// CopyAllScenes.
         const COPY_ALL_SCENES = 1 << 0;
@@ -111,6 +116,7 @@ bitflags::bitflags! {
 
 /// `ExtensionFieldSetStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ExtensionFieldSetStruct {
     /// Field ClusterId (tag 0).
     pub cluster_id: u32,
@@ -120,6 +126,7 @@ pub struct ExtensionFieldSetStruct {
 
 /// `SceneInfoStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct SceneInfoStruct {
     /// Field SceneCount (tag 0).

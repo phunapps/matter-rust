@@ -43,6 +43,7 @@ pub mod attribute_id {
 ///
 /// The value of the `LightSensorType` attribute (a raw `Nullable<u8>`, from `decode_light_sensor_type`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LightSensorTypeEnum {
     /// Photodiode = 0.
     Photodiode,

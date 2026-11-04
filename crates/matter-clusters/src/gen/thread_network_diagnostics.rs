@@ -173,6 +173,8 @@ pub mod event_id {
 bitflags::bitflags! {
     /// `ThreadNetworkDiagnostics` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// PacketCounts (PKTCNT).
         const PKTCNT = 1 << 0;
@@ -187,6 +189,7 @@ bitflags::bitflags! {
 
 /// `ConnectionStatusEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ConnectionStatusEnum {
     /// Connected = 0.
     Connected,
@@ -219,6 +222,7 @@ impl ConnectionStatusEnum {
 
 /// `NeighborTableStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct NeighborTableStruct {
     /// Field ExtAddress (tag 0).
@@ -253,6 +257,7 @@ pub struct NeighborTableStruct {
 
 /// `NetworkFaultEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum NetworkFaultEnum {
     /// Unspecified = 0.
     Unspecified,
@@ -293,6 +298,7 @@ impl NetworkFaultEnum {
 
 /// `OperationalDatasetComponents` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct OperationalDatasetComponents {
     /// Field ActiveTimestampPresent (tag 0).
@@ -323,6 +329,7 @@ pub struct OperationalDatasetComponents {
 
 /// `RouteTableStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct RouteTableStruct {
     /// Field ExtAddress (tag 0).
@@ -349,6 +356,7 @@ pub struct RouteTableStruct {
 
 /// `RoutingRoleEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum RoutingRoleEnum {
     /// Unspecified = 0.
     Unspecified,
@@ -401,6 +409,7 @@ impl RoutingRoleEnum {
 
 /// `SecurityPolicy` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct SecurityPolicy {
     /// Field RotationTime (tag 0).

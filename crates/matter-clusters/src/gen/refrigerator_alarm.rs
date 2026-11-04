@@ -42,6 +42,8 @@ pub mod event_id {
 bitflags::bitflags! {
     /// `AlarmBitmap` (map32).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct AlarmBitmap: u32 {
         /// DoorOpen.
         const DOOR_OPEN = 1 << 0;

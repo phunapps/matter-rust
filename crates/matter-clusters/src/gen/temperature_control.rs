@@ -45,6 +45,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `TemperatureControl` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// TemperatureNumber (TN).
         const TN = 1 << 0;

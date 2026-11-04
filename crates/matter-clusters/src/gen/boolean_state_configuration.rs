@@ -59,6 +59,8 @@ pub mod event_id {
 bitflags::bitflags! {
     /// `BooleanStateConfiguration` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// Visual (VIS).
         const VIS = 1 << 0;
@@ -74,6 +76,8 @@ bitflags::bitflags! {
 bitflags::bitflags! {
     /// `AlarmModeBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct AlarmModeBitmap: u8 {
         /// Visual.
         const VISUAL = 1 << 0;
@@ -85,6 +89,8 @@ bitflags::bitflags! {
 bitflags::bitflags! {
     /// `SensorFaultBitmap` (map16).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct SensorFaultBitmap: u16 {
         /// GeneralFault.
         const GENERAL_FAULT = 1 << 0;

@@ -45,6 +45,7 @@ pub mod attribute_id {
 
 /// `ApplicationStatusEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ApplicationStatusEnum {
     /// Stopped = 0.
     Stopped,
@@ -85,6 +86,7 @@ impl ApplicationStatusEnum {
 
 /// `ApplicationStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ApplicationStruct {
     /// Field CatalogVendorId (tag 0).

@@ -39,6 +39,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `AudioOutput` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// NameUpdates (NU).
         const NU = 1 << 0;
@@ -47,6 +49,7 @@ bitflags::bitflags! {
 
 /// `OutputInfoStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct OutputInfoStruct {
     /// Field Index (tag 0).
@@ -59,6 +62,7 @@ pub struct OutputInfoStruct {
 
 /// `OutputTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum OutputTypeEnum {
     /// Hdmi = 0.
     Hdmi,

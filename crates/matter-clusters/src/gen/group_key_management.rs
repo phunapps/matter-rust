@@ -51,6 +51,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `GroupKeyManagement` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// CacheAndSync (CS).
         /// Provisional in Matter 1.5.1, the codegen model's revision: a later revision may change or remove it.
@@ -60,6 +62,7 @@ bitflags::bitflags! {
 
 /// `GroupInfoMapStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct GroupInfoMapStruct {
     /// Field GroupId (tag 1).
@@ -76,6 +79,7 @@ pub struct GroupInfoMapStruct {
 ///
 /// Encodable because a writable attribute carries it: build one and write it with `encode` (or `write_fields`, inside the list that carries it).
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GroupKeyMapStruct {
     /// Field GroupId (tag 1).
     pub group_id: u16,
@@ -90,6 +94,7 @@ pub struct GroupKeyMapStruct {
 
 /// `GroupKeyMulticastPolicyEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum GroupKeyMulticastPolicyEnum {
     /// PerGroupId = 0.
     PerGroupId,
@@ -122,6 +127,7 @@ impl GroupKeyMulticastPolicyEnum {
 
 /// `GroupKeySecurityPolicyEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum GroupKeySecurityPolicyEnum {
     /// TrustFirst = 0.
     TrustFirst,
@@ -154,6 +160,7 @@ impl GroupKeySecurityPolicyEnum {
 
 /// `GroupKeySetStruct` struct.
 #[derive(Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GroupKeySetStruct {
     /// Field GroupKeySetId (tag 0).
     pub group_key_set_id: u16,

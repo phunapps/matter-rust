@@ -33,6 +33,7 @@ pub mod attribute_id {
 
 /// `DrynessLevelEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DrynessLevelEnum {
     /// Low = 0.
     Low,
