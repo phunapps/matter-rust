@@ -133,6 +133,12 @@
 //! what the adapter knows about the type: every instance still cached is
 //! reported found once more, and every cached record is re-delivered.
 //!
+//! mdns-sd pushes that whole replay in one step, so a type with about 500 or
+//! more cached instances fills the channel again at once and can never stay
+//! open. Re-opens therefore back off: one that closes again waits 1, 2, 4, …
+//! drains (at most 256) before the next attempt, logged at `debug`. The
+//! backoff resets once a re-opened browse delivers events and stays open.
+//!
 //! # Diagnostics
 //!
 //! Discovery is the one part of the stack whose failures are invisible from the
@@ -186,6 +192,61 @@ const LOG_TARGET: &str = "matter_transport::mdns";
 /// only ever bites the unpolled ones, and there it costs bounded memory and a
 /// `trace` line per drop.
 const FOUND_BUFFER_CAP: usize = 256;
+
+/// The most drains of a closed browse skipped between two attempts to re-open
+/// it ([`ReopenBackoff`]).
+///
+/// About four minutes at `matter-controller`'s 1 s drain, one at its 250 ms
+/// fast drain: long enough that a browse which can never stay open (its cache
+/// replay alone fills the channel) costs a re-open and a `debug` line every
+/// few minutes, short enough that one which recovers is back soon.
+const REOPEN_BACKOFF_MAX_SKIPS: u32 = 256;
+
+/// How soon a closed browse is re-opened again, counted in drains.
+///
+/// Drains, not wall time: this adapter has no clock of its own, and drains
+/// are when a closure is noticed anyway. The first closure of an episode is
+/// re-opened at once; each further one waits twice as many drains as the
+/// last (1, 2, 4, … up to [`REOPEN_BACKOFF_MAX_SKIPS`]). The episode ends,
+/// and the backoff resets, once a drain finds the current receiver still
+/// open after it delivered an event: the daemon ran the browse and it held.
+#[derive(Debug, Default)]
+struct ReopenBackoff {
+    /// Drains of the closed browse still to skip before the next attempt.
+    skip: u32,
+    /// The skip set after the last attempt; 0 while no episode is running.
+    last: u32,
+}
+
+impl ReopenBackoff {
+    /// Whether a drain that found the browse closed should try to re-open it
+    /// now. A `false` uses up one skipped drain.
+    fn ready(&mut self) -> bool {
+        if self.skip == 0 {
+            return true;
+        }
+        self.skip -= 1;
+        false
+    }
+
+    /// Record an attempt (successful or not), lengthening the next wait.
+    /// Returns whether it was the first attempt of its episode.
+    fn attempted(&mut self) -> bool {
+        let first = self.last == 0;
+        self.last = if first {
+            1
+        } else {
+            (self.last * 2).min(REOPEN_BACKOFF_MAX_SKIPS)
+        };
+        self.skip = self.last;
+        first
+    }
+
+    /// The browse is healthy again: end the episode.
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
 
 impl From<mdns_sd::Error> for Error {
     fn from(e: mdns_sd::Error) -> Self {
@@ -359,10 +420,9 @@ struct BrowseState {
     /// stopping the browse drops this state with it; and stopping a base-type
     /// browse wipes only base PTRs, never a subtype browse's.
     present: HashSet<String>,
-    /// Whether the last attempt to re-open this browse after the daemon closed
-    /// it failed, so a daemon that keeps refusing is logged at `warn` once and
-    /// at `debug` on every later poll, not at `warn` several times a second.
-    reopen_failed: bool,
+    /// When a browse the daemon closed is re-opened next, so one that cannot
+    /// stay open is not re-opened, and logged, on every poll.
+    reopen_backoff: ReopenBackoff,
     /// Test-only queue of events "sent by the daemon" but not yet drained, so a
     /// test can check that `poll_results` and `poll_found` share one drain. The
     /// real `Receiver`'s sender lives inside the daemon and cannot be written
@@ -381,7 +441,7 @@ impl BrowseState {
             surfaced: HashMap::new(),
             found: HashMap::new(),
             present: HashSet::new(),
-            reopen_failed: false,
+            reopen_backoff: ReopenBackoff::default(),
             #[cfg(test)]
             injected: Vec::new(),
         }
@@ -437,6 +497,7 @@ impl BrowseState {
             surfaced,
             found,
             present,
+            reopen_backoff,
             ..
         } = self;
         let mut apply = |event: ServiceEvent| {
@@ -445,6 +506,8 @@ impl BrowseState {
         // Whether `receiver` is (now) the daemon's live listener for the type.
         let mut switched = true;
         let mut outcome = DrainOutcome::Open;
+        // Whether the current receiver delivered anything in this drain.
+        let mut delivered = false;
         if let Some(old) = retiring.as_ref() {
             // 1. Everything the daemon has sent the old listener so far.
             while let Some(event) = old.try_event() {
@@ -468,6 +531,7 @@ impl BrowseState {
                         );
                     }
                     apply(first);
+                    delivered = true;
                 }
                 // 2. The daemon has not run the browse command yet.
                 Next::Empty => switched = false,
@@ -485,7 +549,10 @@ impl BrowseState {
             *retiring = None;
             loop {
                 match receiver.try_next() {
-                    Next::Event(event) => apply(event),
+                    Next::Event(event) => {
+                        apply(event);
+                        delivered = true;
+                    }
                     Next::Empty => break,
                     Next::Closed => {
                         outcome = DrainOutcome::Closed;
@@ -497,6 +564,10 @@ impl BrowseState {
         #[cfg(test)]
         for event in injected {
             apply(event);
+        }
+        if outcome == DrainOutcome::Open && delivered {
+            // The daemon ran this receiver's browse and it held.
+            reopen_backoff.reset();
         }
         outcome
     }
@@ -759,8 +830,11 @@ impl MdnsSdDiscovery {
     /// is logged at `warn`: it means events were lost, because this browse
     /// was not polled often enough to keep up.
     ///
-    /// If the daemon refuses (it has shut down), the closed receiver stays in
-    /// place and the next drain tries again.
+    /// A browse that closes again right after it is re-opened is retried with
+    /// a backoff counted in drains ([`ReopenBackoff`]), logged at `warn` only
+    /// for the first attempt of each episode. If the daemon refuses (it has
+    /// shut down), the closed receiver stays in place and a later drain tries
+    /// again, on the same backoff.
     ///
     /// Returns [`DrainOutcome::Closed`] when the drain found the browse
     /// closed, whether or not the re-open then succeeded.
@@ -771,39 +845,54 @@ impl MdnsSdDiscovery {
         if browse.drain(service_type) == DrainOutcome::Open {
             return DrainOutcome::Open;
         }
+        if !browse.reopen_backoff.ready() {
+            tracing::debug!(
+                target: LOG_TARGET,
+                service_type = %service_type,
+                "mDNS browse is still closed; waiting before re-opening it again",
+            );
+            return DrainOutcome::Closed;
+        }
+        let first = browse.reopen_backoff.attempted();
         match self.daemon.browse(service_type) {
             Ok(receiver) => {
                 browse.reopen(EventSource::Daemon(receiver));
-                browse.reopen_failed = false;
                 #[cfg(test)]
                 self.browse_calls
                     .entry(service_type.to_string())
                     .and_modify(|n| *n += 1)
                     .or_insert(1);
-                tracing::warn!(
-                    target: LOG_TARGET,
-                    service_type = %service_type,
-                    handles = browse.pending.len(),
-                    "mDNS browse closed by the daemon (events were lost: it was not polled \
-                     often enough to keep up); re-opened",
-                );
+                if first {
+                    tracing::warn!(
+                        target: LOG_TARGET,
+                        service_type = %service_type,
+                        handles = browse.pending.len(),
+                        "mDNS browse closed by the daemon (events were lost: it was not polled \
+                         often enough to keep up); re-opened",
+                    );
+                } else {
+                    tracing::debug!(
+                        target: LOG_TARGET,
+                        service_type = %service_type,
+                        "mDNS browse closed again; re-opened",
+                    );
+                }
             }
-            Err(e) if browse.reopen_failed => {
-                tracing::debug!(
-                    target: LOG_TARGET,
-                    service_type = %service_type,
-                    error = %e,
-                    "mDNS browse is still closed; re-opening it failed again",
-                );
-            }
-            Err(e) => {
-                browse.reopen_failed = true;
+            Err(e) if first => {
                 tracing::warn!(
                     target: LOG_TARGET,
                     service_type = %service_type,
                     error = %e,
                     "mDNS browse closed by the daemon, and re-opening it failed; \
-                     retrying on every poll",
+                     retrying with a backoff",
+                );
+            }
+            Err(e) => {
+                tracing::debug!(
+                    target: LOG_TARGET,
+                    service_type = %service_type,
+                    error = %e,
+                    "mDNS browse is still closed; re-opening it failed again",
                 );
             }
         }
@@ -2744,6 +2833,93 @@ mod tests {
         d.stop_query(h);
     }
 
+    /// Close `d`'s current receiver for `service_type` the way a daemon whose
+    /// replay overflowed the channel does: it delivers `SearchStarted` and is
+    /// closed by the time the next drain reads it.
+    fn close_after_search_started(d: &mut MdnsSdDiscovery, service_type: &str) {
+        let script = script_current_receiver(d, service_type);
+        script.send(Some(search_started())).unwrap();
+    }
+
+    /// `d`'s browse calls for the test subtype so far.
+    fn subtype_browses(d: &MdnsSdDiscovery) -> u32 {
+        d.browse_calls.get(TEST_SUBTYPE).copied().unwrap_or(0)
+    }
+
+    /// A browse that closes again as soon as it is re-opened (its cache
+    /// replay alone overflows the channel) is re-opened with a backoff:
+    /// after one skipped drain, then two, then four, rather than on every
+    /// poll.
+    #[test]
+    fn a_browse_that_keeps_closing_is_reopened_with_backoff() {
+        let mut d = MdnsSdDiscovery::new().unwrap();
+        let h = d.query_operational_fabric(TEST_CFID).unwrap();
+        close_after_search_started(&mut d, TEST_SUBTYPE);
+        let mut seen = Vec::new();
+        for _ in 0..10 {
+            let _ = d.poll_found(h);
+            seen.push(subtype_browses(&d));
+            if matches!(d.browses[TEST_SUBTYPE].receiver, EventSource::Daemon(_)) {
+                // Just re-opened: that browse overflows too.
+                close_after_search_started(&mut d, TEST_SUBTYPE);
+            }
+        }
+        assert_eq!(
+            seen,
+            vec![2, 2, 3, 3, 3, 4, 4, 4, 4, 4],
+            "re-opened at once, then after 1, 2 and 4 skipped drains"
+        );
+        d.stop_query(h);
+    }
+
+    /// Once a re-opened browse has delivered events and is still open, it
+    /// works, and a later closure is a new episode: re-opened at once.
+    #[test]
+    fn a_reopened_browse_that_stays_open_resets_the_backoff() {
+        let mut d = MdnsSdDiscovery::new().unwrap();
+        let h = d.query_operational_fabric(TEST_CFID).unwrap();
+        close_after_search_started(&mut d, TEST_SUBTYPE);
+        let _ = d.poll_found(h);
+        assert_eq!(subtype_browses(&d), 2, "re-opened");
+
+        let healthy = script_current_receiver(&mut d, TEST_SUBTYPE);
+        healthy.send(Some(search_started())).unwrap();
+        let _ = d.poll_found(h);
+        drop(healthy);
+        let _ = d.poll_found(h);
+        assert_eq!(
+            subtype_browses(&d),
+            3,
+            "a closure after a healthy drain is re-opened at once"
+        );
+        d.stop_query(h);
+    }
+
+    /// A drain of a re-opened browse that has delivered nothing yet (the
+    /// daemon has not run the browse command) proves nothing, so it does not
+    /// reset the backoff.
+    #[test]
+    fn an_open_drain_that_delivered_nothing_keeps_the_backoff() {
+        let mut d = MdnsSdDiscovery::new().unwrap();
+        let h = d.query_operational_fabric(TEST_CFID).unwrap();
+        close_after_search_started(&mut d, TEST_SUBTYPE);
+        let _ = d.poll_found(h);
+        assert_eq!(subtype_browses(&d), 2, "re-opened");
+
+        let silent = script_current_receiver(&mut d, TEST_SUBTYPE);
+        let _ = d.poll_found(h);
+        drop(silent);
+        let _ = d.poll_found(h);
+        assert_eq!(
+            subtype_browses(&d),
+            2,
+            "still backing off: one drain skipped"
+        );
+        let _ = d.poll_found(h);
+        assert_eq!(subtype_browses(&d), 3, "then re-opened");
+        d.stop_query(h);
+    }
+
     /// The old receiver of a requery disconnecting is the switch-over itself
     /// (the daemon replaced its sender), not a closed browse: nothing is
     /// re-opened.
@@ -2771,7 +2947,7 @@ mod tests {
     }
 
     /// If the daemon refuses to re-open the browse (it has shut down), the
-    /// handle stays usable and polling does not panic; the next poll tries
+    /// handle stays usable and polling does not panic; a later poll tries
     /// again.
     #[test]
     fn a_browse_that_cannot_be_reopened_keeps_its_handle_usable() {
