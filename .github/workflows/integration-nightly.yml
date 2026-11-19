@@ -96,6 +96,57 @@ jobs:
         working-directory: connectedhomeip
         run: bash -c "source scripts/bootstrap.sh"
 
+      # Every linux-x64 example build runs third_party/java_deps/
+      # set_up_java_deps.sh, which curls six jars from repo1.maven.org.
+      # Maven Central intermittently answers GitHub runners with HTTP 403,
+      # which failed 4 of 6 nightlies on one commit in 2026-11. The script
+      # skips any jar already on disk, so we fetch the jars here (retrying)
+      # and cache them; the build's own run then never touches the network.
+      # restore/save are split (not plain actions/cache) because plain
+      # actions/cache only saves when the whole job succeeds, and a sweep
+      # failing for an unrelated reason would leave the cache empty.
+      - name: Restore chip Java deps
+        id: java-deps
+        uses: actions/cache/restore@v6
+        with:
+          path: connectedhomeip/third_party/java_deps/artifacts
+          key: chip-java-deps-${{ env.CHIP_REF }}-${{ hashFiles('connectedhomeip/third_party/java_deps/set_up_java_deps.sh') }}
+
+      # A jar that fails `unzip -t` is deleted (an empty file from a refused
+      # download, or a truncated one), so the next attempt re-fetches it and
+      # a broken jar can never be cached.
+      - name: Fetch chip Java deps (with retry)
+        if: steps.java-deps.outputs.cache-hit != 'true'
+        working-directory: connectedhomeip
+        run: |
+          script=third_party/java_deps/set_up_java_deps.sh
+          dir=third_party/java_deps/artifacts
+          # How many jars this chip ref wants, read from the script itself so
+          # a CHIP_REF bump that changes the list needs no edit here.
+          want=$(grep -c '^download_jar ' "$script")
+          for attempt in 1 2 3 4 5; do
+            # Its exit status is not trusted on its own: success is "every
+            # listed jar is present and a valid zip", checked below.
+            bash "$script" || true
+            for jar in "$dir"/*.jar; do
+              [ -e "$jar" ] || continue
+              unzip -tq "$jar" >/dev/null 2>&1 || { echo "removing bad $jar"; rm -f "$jar"; }
+            done
+            have=$(find "$dir" -name '*.jar' | wc -l)
+            [ "$have" -eq "$want" ] && exit 0
+            echo "attempt $attempt: have $have of $want jars; retrying in $((attempt * 30))s"
+            sleep $((attempt * 30))
+          done
+          echo "::error::could not fetch chip Java deps from Maven Central after 5 attempts"
+          exit 1
+
+      - name: Save chip Java deps
+        if: steps.java-deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: connectedhomeip/third_party/java_deps/artifacts
+          key: ${{ steps.java-deps.outputs.cache-primary-key }}
+
       - name: Run integration sweep (just integration)
         env:
           CHIP_ROOT: ${{ github.workspace }}/connectedhomeip
